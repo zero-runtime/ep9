@@ -3,7 +3,7 @@
 // `exit-inputs` job and of its reading. The job runs MEMREAD (tools/bench/cross/mem.mjs) and the
 // JetStream M2 list (tools/bench/jetstream/run.mjs) per platform, and the Path B M2 set
 // (tools/bench/cross/run.mjs, both builds in each paired round) on 4 windows x64 runners and on
-// 2 Linux x64 runners (plan v15 V15-D16: the same-CPU-model pairs of the win-x64 cell).
+// 3 Linux x64 runners (plan v15 V15-D16: the same-CPU-model pairs of the win-x64 cell).
 //
 //   node .github/scripts/exit-inputs.mjs host --out host.toml [--id ID] [--minutes N] [--every-s S]
 //       Measures the idle baseline of this runner (tools/bench/cross/idle.mjs, its load source:
@@ -30,8 +30,8 @@
 //       for item 3, the QuickJS ratio) gives no interval (boxBlockers).
 //       No 2 legs of one CPU model: the file says pair null and the exit status is 3. On
 //       --platform win32-x64 the dispatch then runs again once; a second miss is NOT-RUN (a DL
-//       line; plan v14 section 4.1 (6)). On --platform linux-x64 exit 3 is normal (2 legs, often of
-//       2 CPU models): do not run the dispatch again; m2-exit reads the `legs` block of the file.
+//       line; plan v14 section 4.1 (6)). On --platform linux-x64 exit 3 is normal (3 legs, often of
+//       2 or 3 CPU models): do not run the dispatch again; m2-exit reads the `legs` block of the file.
 //       The Markdown also gives the TS ratio to node --jitless per box and build (V14-D59).
 //       The file also has `legs` (V15-D16), with a pair or not: every leg that was read, its CPU
 //       model, its own commit, a run check per build and the box value of each cell per build
@@ -45,7 +45,7 @@
 //       A leg that was not read is in `runners` only (with its `error`): m2-exit then reads
 //       NO AGREEMENT, as the same-model pairs of the dispatch are not known. It also reads NO
 //       AGREEMENT when the legs name more than one run_id, or only some legs name one (EI2-R1);
-//       when a compare does not hold each slot id once (gha-pathb-w1..w4, gha-pathb-l1 and -l2;
+//       when a compare does not hold each slot id once (gha-pathb-w1..w4, gha-pathb-l1..l3;
 //       EI2-R3-LEG-SLOT); and when a windows compare with `legs` has no --linux-pathb (option B).
 //       With no run_id on any leg (an older input), m2-exit gives a note only.
 //
@@ -355,6 +355,14 @@ function legBlocks(usable, gateOf) {
   });
 }
 
+/** The result text of a compare with no pair (EI-NOPAIR-TEXT; the exit status is 3 on each platform). */
+export function noPairText(platform, commit) {
+  const head = `NO PAIR (${platform ?? "platform unknown"}, commit ${commit ? commit.slice(0, 12) : "unknown"}): no 2 runners of one CPU model`;
+  if (platform === "linux-x64") return `${head}; this is normal for linux-x64: m2-exit reads the legs block; do not run the dispatch again`;
+  if (platform === "win32-x64") return `${head}; run the dispatch again once, then the reading is NOT-RUN (a DL line)`;
+  return `${head}; on win32-x64 run the dispatch again once, then the reading is NOT-RUN (a DL line)`;
+}
+
 export function compare(legs, deps = {}) {
   const readGate = deps.readGate ?? readM2Gate;
   const only = deps.platform ?? null;
@@ -369,12 +377,18 @@ export function compare(legs, deps = {}) {
     return seen.get(l);
   };
   if (!pair) {
+    // EI-NOPAIR-TEXT: the text names the platform and the commit, and only win32-x64 says to
+    // run the dispatch again (on linux-x64 no pair is normal: m2-exit reads the legs block).
+    const plats = [...new Set(usable.map((l) => l.platform ?? null))];
+    const platform = only ?? (plats.length === 1 ? plats[0] : null);
+    const commits = [...new Set(usable.map(legCommit))];
+    const commit = commits.length === 1 ? commits[0] : null;
     return {
       schema: SCHEMA,
-      commit: null,
-      platform: null,
+      commit,
+      platform,
       pair: null,
-      result: "NO PAIR: no 2 runners of one CPU model; run the dispatch again once, then the reading is NOT-RUN (a DL line)",
+      result: noPairText(platform, commit),
       runners,
       boxes: [],
       checks: [],

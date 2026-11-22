@@ -2,7 +2,7 @@
 // The exit-inputs helpers (plan v14 section 4.1, plan v15 section 4.1): the runner host file and
 // the Path B compare of the windows and Linux x64 legs. Synthetic inputs and fake engines
 // (tools/bench/cross/testdata): no shells, no ep9 build, no GitHub runner. `EP9_BLESS=1` writes
-// the m2-exit fixtures pathb-win.json and pathb-gha-linux*.json.
+// the m2-exit fixtures pathb-win.json, pathb-gha-linux*.json and pathb-run-*.json.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { cpuModel, parseToml, readHostFile } from "../../tools/bench/lib/host.mjs";
 import { analyze, label, platformId } from "../../tools/bench/cross/run.mjs";
 import { EMPTY, TS_WORKLOAD, V8V7_7 } from "../../tools/bench/cross/workloads.mjs";
-import { agreement, BUILDS, CELLS, compare, host, hostToml, pairLegs, parseArgs, parseIdle, PATHB_ROUNDS, readLeg, renderMarkdown, SCHEMA, side } from "./exit-inputs.mjs";
+import { agreement, BUILDS, CELLS, compare, host, hostToml, noPairText, pairLegs, parseArgs, parseIdle, PATHB_ROUNDS, readLeg, renderMarkdown, SCHEMA, side } from "./exit-inputs.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(DIR, "../..");
@@ -24,6 +24,8 @@ const SHA = "0123456789abcdef0123456789abcdef01234567";
 const FIXTURES = path.join(ROOT, "tools/xtask/tests/m2_exit");
 const FIXTURE = path.join(FIXTURES, "pathb-win.json");
 const WIN_CPU = "AMD EPYC 7763 64-Core Processor";
+// The CPU model of the Linux x64 legs that pair with no Windows leg.
+const EPYC4 = "AMD EPYC 9V74 80-Core Processor";
 
 /** The bytes of an m2-exit fixture: written with EP9_BLESS=1, else compared. */
 function fixture(name, c) {
@@ -104,13 +106,29 @@ test("compare: no pair names every runner and no cell; the CLI exits 3", (t) => 
   const c = compare([leg("w1", { cpu: "A" }), leg("w2", { cpu: "B" }), leg("w3", { cpu: "C" }), { name: "w4", cpu: null, platform: null, error: "no run-jit.json", jit: null, jitless: null }]);
   assert.equal(c.schema, SCHEMA);
   assert.equal(c.pair, null);
-  assert.match(c.result, /^NO PAIR: .*run the dispatch again once, then the reading is NOT-RUN/);
+  // EI-NOPAIR-TEXT: the text names the platform and the commit of the legs that were read.
+  assert.equal(c.result, "NO PAIR (win32-x64, commit 0123456789ab): no 2 runners of one CPU model; run the dispatch again once, then the reading is NOT-RUN (a DL line)");
   assert.deepEqual(c.runners.map((r) => [r.leg, r.cpu]), [["w1", "A"], ["w2", "B"], ["w3", "C"], ["w4", null]]);
-  assert.deepEqual([c.checks, c.cells, c.commit, c.platform], [[], [], null, null]);
+  assert.deepEqual([c.checks, c.cells, c.commit, c.platform], [[], [], SHA, "win32-x64"]);
+  assert.match(renderMarkdown(c), /^Path B compare \(ep9-pathb-compare\/v1\), platform win32-x64, commit `0123456789ab`\.$/m);
   // The legs block names every leg that was read, with a pair or not (V15-D16).
   assert.deepEqual(c.legs.map((l) => [l.leg, l.cpu, l.commit]), [["w1", "A", SHA], ["w2", "B", SHA], ["w3", "C", SHA]]);
   assert.match(renderMarkdown(c), /\*\*NO PAIR/);
   assert.match(renderMarkdown(c), /^Per leg \(the input of the win-x64 same-CPU-model cell, V15-D16\):$/m);
+  // EI-NOPAIR-TEXT: on --platform linux-x64 no pair is normal (3 legs, often of 2 or 3 CPU
+  // models): the text names linux-x64 and the commit, and does not say to run the dispatch again.
+  const lin = (name, cpu) => leg(name, { cpu, platform: "linux-x64" });
+  const lc = compare([leg("w1", { cpu: "A" }), lin("l1", "A"), lin("l2", "B"), lin("l3", "C")], { platform: "linux-x64" });
+  assert.equal(lc.result, "NO PAIR (linux-x64, commit 0123456789ab): no 2 runners of one CPU model; this is normal for linux-x64: m2-exit reads the legs block; do not run the dispatch again");
+  assert.deepEqual([lc.pair, lc.commit, lc.platform, lc.legs.map((l) => l.leg)], [null, SHA, "linux-x64", ["l1", "l2", "l3"]]);
+  assert.match(renderMarkdown(lc), /^Path B compare \(ep9-pathb-compare\/v1\), platform linux-x64, commit `0123456789ab`\.$/m);
+  assert.match(renderMarkdown(lc), /^\*\*NO PAIR \(linux-x64, commit 0123456789ab\): .*do not run the dispatch again\.\*\*$/m);
+  assert.doesNotMatch(renderMarkdown(lc), /run the dispatch again once/);
+  // 2 platforms, or 2 commits, with no --platform: neither is named.
+  const mixed = compare([leg("w1", { cpu: "A" }), lin("l1", "B"), leg("w2", { cpu: "C", commit: "f".repeat(40) })]);
+  assert.deepEqual([mixed.platform, mixed.commit], [null, null]);
+  assert.equal(mixed.result, "NO PAIR (platform unknown, commit unknown): no 2 runners of one CPU model; on win32-x64 run the dispatch again once, then the reading is NOT-RUN (a DL line)");
+  assert.equal(noPairText("win32-x64", null), "NO PAIR (win32-x64, commit unknown): no 2 runners of one CPU model; run the dispatch again once, then the reading is NOT-RUN (a DL line)");
   const dir = mkdtempSync(path.join(os.tmpdir(), "ep9-exit-inputs-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const legs = ["A", "B"].map((cpu, i) => {
@@ -185,14 +203,16 @@ test("compare: the pair's run checks and the 8 cells (the m2-exit fixture pathb-
 
 // V15-D16: the Linux x64 GitHub legs of the same dispatch. --platform keeps one platform; the
 // legs of the other one are named in the runners table only. The 3 m2-exit fixtures of the
-// win-x64 same-CPU-model cell: pathb-gha-linux.json (2 legs of the Windows pair's model, each
-// value a little above the Windows one: the cross-host intervals are above 0.9),
-// pathb-gha-linux-fast.json (the same model, every value about 1.3x the Windows one: below 0.9)
-// and pathb-gha-linux-other.json (another model: no same-model pair, the cell keeps today's form).
+// win-x64 same-CPU-model cell, each with the 3 Linux legs of the matrix (V16-D27):
+// pathb-gha-linux.json (l1 and l2 of the Windows pair's model, each value a little above the
+// Windows one: the cross-host intervals are above 0.9; l3 of another model, in no pair),
+// pathb-gha-linux-fast.json (the same models, every value about 1.3x the Windows one: below 0.9)
+// and pathb-gha-linux-other.json (l1..l3 of another model: no same-model pair, the cell keeps
+// today's form).
 test("compare: the Linux x64 legs, --platform, and the m2-exit fixtures pathb-gha-linux*.json", () => {
   const lin = (name, cpu = WIN_CPU) => leg(name, { cpu, platform: "linux-x64" });
   const all = [leg("w1"), lin("l1"), leg("w2"), lin("l2")];
-  const gates = { w1: gateOf(1.05), w2: gateOf(1.06), l1: gateOf(1.1), l2: gateOf(1.1) };
+  const gates = { w1: gateOf(1.05), w2: gateOf(1.06), l1: gateOf(1.1), l2: gateOf(1.1), l3: gateOf(1.1) };
   const readGate = (runs) => gates[runs[0].source.split("/")[0]];
   const w = compare(all, { readGate, platform: "win32-x64" });
   assert.deepEqual([w.boxes, w.platform, w.legs.map((l) => l.leg)], [["w1", "w2"], "win32-x64", ["w1", "w2"]]);
@@ -210,25 +230,28 @@ test("compare: the Linux x64 legs, --platform, and the m2-exit fixtures pathb-gh
   // Without --platform the first group with 2 legs is the pair: here the windows one.
   assert.deepEqual(compare(all, { readGate }).boxes, ["w1", "w2"]);
   assert.equal(parseArgs(["pathb", "--leg", "a", "--out", "c", "--platform", "linux-x64"]).platform, "linux-x64");
-  fixture("pathb-gha-linux.json", compare([lin("l1"), lin("l2")], { readGate }));
-  const fast = { l1: gateOf(1.4), l2: gateOf(1.42) };
-  fixture("pathb-gha-linux-fast.json", compare([lin("l1"), lin("l2")], { readGate: (runs) => fast[runs[0].source.split("/")[0]] }));
-  const epyc4 = "AMD EPYC 9V74 80-Core Processor";
-  const other = compare([lin("l1", epyc4), lin("l2", epyc4)], { readGate });
-  assert.deepEqual(other.legs.map((x) => x.cpu), [epyc4, epyc4]);
+  const three = compare([lin("l1"), lin("l2"), lin("l3", EPYC4)], { readGate });
+  assert.deepEqual(three.legs.map((x) => [x.leg, x.cpu]), [["l1", WIN_CPU], ["l2", WIN_CPU], ["l3", EPYC4]]);
+  fixture("pathb-gha-linux.json", three);
+  const fast = { l1: gateOf(1.4), l2: gateOf(1.42), l3: gateOf(1.4) };
+  fixture("pathb-gha-linux-fast.json", compare([lin("l1"), lin("l2"), lin("l3", EPYC4)], { readGate: (runs) => fast[runs[0].source.split("/")[0]] }));
+  const other = compare([lin("l1", EPYC4), lin("l2", EPYC4), lin("l3", EPYC4)], { readGate });
+  assert.deepEqual(other.legs.map((x) => x.cpu), [EPYC4, EPYC4, EPYC4]);
   fixture("pathb-gha-linux-other.json", other);
   // EI2 Codex r1 F1: l2 was not read (a read error), so it is in `runners` only, not in `legs`;
-  // m2-exit then knows no full set of same-model pairs (pathb-gha-linux-unread.json).
+  // m2-exit then knows no full set of same-model pairs (pathb-gha-linux-unread.json). l1 and l3
+  // are of 2 models: no Linux pair, so the result is the linux-x64 NO PAIR text.
   const l2 = { name: "l2", cpu: null, platform: null, jit: null, jitless: null, error: "no run-jit.json" };
-  const unread = compare([lin("l1"), l2], { readGate });
-  assert.deepEqual(unread.legs.map((x) => x.leg), ["l1"]);
-  assert.deepEqual(unread.runners.map((x) => [x.leg, x.error]), [["l1", null], ["l2", "no run-jit.json"]]);
+  const unread = compare([lin("l1"), l2, lin("l3", EPYC4)], { readGate });
+  assert.deepEqual(unread.legs.map((x) => x.leg), ["l1", "l3"]);
+  assert.deepEqual(unread.runners.map((x) => [x.leg, x.error]), [["l1", null], ["l2", "no run-jit.json"], ["l3", null]]);
+  assert.match(unread.result, /^NO PAIR \(linux-x64, commit 0123456789ab\): .*do not run the dispatch again$/);
   fixture("pathb-gha-linux-unread.json", unread);
   // EI2 Codex r1 F2: the TS ratios to node --jitless of l1 and l2 are those of the Windows legs,
   // but their gross ep9 TS time is 3/4 of the Windows one (pathb-gha-linux-ts.json): the
   // cross-host TS speed (1 / t, 10:157) is about 0.75, below 0.9.
-  const slow = { l1: gateOf(1.05, { tsScale: 4 / 3 }), l2: gateOf(1.05, { tsScale: 4 / 3 }) };
-  const tsc = compare([lin("l1"), lin("l2")], { readGate: (runs) => slow[runs[0].source.split("/")[0]] });
+  const slow = { l1: gateOf(1.05, { tsScale: 4 / 3 }), l2: gateOf(1.05, { tsScale: 4 / 3 }), l3: gateOf(1.05, { tsScale: 4 / 3 }) };
+  const tsc = compare([lin("l1"), lin("l2"), lin("l3", EPYC4)], { readGate: (runs) => slow[runs[0].source.split("/")[0]] });
   const item3 = (c, l, build) => c.legs.find((x) => x.leg === l).cells.find((x) => x.build === build && x.cell.startsWith("item 3:"));
   assert.deepEqual(item3(tsc, "l1", "jit").value.interval, [0.93, 0.97]);
   assert.deepEqual(item3(tsc, "l1", "jit").time_s, { median: 2.8571, interval: [2.8169, 2.8986], note: "gross, provisional" });
@@ -474,10 +497,15 @@ test("readLeg and the legs block: the host.toml id, run_id and run_attempt of ea
 // The m2-exit fixtures of the run id and slot checks (pathb-run-*.json): the legs of
 // pathb-win.json and pathb-gha-linux.json with the host.toml id of their matrix slot and the run
 // id 1001 (attempt 1). Variants of the Linux x64 compare: run id 1002 (2 runs), l2 with no run
-// id (a mixed input), l2 with the id of l1 (a doubled slot), l2 with the id gha-pathb-l3 (slot
-// gha-pathb-l2 missing, an id that is not a slot).
+// id (a mixed input), l2 with the id of l1 (a doubled slot), l2 with the id gha-pathb-l4 (slot
+// gha-pathb-l2 missing, an id that is not a slot). The void-leg fixtures (V16-D27; a win-x64
+// part needs 2 independent same-model Linux legs whose row gives an interval): -1leg (l1 of the
+// Windows pair's model, l2 and l3 of another model: 1 leg), -void (l1..l3 of the Windows pair's
+// model, a void kernel row on l2 in jitless item 1: 2 legs, l1 and l3), -void2 (that row void
+// on l1 and l2: 1 leg, l3) and -2models (l1 of the Windows pair's model, l2 of the Intel model of
+// w1 and w4 with the w1 values: 2 legs of 2 CPU models, 1 leg per model).
 test("compare: the m2-exit fixtures pathb-run-*.json (run ids and slot ids in the legs block)", () => {
-  const gates = { w1: gateOf(1.0), w2: gateOf(1.05), w3: gateOf(1.06), w4: gateOf(1.01), l1: gateOf(1.1), l2: gateOf(1.1) };
+  const gates = { w1: gateOf(1.0), w2: gateOf(1.05), w3: gateOf(1.06), w4: gateOf(1.01), l1: gateOf(1.1), l2: gateOf(1.1), l3: gateOf(1.1) };
   const readGate = (runs) => gates[runs[0].source.split("/")[0]];
   const ids = (l, id, runId = "1001", runAttempt = "1") => ({ ...l, id, runId, runAttempt });
   const intel = "Intel Xeon Platinum 8370C";
@@ -489,13 +517,46 @@ test("compare: the m2-exit fixtures pathb-run-*.json (run ids and slot ids in th
     ["w4", "gha-pathb-w4", "1001", "1"],
   ]);
   fixture("pathb-run-win.json", w);
-  const lin = (name) => leg(name, { platform: "linux-x64" });
-  const linux = (l1, l2) => compare([l1, l2], { readGate });
-  fixture("pathb-run-linux.json", linux(ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2"), "gha-pathb-l2")));
-  fixture("pathb-run-linux-2.json", linux(ids(lin("l1"), "gha-pathb-l1", "1002"), ids(lin("l2"), "gha-pathb-l2", "1002")));
-  const mixed = linux(ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2"), "gha-pathb-l2", null, null));
-  assert.deepEqual(mixed.legs.map((l) => "run_id" in l), [true, false]);
+  const lin = (name, cpu = WIN_CPU) => leg(name, { cpu, platform: "linux-x64" });
+  const linux = (...ls) => compare(ls, { readGate });
+  // l3 is of another model (in no pair with a Windows leg): w2 and w3 pair with l1 and l2 only.
+  const l3 = (runId) => ids(lin("l3", EPYC4), "gha-pathb-l3", runId);
+  const one = linux(ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2"), "gha-pathb-l2"), l3());
+  assert.deepEqual(one.legs.map((l) => [l.leg, l.id, l.cpu]), [["l1", "gha-pathb-l1", WIN_CPU], ["l2", "gha-pathb-l2", WIN_CPU], ["l3", "gha-pathb-l3", EPYC4]]);
+  fixture("pathb-run-linux.json", one);
+  fixture("pathb-run-linux-2.json", linux(ids(lin("l1"), "gha-pathb-l1", "1002"), ids(lin("l2"), "gha-pathb-l2", "1002"), l3("1002")));
+  const mixed = linux(ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2"), "gha-pathb-l2", null, null), l3());
+  assert.deepEqual(mixed.legs.map((l) => "run_id" in l), [true, false, true]);
   fixture("pathb-run-linux-mixed.json", mixed);
-  fixture("pathb-run-linux-doubled.json", linux(ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2"), "gha-pathb-l1")));
-  fixture("pathb-run-linux-missing.json", linux(ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2"), "gha-pathb-l3")));
+  fixture("pathb-run-linux-doubled.json", linux(ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2"), "gha-pathb-l1"), l3()));
+  fixture("pathb-run-linux-missing.json", linux(ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2"), "gha-pathb-l4"), l3()));
+  // V16-D27, the 1-leg fixture: only l1 is of the Windows pair's model.
+  const oneLeg = linux(ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2", EPYC4), "gha-pathb-l2"), l3());
+  assert.deepEqual(oneLeg.legs.map((l) => l.cpu), [WIN_CPU, EPYC4, EPYC4]);
+  fixture("pathb-run-linux-1leg.json", oneLeg);
+  // V16-D27, the void-row fixtures: a void kernel row (IQR above 5%, the m2gate label) in the
+  // jitless item 1 reading of a leg, so boxValue gives that cell no interval.
+  const voidRow = (g) => {
+    const r = g.readings.find((x) => x.id === "octane7-vs-qjs" && x.build === "jitless");
+    r.kernels = [{ workload: "navier-stokes", status: ["void (IQR 5.4% > 5%)"] }];
+    return g;
+  };
+  const item1 = (c, l, build) => c.legs.find((x) => x.leg === l).cells.find((x) => x.build === build && x.cell.startsWith("item 1:")).value;
+  const same = () => [ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2"), "gha-pathb-l2"), ids(lin("l3"), "gha-pathb-l3")];
+  const g1 = { ...gates, l2: voidRow(gateOf(1.1)) };
+  const v1 = compare(same(), { readGate: (runs) => g1[runs[0].source.split("/")[0]] });
+  assert.deepEqual([item1(v1, "l1", "jitless").interval, item1(v1, "l2", "jitless").interval, item1(v1, "l3", "jitless").interval], [[1.4, 1.46], null, [1.4, 1.46]]);
+  assert.equal(item1(v1, "l2", "jitless").note, "net, provisional; no interval: kernel navier-stokes: void (IQR 5.4% > 5%)");
+  assert.deepEqual(item1(v1, "l2", "jit").interval, [1.42, 1.48], "the jit row of l2 is not void");
+  fixture("pathb-run-linux-void.json", v1);
+  const g2 = { ...gates, l1: voidRow(gateOf(1.1)), l2: voidRow(gateOf(1.1)) };
+  const v2 = compare(same(), { readGate: (runs) => g2[runs[0].source.split("/")[0]] });
+  assert.deepEqual(["l1", "l2", "l3"].map((l) => item1(v2, l, "jitless").interval), [null, null, [1.4, 1.46]]);
+  fixture("pathb-run-linux-void2.json", v2);
+  // V16-D27, the 2-model fixture: each Windows model pairs with 1 Linux leg (w2, w3 with l1; w1,
+  // w4 with l2), so no CPU model has 2 legs.
+  const g3 = { ...gates, l2: gateOf(1.0) };
+  const twoModels = compare([ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2", intel), "gha-pathb-l2"), l3()], { readGate: (runs) => g3[runs[0].source.split("/")[0]] });
+  assert.deepEqual(twoModels.legs.map((l) => l.cpu), [WIN_CPU, intel, EPYC4]);
+  fixture("pathb-run-linux-2models.json", twoModels);
 });
