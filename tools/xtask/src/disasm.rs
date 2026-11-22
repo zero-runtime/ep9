@@ -10,7 +10,7 @@
 //! | tail exits | A `tail` handler has 0 returns, 0 indirect calls, 0 calls to handlers, and at least one tail exit (indirect jump, or a direct jump to another handler). A direct jump to a symbol that is not a handler is followed: that code counts as part of the handler, and a target that cannot be disassembled fails. An `exit` handler has 0 indirect calls and 0 calls to handlers. |
 //! | handler args | Every handler in the LLVM IR has at most 4 parameters (`--max-args`), and none is passed in memory (sret, byval, inalloca, preallocated). |
 //! | match loop (`--match-loop`) | For SP-Dispatch, whose 20-opcode x86-64 match loop LLVM threads (`ep9loop__<expansion>__<fn>`). On x86-64 it has an indirect (dispatch) jump for at least half of the fast `tail` handlers, so LLVM copied the dispatch into the arms (threaded code), and it touches the stack only next to a call, in the entry block or in an exit sequence. On aarch64 the shape is printed only. T0 (`ep9_vm`) releases sibling calls on every target (H15 ADR, 2026-10-21), so for T0 the loop line is a report, not a gate. |
-//! | frames (`--frames GOLDEN`) | Plan rule 81 (no new entry save on a hot x86 handler; docs/plan/10-quality.md, 2026-11-16 note). Its own check and CI step: it builds like the default mode and runs only this check. Every hot handler (every handler whose name does not end in `_cold`, and on x86-64 also the `HOT_COLD` list: `Wide_cold` and `ExtraWide_cold`, which run the `ops::prefix_set` fast bodies there through `interp::tails::wide`, M9-P1 X86-WIDE-FAST; MC-w43-2; and `CallProperty0_cold`..`CallProperty2_cold`, which run the host call of `slow::call_property` there, M9 OXC-W2-HOSTCALL; MC-w44-4) is scanned. The ones that build a frame on entry (the first instruction saves a register or grows the stack) or save a callee-saved register on entry (a red-zone `mov` save too; M9-P1-WPRE-3), with the callee-saved registers each one saves on entry (the leading prologue, where a push of another register, a stack alignment push, counts 0, then each callee-saved register that the entry code saves before its first conditional branch, call, return or tail jump, with an unconditional jump inside the handler followed; a store of a callee-saved register in a form that the check does not know fails it; `entry_saves`), must equal the golden file: one `<expansion> <handler> <saves>` row per handler and a `target` line. A new row, a lost row or a changed count fails; a change that is meant updates the golden in the same PR (`--bless` writes it). Report only: an `any-path` line per hot handler that stores a callee-saved register on any path of its block (a shrink-wrapped save too; `any_path_saves`). x86-64 alignment column (H15 x64 function alignment, M10-P1 X86-ALIGN; M10-PRE-ALIGN-FORM): one `align64 <expansion> <aligned>/<total>` line per expansion in the golden; each hot handler must start on a 64-byte line: the alignment of its section is 64 or more and its offset in that section is a multiple of 64 (`llvm-readobj --sections --symbols`: ELF `sh_addralign`, COFF `IMAGE_SCN_ALIGN_*`; the staticlib holds relocatable objects, so the symbol value alone is 0 with and without the flag; `align_rows`). A handler that does not fails, and so does a line that differs from the golden. The root `.cargo/config.toml` x86-64 `[target]` rustflags set the alignment; `RUSTFLAGS` in the environment replaces them, and this column then fails. aarch64 goldens have no `align64` line. |
+//! | frames (`--frames GOLDEN`) | Plan rule 81 (no new entry save on a hot x86 handler; docs/plan/10-quality.md, 2026-11-16 note). Its own check and CI step: it builds like the default mode and runs only this check. Every hot handler (every handler whose name does not end in `_cold`, and on x86-64 also the `HOT_COLD` list: `Wide_cold` and `ExtraWide_cold`, which run the `ops::prefix_set` fast bodies there through `interp::tails::wide`, M9-P1 X86-WIDE-FAST; MC-w43-2; and `CallProperty0_cold`..`CallProperty2_cold`, which run the host call of `slow::call_property` there, M9 OXC-W2-HOSTCALL; MC-w44-4) is scanned. The ones that build a frame on entry (the first instruction saves a register or grows the stack) or save a callee-saved register on entry (a red-zone `mov` save too; M9-P1-WPRE-3), with the callee-saved registers each one saves on entry (the leading prologue, where a push of another register, a stack alignment push, counts 0, then each callee-saved register that the entry code saves before its first conditional branch, call, return or tail jump, with an unconditional jump inside the handler followed; a store of a callee-saved register in a form that the check does not know fails it; `entry_saves`), must equal the golden file: one `<expansion> <handler> <saves>` row per handler and a `target` line. A new row, a lost row or a changed count fails; a change that is meant updates the golden in the same PR (`--bless` writes it). Report only: an `any-path` line per hot handler that stores a callee-saved register on any path of its block (a shrink-wrapped save too; `any_path_saves`). x86-64 alignment column (H15 x64 function alignment, M10-P1 X86-ALIGN; M10-PRE-ALIGN-FORM; the 2 triples of `ALIGN_TARGETS`, x86-64 macOS is frame-only): one `align64 <expansion> <aligned>/<total>` line per expansion in the golden; each hot handler must start on a 64-byte line: the alignment of its section is 64 or more and its offset in that section is a multiple of 64 (`llvm-readobj --sections --symbols`: ELF `sh_addralign`, COFF `IMAGE_SCN_ALIGN_*`; the staticlib holds relocatable objects, so the symbol value alone is 0 with and without the flag; `align_rows`). A handler that does not fails, and so does a line that differs from the golden. The root `.cargo/config.toml` x86-64 `[target]` rustflags set the alignment; `RUSTFLAGS` in the environment replaces them, and this column then fails. aarch64 goldens have no `align64` line. |
 //! | Mach-O data in code | x86-64 Mach-O keeps jump tables in `__text` (LC_DATA_IN_CODE). The check drops what `llvm-objdump -d` decodes from those bytes, so table data never counts as jumps, calls, returns or stack accesses, and decodes the code after each table again from the table end, so a decode that ran across the table end cannot hide an instruction there. |
 //!
 //! Build mode (default) runs `cargo rustc --lib --release --crate-type staticlib --target T`.
@@ -40,7 +40,8 @@ usage: cargo xtask disasm-check [options]
   --match-loop          also check the match loop (ep9loop__* symbols; rule on x86-64 only)
   --frames GOLDEN       only the frame check: the hot handlers that build a frame on entry and
                         their entry register saves must equal GOLDEN (one target, no --binary);
-                        on x86-64 also every hot handler starts on a 64-byte line (align64)
+                        on x86-64 Linux and Windows also every hot handler starts on a
+                        64-byte line (align64)
   --bless               with --frames: write GOLDEN from this build instead of checking it
   --objdump PATH, --nm PATH   tools (default: rustup llvm-tools, then PATH)
   -v, --verbose         one line per handler";
@@ -53,6 +54,12 @@ pub(crate) const ALL_TARGETS: &[&str] = &[
     "aarch64-unknown-linux-gnu",
     "x86_64-pc-windows-msvc",
 ];
+
+/// The x86-64 targets of the alignment column of `--frames` ([`align_column`]): the 2
+/// `[target]` rustflags tables of the root `.cargo/config.toml` that set
+/// `-C llvm-args=-align-all-functions=6` (H15:39). x86-64 macOS has no table, so its frame
+/// check has no column.
+const ALIGN_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"];
 
 const PREFIX: &str = "ep9h__";
 const LOOP_PREFIX: &str = "ep9loop__";
@@ -2132,10 +2139,18 @@ fn frames_verdict(
     Ok(p)
 }
 
-/// The frame check (`--frames`) of one built file: compares the frame rows (and on x86-64 the
-/// `align64` lines, [`align_rows`]) with the golden file, or writes it (`--bless`). Prints every
-/// row, so a CI log holds the new golden. A hot x86-64 handler that does not start on a 64-byte
-/// line fails the check, and `--bless` then writes nothing.
+/// True if the frame check of `target` (with code of `arch`) has the alignment column: an
+/// x86-64 target of [`ALIGN_TARGETS`]. Every other target (aarch64, x86-64 macOS) has frame rows
+/// only.
+fn align_column(arch: Arch, target: &str) -> bool {
+    arch == Arch::X64 && ALIGN_TARGETS.contains(&target)
+}
+
+/// The frame check (`--frames`) of one built file: compares the frame rows (and on the
+/// [`align_column`] targets the `align64` lines, [`align_rows`]) with the golden file, or writes
+/// it (`--bless`). Prints every row, so a CI log holds the new golden. A hot handler of an
+/// [`align_column`] target that does not start on a 64-byte line fails the check, and `--bless`
+/// then writes nothing.
 fn check_frames(
     tools: &Tools,
     file: &Path,
@@ -2152,7 +2167,8 @@ fn check_frames(
     };
     let rows = frame_rows(l.arch, &l.handlers, &l.blocks)?;
     println!("== {target} ({}, {}): {}", l.abi, l.format, file.display());
-    let (align, misaligned) = if l.arch == Arch::X64 {
+    let column = align_column(l.arch, target);
+    let (align, misaligned) = if column {
         let readobj = find_tool("llvm-readobj", &None)?;
         let mut places = BTreeMap::new();
         let mut members: Vec<&str> = l.handlers.iter().map(|h| h.member.as_str()).collect();
@@ -2174,7 +2190,7 @@ fn check_frames(
     } else {
         (Vec::new(), Vec::new())
     };
-    if l.arch == Arch::X64 {
+    if column {
         println!(
             "   alignment: hot handlers that start on a 64-byte line, per expansion (align64 <expansion> <aligned>/<total>):"
         );
@@ -3662,6 +3678,36 @@ Section
                 .unwrap_err()
                 .contains("no section")
         );
+    }
+
+    /// The column is on the x86-64 targets of the 2 `[target]` tables of the root
+    /// `.cargo/config.toml` that set the alignment flag, and on no other target: x86-64 macOS
+    /// keeps the frame-only check (Codex r1 F3).
+    #[test]
+    fn align_targets_are_the_config_tables() {
+        let config = include_str!("../../../.cargo/config.toml");
+        let mut tables = BTreeSet::new();
+        let mut table = "";
+        for line in config.lines().map(str::trim) {
+            if let Some(t) = line.strip_prefix("[target.") {
+                table = t.trim_end_matches(']');
+            } else if line.starts_with('[') {
+                table = "";
+            } else if !line.starts_with('#') && line.contains("align-all-functions=6") {
+                assert!(
+                    !table.is_empty(),
+                    "the flag outside a [target] table: {line}"
+                );
+                tables.insert(table);
+            }
+        }
+        assert_eq!(tables, ALIGN_TARGETS.into_iter().collect::<BTreeSet<_>>());
+        for t in ALIGN_TARGETS {
+            assert!(align_column(Arch::X64, t), "{t}");
+        }
+        assert!(!align_column(Arch::X64, "x86_64-apple-darwin"));
+        assert!(!align_column(Arch::A64, "aarch64-unknown-linux-gnu"));
+        assert!(!align_column(Arch::A64, "aarch64-apple-darwin"));
     }
 
     /// The golden form of the column: a new, lost or changed `align64` line fails, and a bad
