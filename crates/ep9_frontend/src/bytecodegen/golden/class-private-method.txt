@@ -170,15 +170,14 @@ function f3 method name="#m" parent=f0 outer_scope=scope1 flags=[strict,simple-p
   positions (1):
       0 S 17 (1:18)
 function f4 method name="#s" parent=f0 outer_scope=scope1 flags=[strict,simple-params] params=0 length=0 regs=3 range=36..60
-  code (17 bytes):
-      0 S> Ldar <this>                                  ; 0b ff
-      2    LdaCurrentFunction                           ; 0e
-      3    Star r2                                      ; 0c 02
-      5 E> CallRuntime GetHomeObject, r2                ; 68 0e 00 02 01
-     10 E> GetNamedPropertyFromSuper <this>, k0, s0  ; k0 = String str10 "x" ; 22 ff 00 00
+  code (15 bytes):
+      0 S> LdaCurrentFunction                           ; 0e
+      1    Star r2                                      ; 0c 02
+      3 E> CallRuntime GetHomeObject, r2                ; 68 0e 00 02 01
+      8 E> GetNamedPropertyFromSuper <this>, k0, s0  ; k0 = String str10 "x" ; 22 ff 00 00
+     12    Return                                       ; 92
+     13    LdaUndefined                                 ; 05
      14    Return                                       ; 92
-     15    LdaUndefined                                 ; 05
-     16    Return                                       ; 92
   constants (1):
       0 String str10 "x"
   feedback (1):
@@ -186,8 +185,8 @@ function f4 method name="#s" parent=f0 outer_scope=scope1 flags=[strict,simple-p
   handlers (0):
   positions (3):
       0 S 43 (1:44)
-      5 E 50 (1:51)
-     10 E 56 (1:57)
+      3 E 50 (1:51)
+      8 E 56 (1:57)
 function f5 getter name="get #a" parent=f0 outer_scope=scope1 flags=[strict,simple-params] params=0 length=0 regs=0 range=61..83
   code (5 bytes):
       0 S> LdaSmi [1]                                   ; 04 01
@@ -216,70 +215,66 @@ function f7 setter name="set #w" parent=f0 outer_scope=scope1 flags=[strict,simp
   handlers (0):
   positions (0):
 function f8 method name="t" parent=f0 outer_scope=scope1 flags=[strict,simple-params] params=1 length=1 regs=4 range=110..174
-  code (147 bytes):
+  code (139 bytes):
       0 S> CreateArrayLiteral k0, s0, #0x01  ; k0 = ArrayBoilerplate [_, _, _, _, _, _] ; 6d 00 00 01
       4    Star r0                                      ; 0c 00
       6    LdaZero                                      ; 03
       7    Star r1                                      ; 0c 01
-      9    Ldar a0                                      ; 0b fe
-     11    LdaCurrentContextSlot [5]                    ; 18 05
-     13 E> GetKeyedProperty a0, s2                      ; 23 fe 02
-     16    LdaCurrentContextSlot [1]                    ; 18 01
-     18    Star r2                                      ; 0c 02
-     20 E> CallProperty0 r2, a0, s3                     ; 60 02 fe 03
-     24 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
-     28    LdaSmi [1]                                   ; 04 01
-     30    Star r1                                      ; 0c 01
-     32    LdaImmutableCurrentContextSlot [0]           ; 19 00
-     34 E> ThrowReferenceErrorIfHole k1  ; k1 = String str0 "A" ; 94 01
-     36    Star r3                                      ; 0c 03
-     38    LdaCurrentContextSlot [6]                    ; 18 06
-     40 E> GetKeyedProperty r3, s4                      ; 23 03 04
-     43    LdaCurrentContextSlot [2]                    ; 18 02
-     45    Star r2                                      ; 0c 02
-     47 E> CallProperty0 r2, r3, s5                     ; 60 02 03 05
-     51 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
-     55    LdaSmi [2]                                   ; 04 02
-     57    Star r1                                      ; 0c 01
-     59    Ldar a0                                      ; 0b fe
-     61    LdaCurrentContextSlot [5]                    ; 18 05
-     63 E> GetKeyedProperty a0, s6                      ; 23 fe 06
-     66    LdaCurrentContextSlot [3]                    ; 18 03
-     68    Star r3                                      ; 0c 03
-     70 E> CallProperty0 r3, a0, s7                     ; 60 03 fe 07
-     74 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
-     78    LdaSmi [3]                                   ; 04 03
-     80    Star r1                                      ; 0c 01
+      9    LdaCurrentContextSlot [5]                    ; 18 05
+     11 E> GetKeyedProperty a0, s2                      ; 23 fe 02
+     14    LdaCurrentContextSlot [1]                    ; 18 01
+     16    Star r2                                      ; 0c 02
+     18 E> CallProperty0 r2, a0, s3                     ; 60 02 fe 03
+     22 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
+     26    LdaSmi [1]                                   ; 04 01
+     28    Star r1                                      ; 0c 01
+     30    LdaImmutableCurrentContextSlot [0]           ; 19 00
+     32 E> ThrowReferenceErrorIfHole k1  ; k1 = String str0 "A" ; 94 01
+     34    Star r3                                      ; 0c 03
+     36    LdaCurrentContextSlot [6]                    ; 18 06
+     38 E> GetKeyedProperty r3, s4                      ; 23 03 04
+     41    LdaCurrentContextSlot [2]                    ; 18 02
+     43    Star r2                                      ; 0c 02
+     45 E> CallProperty0 r2, r3, s5                     ; 60 02 03 05
+     49 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
+     53    LdaSmi [2]                                   ; 04 02
+     55    Star r1                                      ; 0c 01
+     57    LdaCurrentContextSlot [5]                    ; 18 05
+     59 E> GetKeyedProperty a0, s6                      ; 23 fe 06
+     62    LdaCurrentContextSlot [3]                    ; 18 03
+     64    Star r3                                      ; 0c 03
+     66 E> CallProperty0 r3, a0, s7                     ; 60 03 fe 07
+     70 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
+     74    LdaSmi [3]                                   ; 04 03
+     76    Star r1                                      ; 0c 01
+     78    LdaCurrentContextSlot [5]                    ; 18 05
+     80    Star r3                                      ; 0c 03
      82    Ldar a0                                      ; 0b fe
-     84    LdaCurrentContextSlot [5]                    ; 18 05
-     86    Star r3                                      ; 0c 03
-     88    Ldar a0                                      ; 0b fe
-     90 E> TestIn r3, s8                                ; 53 03 08
-     93 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
-     97    LdaSmi [4]                                   ; 04 04
-     99    Star r1                                      ; 0c 01
-    101    Ldar a0                                      ; 0b fe
-    103    Star r2                                      ; 0c 02
-    105    JumpIfUndefinedOrNull @118                   ; 87 0d
-    107    Star r2                                      ; 0c 02
-    109    LdaCurrentContextSlot [5]                    ; 18 05
-    111 E> GetKeyedProperty r2, s9                      ; 23 02 09
-    114    LdaCurrentContextSlot [1]                    ; 18 01
-    116    Jump @119                                    ; 7e 03
-    118    LdaUndefined                                 ; 05
-    119 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
-    123    LdaSmi [5]                                   ; 04 05
-    125    Star r1                                      ; 0c 01
-    127    Ldar a0                                      ; 0b fe
-    129    LdaCurrentContextSlot [5]                    ; 18 05
-    131    Star r3                                      ; 0c 03
-    133    Ldar a0                                      ; 0b fe
-    135 E> TestIn r3, s10                               ; 53 03 0a
-    138 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
-    142    Ldar r0                                      ; 0b 00
-    144    Return                                       ; 92
-    145    LdaUndefined                                 ; 05
-    146    Return                                       ; 92
+     84 E> TestIn r3, s8                                ; 53 03 08
+     87 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
+     91    LdaSmi [4]                                   ; 04 04
+     93    Star r1                                      ; 0c 01
+     95    Ldar a0                                      ; 0b fe
+     97    Star r2                                      ; 0c 02
+     99    JumpIfUndefinedOrNull @112                   ; 87 0d
+    101    Star r2                                      ; 0c 02
+    103    LdaCurrentContextSlot [5]                    ; 18 05
+    105 E> GetKeyedProperty r2, s9                      ; 23 02 09
+    108    LdaCurrentContextSlot [1]                    ; 18 01
+    110    Jump @113                                    ; 7e 03
+    112    LdaUndefined                                 ; 05
+    113 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
+    117    LdaSmi [5]                                   ; 04 05
+    119    Star r1                                      ; 0c 01
+    121    LdaCurrentContextSlot [5]                    ; 18 05
+    123    Star r3                                      ; 0c 03
+    125    Ldar a0                                      ; 0b fe
+    127 E> TestIn r3, s10                               ; 53 03 0a
+    130 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
+    134    Ldar r0                                      ; 0b 00
+    136    Return                                       ; 92
+    137    LdaUndefined                                 ; 05
+    138    Return                                       ; 92
   constants (2):
       0 ArrayBoilerplate [_, _, _, _, _, _]
       1 String str0 "A"
@@ -298,19 +293,19 @@ function f8 method name="t" parent=f0 outer_scope=scope1 flags=[strict,simple-pa
   handlers (0):
   positions (17):
       0 S 117 (1:118)
-     13 E 127 (1:128)
-     20 E 125 (1:126)
-     24 E 124 (1:125)
-     34 E 133 (1:134)
-     40 E 135 (1:136)
-     47 E 133 (1:134)
-     51 E 124 (1:125)
-     63 E 143 (1:144)
-     70 E 143 (1:144)
-     74 E 124 (1:125)
-     90 E 147 (1:148)
-     93 E 124 (1:125)
-    111 E 159 (1:160)
-    119 E 124 (1:125)
-    135 E 163 (1:164)
-    138 E 124 (1:125)
+     11 E 127 (1:128)
+     18 E 125 (1:126)
+     22 E 124 (1:125)
+     32 E 133 (1:134)
+     38 E 135 (1:136)
+     45 E 133 (1:134)
+     49 E 124 (1:125)
+     59 E 143 (1:144)
+     66 E 143 (1:144)
+     70 E 124 (1:125)
+     84 E 147 (1:148)
+     87 E 124 (1:125)
+    105 E 159 (1:160)
+    113 E 124 (1:125)
+    127 E 163 (1:164)
+    130 E 124 (1:125)

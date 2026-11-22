@@ -29,19 +29,18 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
       5 E 0 (1:1)
      15 E 0 (1:1)
 function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] params=1 length=1 regs=1 range=0..37
-  code (15 bytes):
-      0 S> Ldar a0                                      ; 0b fe
-      2    LdaSmi [1]                                   ; 04 01
-      4    Mov a0, r0                                   ; 0d fe 00
-      7    Star a0                                      ; 0c fe
-      9 E> Add r0, s0                                   ; 2a 00 00
+  code (13 bytes):
+      0 S> LdaSmi [1]                                   ; 04 01
+      2    Mov a0, r0                                   ; 0d fe 00
+      5    Star a0                                      ; 0c fe
+      7 E> Add r0, s0                                   ; 2a 00 00
+     10    Return                                       ; 92
+     11    LdaUndefined                                 ; 05
      12    Return                                       ; 92
-     13    LdaUndefined                                 ; 05
-     14    Return                                       ; 92
   constants (0):
   feedback (1):
       0 BinaryOp
   handlers (0):
   positions (2):
       0 S 16 (1:17)
-      9 E 23 (1:24)
+      7 E 23 (1:24)

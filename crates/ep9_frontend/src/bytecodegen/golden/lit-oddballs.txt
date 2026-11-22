@@ -7,15 +7,14 @@ strings (0):
 scopes (1):
   scope0 script outer=- flags=[] slots=[]
 function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs=0 range=0..32
-  code (9 bytes):
+  code (7 bytes):
       0 S> LdaNull                                      ; 06
       1 S> LdaTrue                                      ; 08
       2 S> LdaFalse                                     ; 09
       3 S> LdaZero                                      ; 03
       4    LdaUndefined                                 ; 05
-      5 S> Ldar <this>                                  ; 0b ff
-      7    LdaUndefined                                 ; 05
-      8    Return                                       ; 92
+      5 S> LdaUndefined                                 ; 05
+      6    Return                                       ; 92
   constants (0):
   feedback (0):
   handlers (0):

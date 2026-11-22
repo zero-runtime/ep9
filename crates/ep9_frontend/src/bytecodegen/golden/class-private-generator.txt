@@ -207,16 +207,15 @@ function f4 method name="#h" parent=f0 outer_scope=scope1 flags=[strict,generato
      30 E 39 (1:40)
      40 E 39 (1:40)
 function f5 method name="t" parent=f0 outer_scope=scope1 flags=[strict,simple-params] params=0 length=0 regs=2 range=45..70
-  code (18 bytes):
-      0 S> Ldar <this>                                  ; 0b ff
-      2    LdaCurrentContextSlot [2]                    ; 18 02
-      4 E> GetKeyedProperty <this>, s0                  ; 23 ff 00
-      7    LdaCurrentContextSlot [0]                    ; 18 00
-      9    Star r0                                      ; 0c 00
-     11 E> CallProperty0 r0, <this>, s1                 ; 60 00 ff 01
+  code (16 bytes):
+      0 S> LdaCurrentContextSlot [2]                    ; 18 02
+      2 E> GetKeyedProperty <this>, s0                  ; 23 ff 00
+      5    LdaCurrentContextSlot [0]                    ; 18 00
+      7    Star r0                                      ; 0c 00
+      9 E> CallProperty0 r0, <this>, s1                 ; 60 00 ff 01
+     13    Return                                       ; 92
+     14    LdaUndefined                                 ; 05
      15    Return                                       ; 92
-     16    LdaUndefined                                 ; 05
-     17    Return                                       ; 92
   constants (0):
   feedback (2):
       0 LoadKeyed
@@ -224,5 +223,5 @@ function f5 method name="t" parent=f0 outer_scope=scope1 flags=[strict,simple-pa
   handlers (0):
   positions (3):
       0 S 51 (1:52)
-      4 E 63 (1:64)
-     11 E 58 (1:59)
+      2 E 63 (1:64)
+      9 E 58 (1:59)

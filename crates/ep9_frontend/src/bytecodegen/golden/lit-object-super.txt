@@ -53,15 +53,14 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
      38 E 1 (1:2)
      45 E 1 (1:2)
 function f1 method name="m" parent=f0 outer_scope=scope0 flags=[simple-params] params=0 length=0 regs=3 range=2..25
-  code (17 bytes):
-      0 S> Ldar <this>                                  ; 0b ff
-      2    LdaCurrentFunction                           ; 0e
-      3    Star r2                                      ; 0c 02
-      5 E> CallRuntime GetHomeObject, r2                ; 68 0e 00 02 01
-     10 E> GetNamedPropertyFromSuper <this>, k0, s0  ; k0 = String str2 "x" ; 22 ff 00 00
+  code (15 bytes):
+      0 S> LdaCurrentFunction                           ; 0e
+      1    Star r2                                      ; 0c 02
+      3 E> CallRuntime GetHomeObject, r2                ; 68 0e 00 02 01
+      8 E> GetNamedPropertyFromSuper <this>, k0, s0  ; k0 = String str2 "x" ; 22 ff 00 00
+     12    Return                                       ; 92
+     13    LdaUndefined                                 ; 05
      14    Return                                       ; 92
-     15    LdaUndefined                                 ; 05
-     16    Return                                       ; 92
   constants (1):
       0 String str2 "x"
   feedback (1):
@@ -69,43 +68,41 @@ function f1 method name="m" parent=f0 outer_scope=scope0 flags=[simple-params] p
   handlers (0):
   positions (3):
       0 S 8 (1:9)
-      5 E 15 (1:16)
-     10 E 21 (1:22)
+      3 E 15 (1:16)
+      8 E 21 (1:22)
 function f2 method name="n" parent=f0 outer_scope=scope0 flags=[simple-params] params=0 length=0 regs=6 range=27..64
-  code (61 bytes):
-      0 S> Ldar <this>                                  ; 0b ff
-      2    LdaCurrentFunction                           ; 0e
-      3    Star r2                                      ; 0c 02
-      5 E> CallRuntime GetHomeObject, r2                ; 68 0e 00 02 01
-     10    Star r1                                      ; 0c 01
-     12    LdaSmi [1]                                   ; 04 01
-     14    Star r5                                      ; 0c 05
-     16    LdaConstant k0  ; k0 = String str3 "y"       ; 0a 00
-     18    Star r4                                      ; 0c 04
-     20    Mov <this>, r2                               ; 0d ff 02
-     23    Mov r1, r3                                   ; 0d 01 03
-     26 E> CallRuntime StoreToSuper, r2-r5              ; 68 12 00 02 04
-     31 S> Ldar <this>                                  ; 0b ff
-     33    LdaSmi [1]                                   ; 04 01
-     35    Star r1                                      ; 0c 01
-     37    LdaCurrentFunction                           ; 0e
-     38    Star r3                                      ; 0c 03
-     40 E> CallRuntime GetHomeObject, r3                ; 68 0e 00 03 01
-     45    Star r4                                      ; 0c 04
-     47    Mov <this>, r3                               ; 0d ff 03
-     50    Mov r1, r5                                   ; 0d 01 05
-     53 E> CallRuntime LoadKeyedFromSuper, r3-r5        ; 68 11 00 03 03
-     58    Return                                       ; 92
-     59    LdaUndefined                                 ; 05
-     60    Return                                       ; 92
+  code (57 bytes):
+      0 S> LdaCurrentFunction                           ; 0e
+      1    Star r2                                      ; 0c 02
+      3 E> CallRuntime GetHomeObject, r2                ; 68 0e 00 02 01
+      8    Star r1                                      ; 0c 01
+     10    LdaSmi [1]                                   ; 04 01
+     12    Star r5                                      ; 0c 05
+     14    LdaConstant k0  ; k0 = String str3 "y"       ; 0a 00
+     16    Star r4                                      ; 0c 04
+     18    Mov <this>, r2                               ; 0d ff 02
+     21    Mov r1, r3                                   ; 0d 01 03
+     24 E> CallRuntime StoreToSuper, r2-r5              ; 68 12 00 02 04
+     29 S> LdaSmi [1]                                   ; 04 01
+     31    Star r1                                      ; 0c 01
+     33    LdaCurrentFunction                           ; 0e
+     34    Star r3                                      ; 0c 03
+     36 E> CallRuntime GetHomeObject, r3                ; 68 0e 00 03 01
+     41    Star r4                                      ; 0c 04
+     43    Mov <this>, r3                               ; 0d ff 03
+     46    Mov r1, r5                                   ; 0d 01 05
+     49 E> CallRuntime LoadKeyedFromSuper, r3-r5        ; 68 11 00 03 03
+     54    Return                                       ; 92
+     55    LdaUndefined                                 ; 05
+     56    Return                                       ; 92
   constants (1):
       0 String str3 "y"
   feedback (0):
   handlers (0):
   positions (6):
       0 S 33 (1:34)
-      5 E 33 (1:34)
-     26 E 33 (1:34)
-     31 S 46 (1:47)
-     40 E 53 (1:54)
-     53 E 59 (1:60)
+      3 E 33 (1:34)
+     24 E 33 (1:34)
+     29 S 46 (1:47)
+     36 E 53 (1:54)
+     49 E 59 (1:60)

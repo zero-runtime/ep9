@@ -35,10 +35,10 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
       5 E 0 (1:1)
      15 E 0 (1:1)
 function f1 normal name="g" parent=f0 outer_scope=scope0 flags=[generator,simple-params] params=1 length=1 regs=5 range=0..133
-  code (165 bytes):
+  code (163 bytes):
       0    LdaNewTarget                                 ; 0f
       1    Star r1                                      ; 0c 01
-      3    SwitchOnGeneratorState r1, k0  ; k0 = JumpTable [+21, +101] ; 99 01 00
+      3    SwitchOnGeneratorState r1, k0  ; k0 = JumpTable [+21, +99] ; 99 01 00
       6    LdaCurrentFunction                           ; 0e
       7    Star r2                                      ; 0c 02
       9    Mov <this>, r3                               ; 0d ff 03
@@ -70,44 +70,43 @@ function f1 normal name="g" parent=f0 outer_scope=scope0 flags=[generator,simple
      71    Star r3                                      ; 0c 03
      73    Ldar a0                                      ; 0b fe
      75 E> TestLessThan r3, s0                          ; 4d 03 00
-     78    JumpIfFalse @161                             ; 80 53
+     78    JumpIfFalse @159                             ; 80 51
      80 S> CreateClosure k3, s1, #0x00  ; k3 = Function f2 ; 74 03 01 00
      84    Star r0                                      ; 0c 00
-     86 S> Ldar r0                                      ; 0b 00
-     88    LdaFalse                                     ; 09
-     89    Star r4                                      ; 0c 04
-     91    Mov r0, r3                                   ; 0d 00 03
-     94 E> CallRuntime CreateIterResultObject, r3-r4    ; 68 03 00 03 02
-     99 E> SuspendGenerator r1, r0-r2, [1]              ; 9a 01 00 03 01
-    104    ResumeGenerator r1, r0-r2                    ; 9b 01 00 03
-    108    Star r3                                      ; 0c 03
-    110 E> CallRuntime GeneratorGetResumeMode, r1       ; 68 14 00 01 01
-    115    SwitchOnSmi k4, [0]  ; k4 = JumpTable [+9, +6] ; 8a 04 00
-    118    Ldar r3                                      ; 0b 03
-    120 E> Throw                                        ; 90
-    121    Ldar r3                                      ; 0b 03
-    123    Return                                       ; 92
-    124    Ldar r3                                      ; 0b 03
-    126    JumpIfToBooleanFalse @130                    ; 82 04
-    128 S> Jump @136                                    ; 7e 08
-    130 S> Jump @161                                    ; 7e 1f
-    132    JumpLoop @86, [1], s2                        ; 7d 2e 01 02
-    136    LdaCurrentContext                            ; 15
-    137    PopContext r2                                ; 14 02
-    139    Star r3                                      ; 0c 03
-    141 E> CreateBlockContext k2  ; k2 = Scope scope2   ; 76 02
-    143    PushContext r2                               ; 13 02
-    145    LdaContextSlot r3, [0], [0]                  ; 16 03 00 00
-    149    StaCurrentContextSlot [0]                    ; 1b 00
-    151    LdaCurrentContextSlot [0]                    ; 18 00
-    153 E> Inc s3                                       ; 42 03
-    155    StaCurrentContextSlot [0]                    ; 1b 00
-    157    JumpLoop @69, [0], s4                        ; 7d 58 00 04
-    161    PopContext r2                                ; 14 02
-    163    LdaUndefined                                 ; 05
-    164    Return                                       ; 92
+     86 S> LdaFalse                                     ; 09
+     87    Star r4                                      ; 0c 04
+     89    Mov r0, r3                                   ; 0d 00 03
+     92 E> CallRuntime CreateIterResultObject, r3-r4    ; 68 03 00 03 02
+     97 E> SuspendGenerator r1, r0-r2, [1]              ; 9a 01 00 03 01
+    102    ResumeGenerator r1, r0-r2                    ; 9b 01 00 03
+    106    Star r3                                      ; 0c 03
+    108 E> CallRuntime GeneratorGetResumeMode, r1       ; 68 14 00 01 01
+    113    SwitchOnSmi k4, [0]  ; k4 = JumpTable [+9, +6] ; 8a 04 00
+    116    Ldar r3                                      ; 0b 03
+    118 E> Throw                                        ; 90
+    119    Ldar r3                                      ; 0b 03
+    121    Return                                       ; 92
+    122    Ldar r3                                      ; 0b 03
+    124    JumpIfToBooleanFalse @128                    ; 82 04
+    126 S> Jump @134                                    ; 7e 08
+    128 S> Jump @159                                    ; 7e 1f
+    130    JumpLoop @86, [1], s2                        ; 7d 2c 01 02
+    134    LdaCurrentContext                            ; 15
+    135    PopContext r2                                ; 14 02
+    137    Star r3                                      ; 0c 03
+    139 E> CreateBlockContext k2  ; k2 = Scope scope2   ; 76 02
+    141    PushContext r2                               ; 13 02
+    143    LdaContextSlot r3, [0], [0]                  ; 16 03 00 00
+    147    StaCurrentContextSlot [0]                    ; 1b 00
+    149    LdaCurrentContextSlot [0]                    ; 18 00
+    151 E> Inc s3                                       ; 42 03
+    153    StaCurrentContextSlot [0]                    ; 1b 00
+    155    JumpLoop @69, [0], s4                        ; 7d 56 00 04
+    159    PopContext r2                                ; 14 02
+    161    LdaUndefined                                 ; 05
+    162    Return                                       ; 92
   constants (5):
-      0 JumpTable [+21, +101]
+      0 JumpTable [+21, +99]
       1 JumpTable [+9, +6]
       2 Scope scope2
       3 Function f2
@@ -130,14 +129,14 @@ function f1 normal name="g" parent=f0 outer_scope=scope0 flags=[generator,simple
      75 E 40 (1:41)
      80 S 58 (1:59)
      86 S 86 (1:87)
-     94 E 90 (1:91)
-     99 E 90 (1:91)
-    110 E 90 (1:91)
-    120 E 90 (1:91)
-    128 S 99 (1:100)
-    130 S 115 (1:116)
-    141 E 24 (1:25)
-    153 E 47 (1:48)
+     92 E 90 (1:91)
+     97 E 90 (1:91)
+    108 E 90 (1:91)
+    118 E 90 (1:91)
+    126 S 99 (1:100)
+    128 S 115 (1:116)
+    139 E 24 (1:25)
+    151 E 47 (1:48)
 function f2 arrow name="f" parent=f1 outer_scope=scope3 flags=[simple-params] params=0 length=0 regs=0 range=62..69
   code (5 bytes):
       0 S> LdaCurrentContextSlot [0]                    ; 18 00

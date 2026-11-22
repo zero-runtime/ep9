@@ -60,7 +60,7 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
      33 E 71 (1:72)
      48 E 0 (1:1)
 function f1 derived-constructor name="A" parent=f0 outer_scope=scope1 flags=[strict,simple-params] params=0 length=0 regs=3 range=0..104
-  code (32 bytes):
+  code (30 bytes):
       0 E> CreateFunctionContext k0, [3]  ; k0 = Scope scope2 ; 75 00 03
       3    PushContext r1                               ; 13 01
       5    LdaNewTarget                                 ; 0f
@@ -71,13 +71,12 @@ function f1 derived-constructor name="A" parent=f0 outer_scope=scope1 flags=[str
      12    StaCurrentContextSlot [2]                    ; 1b 02
      14 S> CreateClosure k1, s0, #0x00  ; k1 = Function f2 ; 74 01 00 00
      18    Star r0                                      ; 0c 00
-     20 S> Ldar r0                                      ; 0b 00
-     22 E> CallUndefinedReceiver0 r0, s1                ; 64 00 01
-     25    LdaUndefined                                 ; 05
-     26    JumpIfUndefined @29                          ; 85 03
-     28    Return                                       ; 92
-     29    LdaCurrentContextSlot [2]                    ; 18 02
-     31    Return                                       ; 92
+     20 S> CallUndefinedReceiver0 r0, s1                ; 64 00 01
+     23    LdaUndefined                                 ; 05
+     24    JumpIfUndefined @27                          ; 85 03
+     26    Return                                       ; 92
+     27    LdaCurrentContextSlot [2]                    ; 18 02
+     29    Return                                       ; 92
   constants (2):
       0 Scope scope2
       1 Function f2
@@ -85,11 +84,10 @@ function f1 derived-constructor name="A" parent=f0 outer_scope=scope1 flags=[str
       0 CreateClosure
       1 Call
   handlers (0):
-  positions (4):
+  positions (3):
       0 E 36 (1:37)
      14 S 45 (1:46)
      20 S 64 (1:65)
-     22 E 64 (1:65)
 function f2 arrow name="f" parent=f1 outer_scope=scope2 flags=[strict,simple-params] params=0 length=0 regs=2 range=49..62
   code (23 bytes):
       0 S> LdaImmutableCurrentContextSlot [0]           ; 19 00
