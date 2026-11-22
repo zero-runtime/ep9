@@ -48,18 +48,16 @@ function f0 module name=- parent=- outer_scope=- flags=[strict,async] params=0 l
      25 S 13 (1:14)
      32 E 17 (1:18)
 function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[strict,simple-params] params=2 length=2 regs=2 range=35..76
-  code (18 bytes):
-      0 S> Ldar a0                                      ; 0b fe
-      2    Ldar a1                                      ; 0b fd
-      4    Mov a0, r0                                   ; 0d fe 00
-      7    Mov a1, r1                                   ; 0d fd 01
-     10 E> CallRuntime DynamicImport, r0-r1             ; 68 2b 00 00 02
-     15    Return                                       ; 92
-     16    LdaUndefined                                 ; 05
-     17    Return                                       ; 92
+  code (14 bytes):
+      0 S> Mov a0, r0                                   ; 0d fe 00
+      3    Mov a1, r1                                   ; 0d fd 01
+      6 E> CallRuntime DynamicImport, r0-r1             ; 68 2b 00 00 02
+     11    Return                                       ; 92
+     12    LdaUndefined                                 ; 05
+     13    Return                                       ; 92
   constants (0):
   feedback (0):
   handlers (0):
   positions (2):
       0 S 54 (1:55)
-     10 E 61 (1:62)
+      6 E 61 (1:62)

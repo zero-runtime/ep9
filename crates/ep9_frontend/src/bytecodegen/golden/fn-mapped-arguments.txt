@@ -80,12 +80,11 @@ function f2 arrow name=- parent=f1 outer_scope=scope1 flags=[simple-params] para
   positions (1):
       0 S 46 (1:47)
 function f3 normal name="g" parent=f0 outer_scope=scope0 flags=[strict,simple-params] params=2 length=2 regs=1 range=51..96
-  code (7 bytes):
+  code (5 bytes):
       0 E> CreateUnmappedArguments                      ; 7b
       1    Star r0                                      ; 0c 00
-      3 S> Ldar r0                                      ; 0b 00
-      5    LdaUndefined                                 ; 05
-      6    Return                                       ; 92
+      3 S> LdaUndefined                                 ; 05
+      4    Return                                       ; 92
   constants (0):
   feedback (0):
   handlers (0):

@@ -115,6 +115,8 @@ struct Report {
     examples: BTreeMap<String, String>,
     /// (path under third_party, mode, content hash) of every unit that compiled.
     hashes: Vec<(String, String, [u8; 32])>,
+    /// Every T1 failure line (arm, path, mode, differences), for `EP9_CORPUS_T1_LIST`.
+    t1: Vec<String>,
 }
 
 impl Report {
@@ -232,6 +234,7 @@ fn run(files: &[(PathBuf, bool, bool)]) -> Report {
                         && (src.contains("phase: parse") || src.contains("phase: early"));
                     let mut local = Vec::new();
                     let mut hashes = Vec::new();
+                    let mut t1_lines = Vec::new();
                     for opts in modes {
                         // G10 on a separate build: throwing instructions have positions.
                         if let Ok(Ok(unit)) = std::panic::catch_unwind(|| {
@@ -265,6 +268,32 @@ fn run(files: &[(PathBuf, bool, bool)]) -> Report {
                                     "REGOPT guard failure".to_owned(),
                                     Some(regopt.join(", ")),
                                 ));
+                            }
+                            // LDAR-ELIDE T1 (release run only): arm 0 against the merged mode
+                            // (arm 2, M11-P0). Arm 1 is not shipped, so it is not run. A
+                            // difference fails the run; each dead statement load that the mode
+                            // keeps is counted by its reason.
+                            if !cfg!(debug_assertions) {
+                                let arm = super::regopt::DEFAULT;
+                                let t1 = super::tests::ldar_elision_differences(&src, opts, arm);
+                                if !t1.differences.is_empty() {
+                                    t1_lines.push(format!(
+                                        "{arm:?}\t{}\t{opts:?}\t{}",
+                                        short_path(path),
+                                        t1.differences.join(", ")
+                                    ));
+                                    local.push((
+                                        format!("REGOPT LDAR-ELIDE T1 failure ({arm:?})"),
+                                        Some(t1.differences.join(", ")),
+                                    ));
+                                }
+                                for k in t1.kept {
+                                    let why = k.rsplit(": ").next().unwrap_or("").to_owned();
+                                    local.push((
+                                        format!("LDAR-ELIDE kept ({arm:?}): {why}"),
+                                        Some(k),
+                                    ));
+                                }
                             }
                         }
                         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -300,11 +329,13 @@ fn run(files: &[(PathBuf, bool, bool)]) -> Report {
                     let mut rep = report.lock().unwrap();
                     rep.files += 1;
                     rep.hashes.append(&mut hashes);
+                    rep.t1.append(&mut t1_lines);
                     for (class, err) in local {
                         rep.units += usize::from(
                             !class.starts_with("NO POSITION")
                                 && !class.starts_with("CONTEXT")
-                                && !class.starts_with("REGOPT"),
+                                && !class.starts_with("REGOPT")
+                                && !class.starts_with("LDAR-ELIDE"),
                         );
                         *rep.classes.entry(class.clone()).or_insert(0) += 1;
                         if let Some(err) = err {
@@ -346,6 +377,14 @@ fn corpus_verifier_clean_and_deterministic() {
     let files = corpus_files();
     let mut report = run(&files);
     print(&mut report);
+    // Test-only switch: `EP9_CORPUS_T1_LIST=<file>` writes every LDAR-ELIDE T1 failure, one per
+    // line and sorted (the log above prints one example per class).
+    if let Some(out) = std::env::var_os("EP9_CORPUS_T1_LIST") {
+        report.t1.sort();
+        let mut text = report.t1.join("\n");
+        text.push('\n');
+        std::fs::write(&out, text).expect("write EP9_CORPUS_T1_LIST");
+    }
     let bad: usize = report
         .classes
         .iter()

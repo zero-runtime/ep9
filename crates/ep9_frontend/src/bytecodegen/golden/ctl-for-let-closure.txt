@@ -34,7 +34,7 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
       5 E 0 (1:1)
      15 E 0 (1:1)
 function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] params=0 length=0 regs=5 range=0..104
-  code (97 bytes):
+  code (95 bytes):
       0 S> CreateEmptyArrayLiteral s0                   ; 6e 00
       2    Star r0                                      ; 0c 00
       4 S> CreateBlockContext k0  ; k0 = Scope scope2   ; 76 00
@@ -54,32 +54,31 @@ function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] p
      31    Star r2                                      ; 0c 02
      33    LdaSmi [3]                                   ; 04 03
      35 E> TestLessThan r2, s1                          ; 4d 02 01
-     38    JumpIfFalse @90                              ; 80 34
-     40 S> Ldar r0                                      ; 0b 00
-     42 E> GetNamedProperty r0, k1, s2  ; k1 = String str2 "push" ; 21 00 01 02
-     46    Star r2                                      ; 0c 02
-     48 E> CreateClosure k2, s3, #0x00  ; k2 = Function f2 ; 74 02 03 00
-     52    Star r4                                      ; 0c 04
-     54 E> CallProperty1 r2, r0, r4, s4                 ; 61 02 00 04 04
-     59 S> LdaCurrentContextSlot [0]                    ; 18 00
-     61    JumpIfToBooleanFalse @65                     ; 82 04
-     63 S> Jump @65                                     ; 7e 02
-     65    LdaCurrentContext                            ; 15
-     66    PopContext r1                                ; 14 01
-     68    Star r2                                      ; 0c 02
-     70 E> CreateBlockContext k0  ; k0 = Scope scope2   ; 76 00
-     72    PushContext r1                               ; 13 01
-     74    LdaContextSlot r2, [0], [0]                  ; 16 02 00 00
-     78    StaCurrentContextSlot [0]                    ; 1b 00
-     80    LdaCurrentContextSlot [0]                    ; 18 00
-     82 E> Inc s5                                       ; 42 05
-     84    StaCurrentContextSlot [0]                    ; 1b 00
-     86    JumpLoop @29, [0], s6                        ; 7d 39 00 06
-     90    PopContext r1                                ; 14 01
-     92 S> Ldar r0                                      ; 0b 00
+     38    JumpIfFalse @88                              ; 80 32
+     40 S> GetNamedProperty r0, k1, s2  ; k1 = String str2 "push" ; 21 00 01 02
+     44    Star r2                                      ; 0c 02
+     46 E> CreateClosure k2, s3, #0x00  ; k2 = Function f2 ; 74 02 03 00
+     50    Star r4                                      ; 0c 04
+     52 E> CallProperty1 r2, r0, r4, s4                 ; 61 02 00 04 04
+     57 S> LdaCurrentContextSlot [0]                    ; 18 00
+     59    JumpIfToBooleanFalse @63                     ; 82 04
+     61 S> Jump @63                                     ; 7e 02
+     63    LdaCurrentContext                            ; 15
+     64    PopContext r1                                ; 14 01
+     66    Star r2                                      ; 0c 02
+     68 E> CreateBlockContext k0  ; k0 = Scope scope2   ; 76 00
+     70    PushContext r1                               ; 13 01
+     72    LdaContextSlot r2, [0], [0]                  ; 16 02 00 00
+     76    StaCurrentContextSlot [0]                    ; 1b 00
+     78    LdaCurrentContextSlot [0]                    ; 18 00
+     80 E> Inc s5                                       ; 42 05
+     82    StaCurrentContextSlot [0]                    ; 1b 00
+     84    JumpLoop @29, [0], s6                        ; 7d 37 00 06
+     88    PopContext r1                                ; 14 01
+     90 S> Ldar r0                                      ; 0b 00
+     92    Return                                       ; 92
+     93    LdaUndefined                                 ; 05
      94    Return                                       ; 92
-     95    LdaUndefined                                 ; 05
-     96    Return                                       ; 92
   constants (3):
       0 Scope scope2
       1 String str2 "push"
@@ -93,21 +92,20 @@ function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] p
       5 BinaryOp
       6 JumpLoop
   handlers (0):
-  positions (14):
+  positions (13):
       0 S 19 (1:20)
       4 S 27 (1:28)
      11 S 36 (1:37)
      19 E 27 (1:28)
      35 E 43 (1:44)
-     40 S 57 (1:58)
-     42 E 59 (1:60)
-     48 E 64 (1:65)
-     54 E 59 (1:60)
-     59 S 74 (1:75)
-     63 S 81 (1:82)
-     70 E 27 (1:28)
-     82 E 50 (1:51)
-     92 S 93 (1:94)
+     40 S 59 (1:60)
+     46 E 64 (1:65)
+     52 E 59 (1:60)
+     57 S 74 (1:75)
+     61 S 81 (1:82)
+     68 E 27 (1:28)
+     80 E 50 (1:51)
+     90 S 93 (1:94)
 function f2 arrow name=- parent=f1 outer_scope=scope3 flags=[simple-params] params=0 length=0 regs=0 range=64..71
   code (5 bytes):
       0 S> LdaCurrentContextSlot [0]                    ; 18 00

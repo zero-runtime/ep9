@@ -119,17 +119,16 @@ function f2 derived-constructor name="B" parent=f0 outer_scope=scope3 flags=[str
      28 E 57 (1:58)
      31 E 57 (1:58)
 function f3 method name="m" parent=f0 outer_scope=scope3 flags=[strict,simple-params] params=0 length=0 regs=5 range=71..96
-  code (23 bytes):
-      0 S> Ldar <this>                                  ; 0b ff
-      2    LdaCurrentFunction                           ; 0e
-      3    Star r4                                      ; 0c 04
-      5 E> CallRuntime GetHomeObject, r4                ; 68 0e 00 04 01
-     10 E> GetNamedPropertyFromSuper <this>, k0, s0  ; k0 = String str2 "m" ; 22 ff 00 00
-     14    Star r0                                      ; 0c 00
-     16 E> CallProperty0 r0, <this>, s1                 ; 60 00 ff 01
+  code (21 bytes):
+      0 S> LdaCurrentFunction                           ; 0e
+      1    Star r4                                      ; 0c 04
+      3 E> CallRuntime GetHomeObject, r4                ; 68 0e 00 04 01
+      8 E> GetNamedPropertyFromSuper <this>, k0, s0  ; k0 = String str2 "m" ; 22 ff 00 00
+     12    Star r0                                      ; 0c 00
+     14 E> CallProperty0 r0, <this>, s1                 ; 60 00 ff 01
+     18    Return                                       ; 92
+     19    LdaUndefined                                 ; 05
      20    Return                                       ; 92
-     21    LdaUndefined                                 ; 05
-     22    Return                                       ; 92
   constants (1):
       0 String str2 "m"
   feedback (2):
@@ -138,6 +137,6 @@ function f3 method name="m" parent=f0 outer_scope=scope3 flags=[strict,simple-pa
   handlers (0):
   positions (4):
       0 S 77 (1:78)
-      5 E 84 (1:85)
-     10 E 90 (1:91)
-     16 E 90 (1:91)
+      3 E 84 (1:85)
+      8 E 90 (1:91)
+     14 E 90 (1:91)

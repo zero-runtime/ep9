@@ -188,7 +188,8 @@ pub fn compile(
 }
 
 /// Test only: compile `source` twice from one scope analysis, with the register optimizer off
-/// and on, and give the named-local count of each function (G1; the H24 R4 guard test).
+/// and in the merged mode, and give the named-local count of each function (G1; the H24 R4
+/// guard test).
 #[cfg(test)]
 pub(crate) fn compile_both(
     source: &str,
@@ -201,12 +202,16 @@ pub(crate) fn compile_both(
             .iter()
             .map(|f| f.register_count)
             .collect();
-        Ok(
-            generate_with(fe, &analysis, CompileOptions::default(), false).and_then(|plain| {
-                generate_with(fe, &analysis, CompileOptions::default(), true)
-                    .map(|opt| (plain, opt, named))
-            }),
+        Ok(generate_with(
+            fe,
+            &analysis,
+            CompileOptions::default(),
+            regopt::Mode::Plain,
         )
+        .and_then(|plain| {
+            generate_with(fe, &analysis, CompileOptions::default(), regopt::DEFAULT)
+                .map(|opt| (plain, opt, named))
+        }))
     })?
 }
 
@@ -288,9 +293,9 @@ pub(crate) struct UnitCtx<'s> {
     pub(crate) lines: std::cell::OnceCell<LineMap>,
     /// The `[[SourceText]]` ranges that are not the function node (G12).
     pub(crate) source_texts: SourceTexts,
-    /// The register optimizer is on (`regopt.rs`; always, except in the tests that compare
-    /// with the plain output).
-    pub(crate) regopt: bool,
+    /// The register optimizer mode (`regopt.rs`; on, except in the tests that compare with the
+    /// plain output).
+    pub(crate) regopt: regopt::Mode,
 }
 
 impl UnitCtx<'_> {
@@ -351,7 +356,7 @@ pub(crate) fn generate(
     sa: &ScopeAnalysis,
     options: CompileOptions,
 ) -> Result<VerifiedUnit, CodegenError> {
-    generate_with(fe, sa, options, true)
+    generate_with(fe, sa, options, regopt::DEFAULT)
 }
 
 /// [`generate`], with the register optimizer on or off.
@@ -359,7 +364,7 @@ pub(crate) fn generate_with(
     fe: &FrontEnd<'_>,
     sa: &ScopeAnalysis,
     options: CompileOptions,
-    regopt: bool,
+    regopt: regopt::Mode,
 ) -> Result<VerifiedUnit, CodegenError> {
     let module = fe.opts.goal() == Goal::Module;
     let code = if module {
@@ -921,13 +926,37 @@ fn unit_scope_id(s: ScopeId, shifted: bool) -> ep9_bytecode::ScopeId {
 mod regopt;
 
 /// A fresh function builder with the named locals reserved, through the register optimizer
-/// when `optimize` is on (`regopt.rs`).
+/// unless `mode` is [`regopt::Mode::Plain`] (`regopt.rs`).
 pub(crate) fn new_builder(
     info: &FunctionInfo,
     meta: FunctionMeta,
-    optimize: bool,
+    mode: regopt::Mode,
 ) -> regopt::Emitter {
-    regopt::Emitter::new(meta, info.register_count, optimize)
+    regopt::Emitter::new(meta, info.register_count, mode)
+}
+
+/// Test only (LDAR-ELIDE): compile `source` once per mode from one scope analysis, and give the
+/// named-local count of each function.
+#[cfg(test)]
+pub(crate) fn compile_modes(
+    source: &str,
+    opts: SourceOpts,
+    modes: &[regopt::Mode],
+) -> Result<(Vec<VerifiedUnit>, Vec<u32>), CodegenError> {
+    let modes = modes.to_vec();
+    with_front_end(source, opts, move |fe| {
+        let analysis = crate::scope::analyze(fe)?;
+        let named: Vec<u32> = analysis
+            .functions()
+            .iter()
+            .map(|f| f.register_count)
+            .collect();
+        let units: Result<Vec<_>, _> = modes
+            .iter()
+            .map(|&m| generate_with(fe, &analysis, CompileOptions::default(), m))
+            .collect();
+        Ok(units.map(|u| (u, named)))
+    })?
 }
 
 // ---------------------------------------------------------------------------------------------
