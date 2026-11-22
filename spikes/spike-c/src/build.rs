@@ -137,6 +137,7 @@ pub fn supported(op: Opcode) -> bool {
             | LdaConstant
             | LdaGlobal
             | GetNamedProperty
+            | GetNamedPropertyStar
             | GetKeyedProperty
             | SetKeyedProperty
             | Add
@@ -162,6 +163,7 @@ pub fn supported(op: Opcode) -> bool {
             | TestEqualStrict
             | LdaCurrentContextSlot
             | LdaImmutableCurrentContextSlot
+            | LdaCurrentContextSlotStar
             | CallUndefinedReceiver0
             | CallUndefinedReceiver1
             | CallUndefinedReceiver2
@@ -911,11 +913,16 @@ impl Builder<'_> {
                 let n = self.konst(bits);
                 self.set_acc(n);
             }
-            GetNamedProperty => {
+            GetNamedProperty | GetNamedPropertyStar => {
                 let o = self.reg(insn.register(0))?;
                 let slot = insn.unsigned(2);
                 let v = self.named_load(o, slot)?;
                 self.set_acc(v);
+                if x.opcode == GetNamedPropertyStar {
+                    // STAR-DST probe: the `Star dst` of the pair (operand 3), after the load.
+                    let i = self.cfg.index(insn.register(3));
+                    self.env[i] = Some(v);
+                }
             }
             GetKeyedProperty => {
                 let st = self.state();
@@ -1001,7 +1008,7 @@ impl Builder<'_> {
                 let n = self.compare(Cond::Eq, l, r, insn.unsigned(1));
                 self.set_acc(n);
             }
-            LdaCurrentContextSlot | LdaImmutableCurrentContextSlot => {
+            LdaCurrentContextSlot | LdaImmutableCurrentContextSlot | LdaCurrentContextSlotStar => {
                 // A guard as an element load's (Codex M5-P2 r1 spikec6 1): the emitted code
                 // checks the frame's context and the slot index (`emit_a64` `load_context`),
                 // and exits on the state before the instruction, which T0 runs again.
@@ -1014,6 +1021,11 @@ impl Builder<'_> {
                 );
                 self.guard(n, GuardBasis::Unbacked, st);
                 self.set_acc(n);
+                if x.opcode == LdaCurrentContextSlotStar {
+                    // STAR-DST probe: the `Star dst` of the pair (operand 1), after the guard.
+                    let i = self.cfg.index(insn.register(1));
+                    self.env[i] = Some(n);
+                }
             }
             CallUndefinedReceiver0 | CallUndefinedReceiver1 | CallUndefinedReceiver2 => {
                 let argc = match x.opcode {
