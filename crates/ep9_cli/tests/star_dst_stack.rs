@@ -1,18 +1,19 @@
-//! STAR-DST probe (rule O13, DL M11-P3-PICK; T4): the `ep9` binary with the switch
-//! `EP9_STAR_DST` not set, `0`, `1` and `2` prints the same stack traces as the base binary, and
-//! the same facts.
+//! STAR-DST (rule O13, DL M11-P3-PICK, M11-P3-L16-VERDICT; T4): the fused set is the only
+//! form of the front end since the M11-P3 merge, and the `ep9` binary has no arm to pick. The
+//! old probe switch `EP9_STAR_DST` not set, `0`, `1` and `2` gives the same output in each run
+//! (the binary reads no switch): the stack traces of the base binary, the fused golden
+//! bytecode, and the same facts.
 //!
 //! ```text
-//! ep9 t3.js            (switch not set; 0, 1, 2)  ->  stdout = M10P5 (15 lines)
-//! ep9 extra.js         (switch not set; 0, 1, 2)  ->  stdout = the base binary output (6 lines)
-//! ep9 --print-bytecode (switch not set; 0)        ->  the call-forms golden
-//! ep9 --print-bytecode (switch 1, 2)              ->  a text with GetNamedPropertyStar
-//! ep9 --facts-out      (switch not set; 0, 1, 2)  ->  equal facts (unit hash zeroed)
+//! ep9 t3.js            (not set; 0, 1, 2)  ->  stdout = M10P5 (15 lines)
+//! ep9 extra.js         (not set; 0, 1, 2)  ->  stdout = the base binary output (6 lines)
+//! ep9 --print-bytecode (not set; 0, 1, 2)  ->  the call-forms golden (fused)
+//! ep9 --facts-out      (not set; 0, 1, 2)  ->  equal facts (unit hash zeroed)
 //! ```
 //!
 //! A fused instruction has the position entry of its load and stores `dst` on the success exit
 //! only, so a throw in it reports the line and column of the pair (INV-S4) and no stack string
-//! changes between arms.
+//! changes against the base binary.
 
 use std::process::Command;
 
@@ -135,7 +136,8 @@ d5 context load 2 hops | TypeError: Cannot read properties of undefined (reading
 d6 chain | TypeError: Cannot read properties of null (reading 'c') |     at d6 (extra.js:28:3) |     at extra.js:35:24
 "#;
 
-/// The `ep9` command with the switch not set (`None`) or set to a value.
+/// The `ep9` command with the old probe switch `EP9_STAR_DST` not set (`None`) or set to a
+/// value (the binary must not read it).
 fn ep9(switch: Option<&str>) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ep9"));
     match switch {
@@ -147,7 +149,7 @@ fn ep9(switch: Option<&str>) -> Command {
 
 const ARMS: [Option<&str>; 4] = [None, Some("0"), Some("1"), Some("2")];
 
-/// `ep9 <file>` in a new test dir, with each arm: the stdout must be `want`.
+/// `ep9 <file>` in a new test dir, in each run: the stdout must be `want`.
 fn same_stdout(dir: &str, file: &str, src: &str, want: &str) {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(dir);
     std::fs::create_dir_all(&dir).expect("make the test dir");
@@ -171,33 +173,35 @@ fn same_stdout(dir: &str, file: &str, src: &str, want: &str) {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// T4: `ep9 t3.js` prints the 15 m10-p5 strings in each arm.
+/// T4: `ep9 t3.js` prints the 15 m10-p5 strings in each run.
 #[test]
 fn stack_traces_keep_the_m10p5_strings() {
     same_stdout("star-dst-t4", "t3.js", T3, M10P5);
 }
 
-/// T4: `ep9 extra.js` prints the base binary output in each arm (the throw line and column of
+/// T4: `ep9 extra.js` prints the base binary output in each run (the throw line and column of
 /// a fused named load and of a fused context load).
 #[test]
 fn stack_traces_of_fused_loads_are_the_base_strings() {
     same_stdout("star-dst-t4-extra", "extra.js", EXTRA, EXTRA_BASE);
 }
 
-/// The committed golden of `call-forms` (6 `GetNamedProperty` + `Star` pairs in arm 0).
+/// The committed golden of `call-forms` (6 `GetNamedProperty` + `Star` pairs in arm 0; the
+/// default fuses them).
 const CALL_FORMS: &str = include_str!("../../ep9_frontend/src/bytecodegen/golden/call-forms.txt");
 
-/// `ep9 --print-bytecode` prints the committed golden text with the switch not set and `0`, and
-/// a text with the fused named load with `1` and `2`. The script then throws at `f()` (`f` is
-/// undefined): exit 1 and the same error text in each arm.
+/// `ep9 --print-bytecode` prints the committed golden text (with `GetNamedPropertyStar`) in each
+/// run. The script then throws at `f()` (`f` is undefined): exit 1 and the same error text in
+/// each run.
 #[test]
-fn the_binary_prints_the_golden_bytecode_with_the_switch_off() {
+fn the_binary_prints_the_golden_bytecode() {
     let mut parts = CALL_FORMS.splitn(3, '\n');
     let src = parts
         .nth(1)
         .and_then(|l| l.strip_prefix("# | "))
         .expect("the golden source line");
     let want = parts.next().expect("the golden body");
+    assert!(want.contains("GetNamedPropertyStar"), "{want}");
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("star-dst-arm0");
     std::fs::create_dir_all(&dir).expect("make the test dir");
     std::fs::write(dir.join("calls.js"), src).expect("write calls.js");
@@ -211,14 +215,7 @@ fn the_binary_prints_the_golden_bytecode_with_the_switch_off() {
         assert_eq!(out.status.code(), Some(1), "switch {arm:?}");
         stderr.push(String::from_utf8_lossy(&out.stderr).into_owned());
         let got = String::from_utf8_lossy(&out.stdout);
-        if matches!(arm, None | Some("0")) {
-            assert_eq!(got.strip_suffix('\n'), Some(want), "switch {arm:?}");
-        } else {
-            assert!(
-                got.contains("GetNamedPropertyStar"),
-                "switch {arm:?}: {got}"
-            );
-        }
+        assert_eq!(got.strip_suffix('\n'), Some(want), "switch {arm:?}");
     }
     assert!(
         stderr[0].contains("calls.js:1:17: Uncaught TypeError"),
@@ -262,7 +259,8 @@ fn facts_without_unit_hash(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// T7: `ep9 --facts-out slack.js` prints 40600 and writes the same facts (unit hash zeroed) in
-/// each arm: a fused named load is the same LoadNamed site as its pair.
+/// each run (the binary reads no switch). That a fused named load is the same LoadNamed site
+/// as its pair is carried by T1 and by the probe runs (DL M11-P3-L16-PREREG-FILL).
 #[test]
 fn slack_facts_are_the_same_in_each_arm() {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("star-dst-t7");

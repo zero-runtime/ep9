@@ -1467,7 +1467,8 @@ fn arm_listing(unit: &VerifiedUnit, name: &str) -> String {
 }
 
 /// S1b: the expected texts of the design (section 3.2), positions too. Arm 2 gives the same
-/// text for these functions (they have no other dead binding load).
+/// text for these functions (they have no other dead binding load), except that arm 2 (the
+/// default) has rule O13 (STAR-DST): it fuses the `GetNamedProperty` + `Star r0` pair of c8.
 #[test]
 fn ldar_elide_expected_texts() {
     let strict = SourceOpts::script(Strictness::Strict);
@@ -1508,9 +1509,17 @@ fn ldar_elide_expected_texts() {
              | 0 S 756 (34:19)\n| 2 E 756 (34:19)\n| 6 S 773 (34:36)",
         ),
     ];
+    // Arm 2, c8: the fused pair at offset 0; the offsets after it are 1 less.
+    let c8_fused = "0 S> GetNamedPropertyStar a0, k0, s0, r0\n5 E> CallProperty0 r0, a0, s1\n\
+                    9 LdaUndefined\n10 Return\n| 0 S 463 (28:5)\n| 5 E 463 (28:5)";
     let mut failures = Vec::new();
     for (arm, unit) in ["arm 1", "arm 2"].iter().zip(&units) {
         for &(name, want) in cases {
+            let want = if (*arm, name) == ("arm 2", "c8") {
+                c8_fused
+            } else {
+                want
+            };
             let got = arm_listing(unit, name);
             if got != want {
                 failures.push(format!("{arm} {name}:\n{got}\n-- want --\n{want}"));
@@ -2626,7 +2635,8 @@ pub(crate) fn star_dst_expand(f: &ep9_bytecode::Function) -> (ep9_bytecode::Func
 
 /// `u` with every function expanded ([`star_dst_expand`]); `u` itself with no fused
 /// instruction. The H24 R4 guard and LDAR-ELIDE T1 read the optimized unit through it, so they
-/// hold under a forced `EP9_STAR_DST` too (a fused instruction equals its pair).
+/// hold with the fused default (rule O13 in [`super::regopt::DEFAULT`]; a fused instruction
+/// equals its pair).
 pub(crate) fn star_dst_expand_unit(u: &ep9_bytecode::CompiledUnit) -> ep9_bytecode::CompiledUnit {
     let mut x = u.clone();
     for f in &mut x.functions {
@@ -2671,32 +2681,20 @@ pub(crate) fn star_dst_differences(src: &str, opts: SourceOpts, arm: Arm) -> Sta
     }
 }
 
-/// T1 of STAR-DST in arms 1 and 2 from one scope analysis and one arm-0 compile (the corpus
-/// job and [`star_dst_on_files`]).
+/// T1 of STAR-DST: `Mode::Fuse(0)` (no fuse) against [`super::regopt::DEFAULT`] (the merged
+/// form: rule O13 for family 2), both from one scope analysis (the corpus job and
+/// [`star_dst_on_files`]). Arm 1 (family 1) is not shipped, so only the default is compared
+/// here; one entry.
 pub(crate) fn star_dst_both(src: &str, opts: SourceOpts) -> Vec<(Arm, StarReport)> {
-    let arms = [Arm::Fuse(0), Arm::Fuse(1), Arm::Fuse(2)];
-    match super::compile_modes(src, opts, &arms) {
-        Ok((units, _)) => [1, 2]
-            .iter()
-            .map(|&k| {
-                let rep = star_dst_compare(units[0].unit(), units[k].unit(), k as u8);
-                (arms[k], rep)
-            })
-            .collect(),
-        Err(e) => [Arm::Fuse(1), Arm::Fuse(2)]
-            .into_iter()
-            .map(|arm| {
-                let differences = vec![format!("compile: {e}")];
-                (
-                    arm,
-                    StarReport {
-                        differences,
-                        ..StarReport::default()
-                    },
-                )
-            })
-            .collect(),
-    }
+    let arms = [Arm::Fuse(0), super::regopt::DEFAULT];
+    let rep = match super::compile_modes(src, opts, &arms) {
+        Ok((units, _)) => star_dst_compare(units[0].unit(), units[1].unit(), 2),
+        Err(e) => StarReport {
+            differences: vec![format!("compile: {e}")],
+            ..StarReport::default()
+        },
+    };
+    vec![(arms[1], rep)]
 }
 
 /// The checks of T1: arm 0 (`u0`) against an arm with the family `family` (`un`). Every fused
@@ -2935,8 +2933,8 @@ fn star_wide_case() -> String {
 }
 
 /// T1 of STAR-DST on every golden case, the LDAR-ELIDE cases, the STAR-DST cases and a wide
-/// frame, in arms 1 and 2: no difference. The cases fuse each of the 3 opcodes, and keep pairs
-/// for the reasons "position" (B3) and "scale" (B4).
+/// frame, in the default (the merged form): no difference. The cases fuse each of the 3
+/// opcodes, and keep pairs for the reasons "position" (B3) and "scale" (B4).
 #[test]
 fn star_dst_differential() {
     let mut failures = Vec::new();
@@ -2953,13 +2951,11 @@ fn star_dst_differential() {
             for d in r.differences {
                 failures.push(format!("{name} {arm:?}: {d}"));
             }
-            if arm == Arm::Fuse(2) {
-                for (k, n) in r.fused {
-                    *fused.entry(k).or_default() += n;
-                }
-                for (k, n) in r.missed {
-                    *missed.entry(k).or_default() += n;
-                }
+            for (k, n) in r.fused {
+                *fused.entry(k).or_default() += n;
+            }
+            for (k, n) in r.missed {
+                *missed.entry(k).or_default() += n;
             }
         }
     }
@@ -3225,7 +3221,7 @@ fn star_dst_keeps_the_pair_for_a_position_and_an_owed_load() {
 }
 
 /// T1 of STAR-DST on the script files named in `EP9_STAR_DST_FILES` (`:`-separated, sloppy
-/// scripts), in arms 1 and 2; prints the fused sites and the pairs kept by reason. On demand:
+/// scripts), in the default; prints the fused sites and the pairs kept by reason. On demand:
 ///
 /// ```text
 /// EP9_STAR_DST_FILES=a.js:b.js cargo test -p ep9_frontend --release --lib star_dst_on_files -- --ignored --nocapture

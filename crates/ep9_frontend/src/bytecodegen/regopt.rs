@@ -28,13 +28,14 @@
 //! | O10 | After a terminator the state is "flushed" with no code: only a label (O6) reaches the next instruction | the state at that label is the flushed state of its jumps |
 //! | O11 | A new register whose set holds no value is materialized (its value is dead). A read of a register whose set has no materialized member is an internal error | a BytecodeGen bug (a read after release) must not compile |
 //! | O12 | The instruction that takes a carried statement position `o` (O9) gets a statement entry. Its source offset is its own expression position if one is pending (only an instruction of BytecodeGen and an emitted transfer take it), else the throw default if it can throw, else `o` | V8 `BytecodeArrayBuilder::AttachOrEmitDeferredSourceInfo`; the source offset that an instruction gives for a throw does not change (H24 R5) |
-//! | O13 | At an emitted `Star` from the accumulator, the builder fuses the last instruction (a producer of the family) and the `Star` into one fused opcode if B1-B4 hold (`FunctionBuilder::fuse_star`) | one dispatch per pair (STAR-DST, DL M11-P3-PICK) |
+//! | O13 | At an emitted `Star` from the accumulator, the builder fuses the last instruction (a producer of the family: `GetNamedProperty`, `LdaCurrentContextSlot`, `LdaContextSlot`) and the `Star` into one fused opcode if B1-B4 hold (`FunctionBuilder::fuse_star`). This is the one form in every build, table and preset | one dispatch per pair (STAR-DST, DL M11-P3-PICK; merged as the set of 3 opcodes, M11-P3, DL M11-P3-L16-VERDICT) |
 //!
 //! With the optimizer off ([`Mode::Plain`]), the replay emits every event as recorded, so the
 //! output is the same as the output of a plain [`FunctionBuilder`]. The plain mode is the
 //! reference of the H24 R4 guard (guard v2: plain against the merged mode). The front end
-//! compiles with [`DEFAULT`], the merged LDAR-ELIDE mode (arm 2, M11-P0); on the STAR-DST probe
-//! branch it reads one environment value, the switch of rule O13 ([`star_dst`]).
+//! compiles with [`DEFAULT`]: the merged LDAR-ELIDE mode (arm 2, M11-P0) with rule O13 for the
+//! whole STAR-DST set (M11-P3, DL M11-P3-L16-VERDICT). It is the one form in every build, table
+//! and preset; the front end reads no environment value.
 //!
 //! Test-only modes (T1, T3): `Mode::Arm0` uses the rules before M11-P0 (O2: every load from a
 //! binding register is emitted; O9 and O12: no carry), which give the m10-p5 bytecode, the
@@ -140,26 +141,15 @@ pub(crate) enum Mode {
     /// used (family 1 fuses a context load).
     #[cfg(test)]
     Mutant(u8),
-    /// Test only (STAR-DST T1): arm 2 with rule O13 for the family `0..=2` (0: no fuse), read
-    /// from no environment value.
+    /// Test only (STAR-DST T1): arm 2 with rule O13 for the family `0..=2` (0: no fuse: the
+    /// reference of T1).
     #[cfg(test)]
     Fuse(u8),
 }
 
-/// The STAR-DST probe switch `EP9_STAR_DST` (probe branch only; the merge removes it), read
-/// once per process: the family of rule O13 in [`Mode::Arm2`]. Not set, `0` or another value:
-/// 0 (no fuse: the base bytecode); `1`: `GetNamedProperty` only; `2`: also
-/// `LdaCurrentContextSlot` and `LdaContextSlot`.
-pub(crate) fn star_dst() -> u8 {
-    static FUSE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *FUSE.get_or_init(|| match std::env::var("EP9_STAR_DST").as_deref() {
-        Ok("1") => 1,
-        Ok("2") => 2,
-        _ => 0,
-    })
-}
-
-/// The merged LDAR-ELIDE mode (M11-P0, DL M11-P0-LDAR-VERDICT): the mode of the front end.
+/// The mode of the front end: the merged LDAR-ELIDE mode (arm 2, M11-P0, DL
+/// M11-P0-LDAR-VERDICT) with rule O13 for family 2, the STAR-DST set (`GetNamedProperty`,
+/// `LdaCurrentContextSlot` and `LdaContextSlot`; M11-P3, DL M11-P3-L16-VERDICT).
 pub(crate) const DEFAULT: Mode = Mode::Arm2;
 
 /// The function builder of BytecodeGen: the [`FunctionBuilder`] API, with the register
@@ -407,9 +397,9 @@ impl Emitter {
                 Mode::Fuse(_) => 2,
                 _ => 0,
             };
-            // Rule O13 (STAR-DST probe): the family of the fused `Star`.
+            // Rule O13 (STAR-DST, M11-P3): the family of the fused `Star`.
             r.fuse = match mode {
-                Mode::Arm2 => star_dst(),
+                Mode::Arm2 => 2,
                 #[cfg(test)]
                 Mode::Fuse(f) => f,
                 #[cfg(test)]
@@ -669,7 +659,7 @@ struct Replay<'b> {
     /// Test only (T3): the broken rule of [`Mode::Mutant`], or 0.
     #[cfg(test)]
     mutant: u8,
-    /// Rule O13 (STAR-DST probe): the family of [`FunctionBuilder::fuse_star`], or 0.
+    /// Rule O13 (STAR-DST, M11-P3): the family of [`FunctionBuilder::fuse_star`], or 0.
     fuse: u8,
     /// Test only (STAR-DST T2): each bound label and its instruction index, and the start and
     /// end labels of the handler ranges.

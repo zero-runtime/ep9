@@ -294,10 +294,10 @@ fn run(files: &[(PathBuf, bool, bool)]) -> Report {
                                         Some(k),
                                     ));
                                 }
-                                // STAR-DST T1 (rule O13, the probe; release run only): fuse 0
-                                // against fuse 1 and fuse 2, from one arm-0 compile. A
-                                // difference fails the run; the fused sites and the kept
-                                // pairs are counted.
+                                // STAR-DST T1 (rule O13, merged in M11-P3; release run only):
+                                // fuse 0 against the default (the merged form; arm 1 is not
+                                // shipped), from one scope analysis. A difference fails the
+                                // run; the fused sites and the kept pairs are counted.
                                 for (arm, t1) in super::tests::star_dst_both(&src, opts) {
                                     if !t1.differences.is_empty() {
                                         t1_lines.push(format!(
