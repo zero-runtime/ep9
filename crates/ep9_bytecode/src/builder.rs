@@ -309,6 +309,7 @@ pub struct FunctionBuilder {
     max_registers: u32,
     mapped_parameters: Option<MappedParameters>,
     error: Option<BuildError>,
+    last_bind: Option<u32>, // rule O13 B2: the instruction index of the last `bind`
 }
 
 impl FunctionBuilder {
@@ -329,6 +330,7 @@ impl FunctionBuilder {
             max_registers: 0,
             mapped_parameters: None,
             error: None,
+            last_bind: None,
         }
     }
 
@@ -491,6 +493,7 @@ impl FunctionBuilder {
     /// Binds `label` to the next instruction emitted (or to the end of the code).
     pub fn bind(&mut self, label: Label) {
         let at = self.insns.len() as u32;
+        self.last_bind = Some(at);
         match &mut self.labels[label.0 as usize] {
             slot @ None => *slot = Some(at),
             Some(_) => self.fail(BuildError::LabelBoundTwice(label)),
@@ -1126,6 +1129,74 @@ impl StringTable {
         self.index.insert(s.clone(), id);
         self.list.push(s);
         id
+    }
+}
+
+// ---- Rule O13: the fused `Star` (the STAR-DST probe, DL M11-P3-PICK) ----
+
+impl FunctionBuilder {
+    /// Rule O13 of the register optimizer: emits `Star dst` by fusing it into the last
+    /// instruction, if the last instruction is a load of `family` (1: `GetNamedProperty`;
+    /// 2: also `LdaCurrentContextSlot` and `LdaContextSlot`) and these conditions hold:
+    ///
+    /// - B1: an instruction was emitted, and its opcode is in `family`;
+    /// - B2: no [`bind`](Self::bind) since that instruction (no label is on the `Star`, used or
+    ///   not);
+    /// - B3: no position is pending (the `Star` would take a position entry);
+    /// - B4: every scalable operand of the load, and `dst`, fits [`OperandScale::Single`].
+    ///
+    /// Then the opcode of the last instruction becomes its `*Star` twin with `dst` appended as
+    /// the last operand, and the call returns true. The instruction index, the position entry
+    /// of the load and the instruction count do not change. Else nothing changes and the call
+    /// returns false: emit the `Star` then.
+    pub fn fuse_star(&mut self, dst: Register, family: u8) -> bool {
+        self.fuse_star_relaxed(dst, family, 0)
+    }
+
+    /// Test hook (the T2 mutants of the front end): [`fuse_star`](Self::fuse_star) with the
+    /// conditions of `skip` not tested (bit 0: B2, bit 1: B3, bit 2: B4). With a set bit the
+    /// output can be wrong; production code calls `fuse_star`.
+    #[doc(hidden)]
+    pub fn fuse_star_relaxed(&mut self, dst: Register, family: u8, skip: u8) -> bool {
+        let Some(last) = self.insns.last() else {
+            return false;
+        };
+        let twin = match (last.opcode, family) {
+            (Opcode::GetNamedProperty, 1 | 2) => Opcode::GetNamedPropertyStar,
+            (Opcode::LdaCurrentContextSlot, 2) => Opcode::LdaCurrentContextSlotStar,
+            (Opcode::LdaContextSlot, 2) => Opcode::LdaContextSlotStar,
+            _ => return false,
+        };
+        let n = self.insns.len() as u32;
+        if skip & 1 == 0 && self.last_bind == Some(n) {
+            return false;
+        }
+        if skip & 2 == 0 && self.pending_position.is_some() {
+            return false;
+        }
+        let info = last.opcode.info();
+        let single = |kind: OperandKind, v: i64| {
+            !kind.is_scalable()
+                || if kind.is_signed() {
+                    OperandScale::for_signed(v as i32) == OperandScale::Single
+                } else {
+                    OperandScale::for_unsigned(v as u32) == OperandScale::Single
+                }
+        };
+        let fits = info
+            .operands
+            .iter()
+            .zip(&last.operands)
+            .all(|(spec, &p)| value_of(p).is_some_and(|v| single(spec.kind, v)))
+            && single(OperandKind::RegOut, i64::from(dst.to_operand()));
+        if skip & 4 == 0 && !fits {
+            return false;
+        }
+        let k = info.operands.len();
+        let insn = self.insns.last_mut().expect("tested above");
+        insn.opcode = twin;
+        insn.operands[k] = Pending::Value(i64::from(dst.to_operand()));
+        true
     }
 }
 
