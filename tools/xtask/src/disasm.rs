@@ -150,7 +150,7 @@ fn parse_opts(args: &[String]) -> Result<Opts, String> {
         ));
     }
     if o.targets.is_empty() && o.binaries.is_empty() {
-        o.targets.push(host_triple()?);
+        o.targets.push(host_triple_of(o.toolchain.as_deref())?);
     }
     if o.frames.is_some() && o.targets.len() != 1 {
         return Err(format!(
@@ -185,17 +185,40 @@ fn run_quiet(cmd: &mut Command) -> Result<String, String> {
     String::from_utf8(out.stdout).map_err(|e| format!("{cmd:?}: {e}"))
 }
 
+/// `rustup run <toolchain> <tool>`: the form of `--toolchain` ([`build`] runs cargo so).
+fn rustup_run(toolchain: &str, tool: &str) -> Command {
+    let mut c = Command::new("rustup");
+    c.args(["run", toolchain, tool]);
+    c
+}
+
+/// The `rustc` of the toolchain that [`build`] uses: with `--toolchain` the `rustc` of that
+/// toolchain ([`rustup_run`]), else PATH `rustc` (Codex r3 F1: the target list and the host
+/// come from the same compiler selection as the build).
+fn rustc_cmd(toolchain: Option<&str>) -> Command {
+    match toolchain {
+        Some(tc) => rustup_run(tc, "rustc"),
+        None => Command::new("rustc"),
+    }
+}
+
 pub(crate) fn host_triple() -> Result<String, String> {
-    let v = run_capture(Command::new("rustc").arg("-vV"))?;
+    host_triple_of(None)
+}
+
+/// The host triple (`rustc -vV`, line `host: `) of the `rustc` of [`rustc_cmd`].
+fn host_triple_of(toolchain: Option<&str>) -> Result<String, String> {
+    let v = run_capture(rustc_cmd(toolchain).arg("-vV"))?;
     v.lines()
         .find_map(|l| l.strip_prefix("host: "))
         .map(str::to_string)
         .ok_or_else(|| "rustc -vV: no host line".into())
 }
 
-/// `rustc --print target-list`: the canonical target triples, one per line.
-fn target_list() -> Result<String, String> {
-    run_capture(Command::new("rustc").args(["--print", "target-list"]))
+/// `rustc --print target-list` of the `rustc` of [`rustc_cmd`]: the canonical target triples,
+/// one per line.
+fn target_list(toolchain: Option<&str>) -> Result<String, String> {
+    run_capture(rustc_cmd(toolchain).args(["--print", "target-list"]))
 }
 
 /// The one target of the frame check (`--frames`): `target` if it is byte-equal to a line of
@@ -266,7 +289,7 @@ pub fn main(args: &[String]) -> Result<bool, String> {
         ar: find_tool("llvm-ar", &None)?,
     };
     if let Some(golden) = &o.frames {
-        let t = &frames_target(&o.targets[0], &target_list()?)?;
+        let t = &frames_target(&o.targets[0], &target_list(o.toolchain.as_deref())?)?;
         let (art, _) = build(&o, t)?;
         let ok = check_frames(&tools, &art, t, golden, o.bless)?;
         println!();
@@ -340,11 +363,7 @@ fn build(o: &Opts, target: &str) -> Result<(PathBuf, PathBuf), String> {
     fs::create_dir_all(&tdir).map_err(|e| e.to_string())?;
     let ll = tdir.join(format!("{}.ll", ir_tag(o, target)));
     let mut cmd = match &o.toolchain {
-        Some(tc) => {
-            let mut c = Command::new("rustup");
-            c.args(["run", tc, "cargo"]);
-            c
-        }
+        Some(tc) => rustup_run(tc, "cargo"),
         None => Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into())),
     };
     cmd.arg("rustc").arg("--manifest-path").arg(&o.manifest);
@@ -3816,11 +3835,32 @@ Section
             );
         }
         // This toolchain lists every target the CI and the docs pass, and the host (the default).
-        let real = target_list().unwrap();
+        let real = target_list(None).unwrap();
         for t in ALL_TARGETS {
             assert_eq!(frames_target(t, &real).unwrap(), *t);
         }
         frames_target(&host_triple().unwrap(), &real).unwrap();
+    }
+
+    /// Codex r3 F1: the target list and the host come from the `rustc` of the toolchain that the
+    /// build uses. With `--toolchain` that is `rustup run <toolchain> rustc` (the form of the
+    /// build's `rustup run <toolchain> cargo`), else PATH `rustc`.
+    #[test]
+    fn rustc_cmd_follows_toolchain() {
+        let argv = |c: &Command| {
+            let mut v = vec![c.get_program().to_string_lossy().into_owned()];
+            v.extend(c.get_args().map(|a| a.to_string_lossy().into_owned()));
+            v
+        };
+        assert_eq!(argv(&rustc_cmd(None)), ["rustc"]);
+        assert_eq!(
+            argv(&rustc_cmd(Some("nightly-2026-10-04"))),
+            ["rustup", "run", "nightly-2026-10-04", "rustc"]
+        );
+        assert_eq!(
+            argv(&rustup_run("nightly-2026-10-04", "cargo")),
+            ["rustup", "run", "nightly-2026-10-04", "cargo"]
+        );
     }
 
     /// The call site of the column (Codex r2 note: the tests above hold with the column forced
