@@ -147,14 +147,16 @@ pub(crate) enum Mode {
 }
 
 /// The STAR-DST probe switch `EP9_STAR_DST` (probe branch only; the merge removes it), read
-/// once per process: the family of rule O13 in [`Mode::Arm2`]. Not set, `0` or another value:
-/// 0 (no fuse: the base bytecode); `1`: `GetNamedProperty` only; `2`: also
-/// `LdaCurrentContextSlot` and `LdaContextSlot`.
+/// once per process: the family of rule O13 in [`Mode::Arm2`]. Not set: 2 (bench-only: never
+/// merged); `0` or another value: 0 (no fuse: the base bytecode); `1`: `GetNamedProperty`
+/// only; `2`: also `LdaCurrentContextSlot` and `LdaContextSlot`.
 pub(crate) fn star_dst() -> u8 {
     static FUSE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *FUSE.get_or_init(|| match std::env::var("EP9_STAR_DST").as_deref() {
-        Ok("1") => 1,
-        Ok("2") => 2,
+    *FUSE.get_or_init(|| match std::env::var("EP9_STAR_DST") {
+        // bench-only: never merged (the Ir bench runs the binary with no environment).
+        Err(std::env::VarError::NotPresent) => 2,
+        Ok(v) if v == "1" => 1,
+        Ok(v) if v == "2" => 2,
         _ => 0,
     })
 }
