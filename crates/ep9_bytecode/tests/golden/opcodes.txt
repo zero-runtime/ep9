@@ -156,3 +156,6 @@
 0x9b ResumeGenerator resume_generator acc=Write flags=[Generator] (generator: Reg, registers: RegOutList, count: RegCount)
 0x9c Debugger debugger acc=Write flags=[Clobber] ()
 0x9d CallRuntimeForPair call_runtime_for_pair acc=None flags=[Throws,Call] (id: Runtime, args: RegList, argc: RegCount, out: RegOutPair)
+0x9e GetNamedPropertyStar get_named_property_star acc=Write flags=[Throws] (object: Reg, name: Const(String), slot: Slot(LoadNamed), dst: RegOut)
+0x9f LdaCurrentContextSlotStar lda_current_context_slot_star acc=Write flags=[] (slot_index: CtxSlot, dst: RegOut)
+0xa0 LdaContextSlotStar lda_context_slot_star acc=Write flags=[] (context: Reg, slot_index: CtxSlot, depth: CtxDepth, dst: RegOut)
