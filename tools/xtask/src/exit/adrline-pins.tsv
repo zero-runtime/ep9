@@ -531,3 +531,5 @@ pin	H32-guard-failure-policy.md	docs/adr/README.md:170	docs/adr/README.md	^Count
 pin	H33-aot-feedback-rule.md	docs/adr/README.md:170	docs/adr/README.md	^Counts on 	0
 pin	H34-relocation-kinds.md	docs/adr/README.md:170	docs/adr/README.md	^Counts on 	0
 pin	H36-fp-semantics.md	docs/adr/README.md:170	docs/adr/README.md	^Counts on 	0
+pin	H15-interpreter-dispatch.md	crates/ep9_vm/tests/golden/handler-frames.linux-x64.txt:15-16	crates/ep9_vm/tests/golden/handler-frames.linux-x64.txt	^align64 ics 	0	^align64 sib 	0
+pin	H15-interpreter-dispatch.md	crates/ep9_vm/tests/golden/handler-frames.windows-x64.txt:15-16	crates/ep9_vm/tests/golden/handler-frames.windows-x64.txt	^align64 ics 	0	^align64 sib 	0
