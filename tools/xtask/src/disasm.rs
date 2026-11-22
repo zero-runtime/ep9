@@ -193,6 +193,28 @@ pub(crate) fn host_triple() -> Result<String, String> {
         .ok_or_else(|| "rustc -vV: no host line".into())
 }
 
+/// `rustc --print target-list`: the canonical target triples, one per line.
+fn target_list() -> Result<String, String> {
+    run_capture(Command::new("rustc").args(["--print", "target-list"]))
+}
+
+/// The one target of the frame check (`--frames`): `target` if it is byte-equal to a line of
+/// `list` (`rustc --print target-list`), else a usage error. Cargo also takes other spellings
+/// (padding, `host-tuple`, a target JSON path) and builds the target it resolves, but the
+/// alignment column ([`align_column`]) and the golden `target` line use this string (Codex r2
+/// F1). So the build, the column and the golden all get the canonical triple. The other modes
+/// have no column and no golden, and keep cargo's spellings.
+fn frames_target(target: &str, list: &str) -> Result<String, String> {
+    if list.lines().any(|l| l == target) {
+        Ok(target.to_string())
+    } else {
+        Err(format!(
+            "--target must be a canonical target triple (rustc --print target-list) with \
+             --frames; got {target:?}\n{USAGE}"
+        ))
+    }
+}
+
 /// Finds an LLVM tool: the override, then rustup's llvm-tools component, then PATH.
 pub(crate) fn find_tool(name: &str, over: &Option<PathBuf>) -> Result<PathBuf, String> {
     if let Some(p) = over {
@@ -244,7 +266,7 @@ pub fn main(args: &[String]) -> Result<bool, String> {
         ar: find_tool("llvm-ar", &None)?,
     };
     if let Some(golden) = &o.frames {
-        let t = &o.targets[0];
+        let t = &frames_target(&o.targets[0], &target_list()?)?;
         let (art, _) = build(&o, t)?;
         let ok = check_frames(&tools, &art, t, golden, o.bless)?;
         println!();
@@ -2146,6 +2168,31 @@ fn align_column(arch: Arch, target: &str) -> bool {
     arch == Arch::X64 && ALIGN_TARGETS.contains(&target)
 }
 
+/// The alignment column of one frame check ([`check_frames`]): on an [`align_column`] target,
+/// the `align64` lines and the FAIL lines of `handlers` ([`align_rows`]), where `readobj(member)`
+/// gives the `llvm-readobj --sections --symbols` text of each archive member; on every other
+/// target none, and `readobj` is not called.
+fn frames_align(
+    arch: Arch,
+    target: &str,
+    handlers: &[Handler],
+    mut readobj: impl FnMut(&str) -> Result<String, String>,
+) -> Result<(Vec<AlignRow>, Vec<String>), String> {
+    if !align_column(arch, target) {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let mut places = BTreeMap::new();
+    let mut members: Vec<&str> = handlers.iter().map(|h| h.member.as_str()).collect();
+    members.sort();
+    members.dedup();
+    for m in members {
+        for (name, ps) in parse_places(&readobj(m)?)? {
+            places.insert((m.to_string(), name), ps);
+        }
+    }
+    align_rows(handlers, &places)
+}
+
 /// The frame check (`--frames`) of one built file: compares the frame rows (and on the
 /// [`align_column`] targets the `align64` lines, [`align_rows`]) with the golden file, or writes
 /// it (`--bless`). Prints every row, so a CI log holds the new golden. A hot handler of an
@@ -2168,28 +2215,20 @@ fn check_frames(
     let rows = frame_rows(l.arch, &l.handlers, &l.blocks)?;
     println!("== {target} ({}, {}): {}", l.abi, l.format, file.display());
     let column = align_column(l.arch, target);
-    let (align, misaligned) = if column {
-        let readobj = find_tool("llvm-readobj", &None)?;
-        let mut places = BTreeMap::new();
-        let mut members: Vec<&str> = l.handlers.iter().map(|h| h.member.as_str()).collect();
-        members.sort();
-        members.dedup();
-        for m in members {
-            let out = in_member(tools, file, m, |obj| {
-                run_quiet(
-                    Command::new(&readobj)
-                        .args(["--sections", "--symbols"])
-                        .arg(obj),
-                )
-            })?;
-            for (name, ps) in parse_places(&out)? {
-                places.insert((m.to_string(), name), ps);
+    let mut readobj = None;
+    let (align, misaligned) = frames_align(l.arch, target, &l.handlers, |m| {
+        let r = match readobj.clone() {
+            Some(r) => r,
+            None => {
+                let r = find_tool("llvm-readobj", &None)?;
+                readobj = Some(r.clone());
+                r
             }
-        }
-        align_rows(&l.handlers, &places)?
-    } else {
-        (Vec::new(), Vec::new())
-    };
+        };
+        in_member(tools, file, m, |obj| {
+            run_quiet(Command::new(&r).args(["--sections", "--symbols"]).arg(obj))
+        })
+    })?;
     if column {
         println!(
             "   alignment: hot handlers that start on a 64-byte line, per expansion (align64 <expansion> <aligned>/<total>):"
@@ -3553,8 +3592,17 @@ Section
     /// real check; one object, so the archive member is empty).
     fn fixture_align(name: &str) -> (Vec<AlignRow>, Vec<String>) {
         let ps = parse_places(&frames_fixture(name)).unwrap();
-        let handlers: Vec<Handler> = ps
-            .keys()
+        let handlers = fixture_handlers(&ps);
+        let places = ps
+            .into_iter()
+            .map(|(n, p)| ((String::new(), n), p))
+            .collect();
+        align_rows(&handlers, &places).unwrap()
+    }
+
+    /// The handlers of a `llvm-readobj` fixture: its symbols with a handler name, in member "".
+    fn fixture_handlers(ps: &BTreeMap<String, Vec<Place>>) -> Vec<Handler> {
+        ps.keys()
             .filter_map(|raw| {
                 let (name, exp, class) = parse_handler(raw)?;
                 Some(Handler {
@@ -3566,12 +3614,7 @@ Section
                     addr: 0,
                 })
             })
-            .collect();
-        let places = ps
-            .into_iter()
-            .map(|(n, p)| ((String::new(), n), p))
-            .collect();
-        align_rows(&handlers, &places).unwrap()
+            .collect()
     }
 
     fn arow(exp: &str, aligned: usize, total: usize) -> AlignRow {
@@ -3747,5 +3790,75 @@ Section
                 "{bad:?}"
             );
         }
+    }
+
+    /// The frame check takes a canonical triple only (Codex r2 F1): cargo trims padding and
+    /// resolves `host-tuple`, but the column and the golden would see the raw string.
+    #[test]
+    fn frames_target_is_canonical() {
+        let list = "aarch64-apple-darwin\nx86_64-pc-windows-msvc\nx86_64-unknown-linux-gnu\n";
+        for t in ALIGN_TARGETS {
+            assert_eq!(frames_target(t, list).unwrap(), t);
+        }
+        for bad in [
+            "x86_64-unknown-linux-gnu ",
+            " x86_64-unknown-linux-gnu",
+            "host-tuple",
+            "targets/x86_64-unknown-linux-gnu.json",
+            "x86_64-pc-linux-gnu",
+            "",
+        ] {
+            assert!(
+                frames_target(bad, list)
+                    .unwrap_err()
+                    .starts_with("--target must be a canonical target triple"),
+                "{bad:?}"
+            );
+        }
+        // This toolchain lists every target the CI and the docs pass, and the host (the default).
+        let real = target_list().unwrap();
+        for t in ALL_TARGETS {
+            assert_eq!(frames_target(t, &real).unwrap(), *t);
+        }
+        frames_target(&host_triple().unwrap(), &real).unwrap();
+    }
+
+    /// The call site of the column (Codex r2 note: the tests above hold with the column forced
+    /// off): `frames_align`, which `check_frames` calls, on the ELF fixtures.
+    #[test]
+    fn frames_align_call_site() {
+        let run = |target: &str, name: &str| {
+            let ps = parse_places(&frames_fixture(name)).unwrap();
+            frames_align(Arch::X64, target, &fixture_handlers(&ps), |m| {
+                assert_eq!(m, "");
+                Ok(frames_fixture(name))
+            })
+            .unwrap()
+        };
+        let rows = fixture_rows("base.txt");
+        let (align, fails) = run(FRAMES_TARGET, "align-x64-elf.txt");
+        assert_eq!(align, [arow("sib", 4, 4)]);
+        assert!(fails.is_empty());
+        assert!(frames_text(FRAMES_TARGET, &align, &rows).contains("\nalign64 sib 4/4\n"));
+        let golden = frames_text(FRAMES_TARGET, &align, &rows);
+        let (bad, fails) = run(FRAMES_TARGET, "align-x64-elf-misaligned.txt");
+        assert_eq!(bad, [arow("sib", 2, 4)]);
+        assert_eq!(fails.len(), 1);
+        assert_eq!(
+            frames_verdict(FRAMES_TARGET, &golden, &bad, &rows).unwrap(),
+            ["align64 changed: sib 4/4 -> 2/4"]
+        );
+        // x86-64 macOS is frame-only: no rows, and readobj is not called.
+        let ps = parse_places(&frames_fixture("align-x64-elf.txt")).unwrap();
+        let none = frames_align(
+            Arch::X64,
+            "x86_64-apple-darwin",
+            &fixture_handlers(&ps),
+            |_| panic!("readobj on a frame-only target"),
+        )
+        .unwrap();
+        assert_eq!(none, (Vec::new(), Vec::new()));
+        // A padded spelling skips the column: the reason why frames_target rejects it.
+        assert_eq!(run("x86_64-unknown-linux-gnu ", "align-x64-elf.txt").0, []);
     }
 }
