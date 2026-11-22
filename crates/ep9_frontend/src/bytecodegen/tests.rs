@@ -1728,6 +1728,30 @@ fn t1_dead_after(
     }
 }
 
+/// O9, O6: `code[n]` is an `Ldar` from a register that the arm does not owe (`deferred`), with
+/// no position entry, and the next instruction is a flush (a jump, a switch, `Debugger`, a
+/// generator instruction, or a label).
+fn t1_anchor(
+    f: &ep9_bytecode::Function,
+    code: &[T1Insn],
+    n: usize,
+    labels: &std::collections::BTreeSet<u32>,
+    deferred: impl Fn(ep9_bytecode::Register) -> bool,
+) -> bool {
+    let Some(x) = code.get(n) else { return false };
+    let Some(next) = code.get(n + 1) else {
+        return false;
+    };
+    let flags = next.op.info().flags;
+    x.ldar.is_some_and(deferred)
+        && !f.positions.iter().any(|p| p.bytecode_offset == x.off)
+        && (labels.contains(&next.off)
+            || next.op == Opcode::Debugger
+            || flags.contains(OpcodeFlags::JUMP)
+            || flags.contains(OpcodeFlags::SWITCH)
+            || flags.contains(OpcodeFlags::GENERATOR))
+}
+
 /// The result of [`ldar_elision_differences`].
 #[derive(Default)]
 pub(crate) struct T1Report {
@@ -1797,18 +1821,80 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
         let mut map: Vec<Option<usize>> = Vec::with_capacity(a0.len());
         let mut j = 0;
         let mut broken = false;
+        // A run of `Ldar` in arm 0 maps to the run of `Ldar` at `j` in the arm: the arm keeps a
+        // subsequence of the run (it drops a load that the next `Ldar` replaces; it keeps the
+        // O9 anchor and a load that a flush materializes: `p, this; debugger;` keeps both). Of
+        // the alignments, T1 takes one with the fewest drops that break a rule below, and then
+        // the one that keeps the earliest loads (an expression-position load stays in place).
+        let mut run: Vec<Option<usize>> = Vec::new();
+        let mut run_start = 0;
         for (i, x) in a0.iter().enumerate() {
-            // `S> Ldar a0; Ldar a1`: a load that the next `Ldar` replaces is dropped (an arm
-            // never keeps a load of such a run and drops a later one).
-            let first_of_two = x.ldar.is_some_and(load)
-                && a0.get(i + 1).is_some_and(|z| z.op == Opcode::Ldar)
-                && (!arm1 || stmt0(x.off))
-                && !expr0(x.off)
-                && t1_dead_after(f0, &a0, i, &labels0, false).is_ok();
-            if !first_of_two && an.get(j).is_some_and(|y| y.text == x.text) {
+            if x.op == Opcode::Ldar && (i == 0 || a0[i - 1].op != Opcode::Ldar) {
+                let e = a0[i..].iter().take_while(|z| z.op == Opcode::Ldar).count();
+                let f = an
+                    .get(j..)
+                    .map_or(0, |r| r.iter().take_while(|z| z.op == Opcode::Ldar).count());
+                // `bad[ii]`: dropping `a0[i + ii]` is a difference (the rules of the drop below).
+                let bad: Vec<usize> = (i..i + e)
+                    .map(|ii| {
+                        let ok = a0[ii].ldar.is_some_and(load)
+                            && (!arm1 || stmt0(a0[ii].off))
+                            && t1_dead_after(f0, &a0, ii, &labels0, false).is_ok();
+                        usize::from(!ok)
+                    })
+                    .collect();
+                // cost[ii][kk]: the fewest bad drops that align arm loads kk.. with arm-0 loads
+                // ii.. of the run (usize::MAX: none).
+                let mut cost = vec![vec![usize::MAX; f + 1]; e + 1];
+                cost[e][f] = 0;
+                for ii in (0..e).rev() {
+                    for kk in (0..=f).rev() {
+                        let drop = cost[ii + 1][kk].saturating_add(bad[ii]);
+                        let keep = if kk < f && an[j + kk].text == a0[i + ii].text {
+                            cost[ii + 1][kk + 1]
+                        } else {
+                            usize::MAX
+                        };
+                        cost[ii][kk] = drop.min(keep);
+                    }
+                }
+                run = vec![None; e];
+                run_start = i;
+                if cost[0][0] != usize::MAX {
+                    let mut kk = 0;
+                    for ii in 0..e {
+                        if kk < f
+                            && an[j + kk].text == a0[i + ii].text
+                            && cost[ii + 1][kk + 1] == cost[ii][kk]
+                        {
+                            run[ii] = Some(j + kk);
+                            kk += 1;
+                        }
+                    }
+                }
+            }
+            let in_run = x.op == Opcode::Ldar;
+            let matched = if in_run {
+                run[i - run_start] == Some(j)
+            } else {
+                an.get(j).is_some_and(|y| y.text == x.text)
+            };
+            if matched {
                 map.push(Some(j));
                 j += 1;
                 continue;
+            }
+            if in_run && run[i - run_start].is_some() {
+                // The arm has a load here that arm 0 does not have.
+                diff(format!(
+                    "instructions differ at @{} ({}) and @{} ({})",
+                    x.off,
+                    x.text,
+                    an.get(j).map_or(u32::MAX, |y| y.off),
+                    an.get(j).map_or("end", |y| y.text.as_str())
+                ));
+                broken = true;
+                break;
             }
             match x.ldar {
                 Some(r) if load(r) => {
@@ -1974,6 +2060,16 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
                 let stmt = back[k].is_some_and(|i| stmt0(a0[i].off));
                 match y.ldar {
                     Some(r) if load(r) && stmt => match t1_dead_after(fnn, &an, k, &labels, true) {
+                        // O9: the anchor of a statement whose owed load a deferred transfer
+                        // replaced; the flush after it materializes that transfer (`p, this;
+                        // debugger;`, as in arm 0).
+                        Ok(n)
+                            if t1_anchor(fnn, &an, n, &labels, |s| {
+                                s == ep9_bytecode::Register::RECEIVER || !load(s)
+                            }) =>
+                        {
+                            rep.kept.push(format!("f{fi} @{} Ldar {r}: anchor", y.off));
+                        }
                         Ok(_) => diff(format!("@{} S> Ldar {r} is dead and is kept", y.off)),
                         Err(why @ ("handler range" | "statement" | "label" | "mov")) => {
                             rep.kept.push(format!("f{fi} @{} Ldar {r}: {why}", y.off));
@@ -2070,6 +2166,18 @@ fn ldar_elision_differential() {
         ),
         // O2: an owed load before a `Mov` that the replay makes for an operand (lebab f3179).
         ("mov operand", Sloppy, LDAR_MOV),
+        // O9, O6: the anchor `S> Ldar a0`, then a deferred `Ldar <this>` that a flush (a label,
+        // a jump, `Debugger`) materializes. Every arm keeps both loads (the same bytecode as
+        // arm 0; Codex r3).
+        (
+            "anchor",
+            Sloppy,
+            "function a1(p) { p, this; debugger; } function a2(p, q) { p, q, this; debugger; } \
+             function a3(p) { (p, this); debugger; } function a4(p) { p, this; while (g) {} } \
+             function a5(p) { p, this; do {} while (g); } function a6(p) { p, this; for (;;) {} } \
+             function a7(p) { p, this; x: { break x; } } function a8(p) { this, p, this; debugger; } \
+             function a9(p) { try { p, this; debugger; } catch (e) {} }",
+        ),
     ];
     for &(name, mode, src) in CASES.iter().chain(extra) {
         for arm in [Arm::Arm1, Arm::Arm2] {
