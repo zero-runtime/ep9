@@ -1542,6 +1542,9 @@ macro_rules! dispatch_pc_of {
     (GetNamedProperty, $next:expr) => {
         $next
     };
+    (GetNamedPropertyStar, $next:expr) => {
+        $next
+    };
     (TestTypeOf, $next:expr) => {
         $next
     };
@@ -1572,6 +1575,27 @@ macro_rules! fast_body {
     };
 }
 pub(crate) use fast_body;
+
+// ---- the late `dst` read of the fused Star opcodes (the STAR-DST probe, SC b2) --------------
+
+/// The `dst` register of a fused `*Star` opcode (0x9e-0xa0, the STAR-DST probe) at its success
+/// exit. `LEN` is the one-byte length of the opcode ([`one_byte_len`]: 5, 3, 5), a constant, so
+/// the test folds per handler. At one-byte scale (`next` is `pc + LEN`) a volatile read of the
+/// last byte of the instruction, decoded as the one-byte `RegOut` operand (the `decode!` S1
+/// form, [`R::of_out_operand`]); else (`Wide`, `ExtraWide`: the prefixed step) `decoded`. The
+/// volatile read is the [`record_exit`] form: LLVM does not move it to the handler entry, where
+/// the register would stay live across the load on every path (SD risk R2).
+#[inline(always)]
+pub(crate) fn star_dst<const LEN: usize>(pc: *const u8, next: *const u8, decoded: R) -> R {
+    if next == pc.wrapping_add(LEN) {
+        // SAFETY: `pc` is a one-byte-scale fused opcode of verified code (`next` is `pc + LEN`),
+        // whose last byte is its one-byte `dst` operand.
+        let b = unsafe { core::ptr::read_volatile(pc.add(LEN - 1)) };
+        R::of_out_operand(i32::from(b as i8))
+    } else {
+        decoded
+    }
+}
 
 #[cfg(test)]
 mod tests {

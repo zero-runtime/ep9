@@ -1897,6 +1897,7 @@ pub(crate) fn init_vector(fi: &FunctionInfo, code: &[u8], v: u64) {
             op,
             Opcode::GetNamedProperty
                 | Opcode::GetNamedPropertyFromSuper
+                | Opcode::GetNamedPropertyStar
                 | Opcode::SetNamedProperty
                 | Opcode::DefineNamedOwnProperty
                 | Opcode::LdaGlobal
@@ -1992,7 +1993,7 @@ pub(crate) mod stats {
     /// The IC site kinds of T0.
     #[derive(Clone, Copy)]
     pub(crate) enum Site {
-        /// `GetNamedProperty`, `GetNamedPropertyFromSuper` (0x21, 0x22).
+        /// `GetNamedProperty`, `GetNamedPropertyFromSuper`, `GetNamedPropertyStar` (0x21, 0x22, 0x9e).
         Load = 0,
         /// `SetNamedProperty`, `DefineNamedOwnProperty` (0x24, 0x25).
         Store = 1,
@@ -2505,7 +2506,7 @@ const _: () = {
 #[cfg_attr(not(debug_assertions), inline(always))]
 #[cfg_attr(not(debug_assertions), allow(unused_variables))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn load_or_mega(
+pub(crate) fn load_or_mega_len<const LEN: usize>(
     cx: &Cx,
     fp: *mut u64,
     pc: *const u8,
@@ -2529,7 +2530,7 @@ pub(crate) fn load_or_mega(
         return None;
     } else if is_cell_bits(value) {
         poly_case(value, id)?
-    } else if value == MEGA && next == pc.wrapping_add(GET_NAMED_LEN) && id != 0 {
+    } else if value == MEGA && next == pc.wrapping_add(LEN) && id != 0 {
         // SAFETY: a one-byte-scale GetNamedProperty of verified code (the opcode, then the
         // object, name and slot operands, one byte each) in the live frame `fp`.
         let h = unsafe { mega_fast(cx, fp, pc, id) }?;
@@ -2622,6 +2623,46 @@ unsafe fn mega_fast(cx: &Cx, fp: *mut u64, pc: *const u8, id: u32) -> Option<u64
 /// and counts the miss (`ic-stats`), so a miss counts once. The scale test folds: each handler
 /// has one scale (as the `next` test of [`load_or_mega`]).
 #[inline(always)]
+pub(crate) fn get_named_cold_len<const LEN: usize>(
+    cx: &mut Cx,
+    fp: *mut u64,
+    pc: *const u8,
+    next: *const u8,
+    o: u64,
+    key: u64,
+    slot: u32,
+) -> u64 {
+    if next == pc.wrapping_add(LEN) {
+        slow::get_named(cx, fp, pc, o, key, slot)
+    } else {
+        get_named_cold(cx, fp, pc, o, key, slot)
+    }
+}
+
+// The 2 calls above with the instruction length as a const parameter (`LEN`): `GET_NAMED_LEN`
+// for `GetNamedProperty` (these 2 forms, its only callers, so its code does not change), 5 for
+// the fused `GetNamedPropertyStar` of the STAR-DST probe (0x9e; its name operand is at
+// `GET_NAMED_NAME_AT` too).
+
+/// [`load_or_mega_len`] for `GetNamedProperty` (`LEN` = [`GET_NAMED_LEN`]).
+#[cfg_attr(debug_assertions, inline(never))]
+#[cfg_attr(not(debug_assertions), inline(always))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn load_or_mega(
+    cx: &Cx,
+    fp: *mut u64,
+    pc: *const u8,
+    next: *const u8,
+    fi: &FunctionInfo,
+    o: u64,
+    slot: u32,
+    name: u32,
+) -> Option<u64> {
+    load_or_mega_len::<GET_NAMED_LEN>(cx, fp, pc, next, fi, o, slot, name)
+}
+
+/// [`get_named_cold_len`] for `GetNamedProperty` (`LEN` = [`GET_NAMED_LEN`]).
+#[inline(always)]
 pub(crate) fn get_named_cold_at(
     cx: &mut Cx,
     fp: *mut u64,
@@ -2631,11 +2672,7 @@ pub(crate) fn get_named_cold_at(
     key: u64,
     slot: u32,
 ) -> u64 {
-    if next == pc.wrapping_add(GET_NAMED_LEN) {
-        slow::get_named(cx, fp, pc, o, key, slot)
-    } else {
-        get_named_cold(cx, fp, pc, o, key, slot)
-    }
+    get_named_cold_len::<GET_NAMED_LEN>(cx, fp, pc, next, o, key, slot)
 }
 
 #[cfg(test)]

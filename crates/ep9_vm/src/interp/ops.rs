@@ -2098,6 +2098,9 @@ macro_rules! if_cold {
     (SuspendGenerator { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
     (ResumeGenerator { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
     (CallRuntimeForPair { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
+    (GetNamedPropertyStar { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
+    (LdaCurrentContextSlotStar { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
+    (LdaContextSlotStar { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
     ($other:ident { $($y:tt)* } else { $($n:tt)* }) => { $($n)* };
 }
 pub(crate) use if_cold;
@@ -2813,6 +2816,85 @@ mod number_box {
             check(f64::from(x as i32));
         }
     }
+}
+
+// ---- the fused Star forms (ABI 7, the STAR-DST probe; DL M11-P3-PICK) ----------------------
+
+// Each fused opcode runs the body of its load, then the `Star dst` of the pair, on the success
+// exit only: an exception leaves `dst` as it was (INV-S3), as in the pair. The fast bodies read
+// `dst` late (`dsl::star_dst`, SC b2): at one-byte scale a volatile read of the last byte,
+// so no register holds it across the load; a `Wide` or `ExtraWide` form (the prefixed step)
+// uses the decoded `dst`. The stores take the `Star` form (`St::set_reg`, a register index,
+// never an address taken before a call).
+
+/// The one-byte length of the fused named load (5): the `next` tests of its IC calls fold.
+const GET_NAMED_STAR_LEN: usize = dsl::one_byte_len(ep9_bytecode::Opcode::GetNamedPropertyStar);
+
+op!(GetNamedPropertyStar(st, object: R, name: K, s: FSlot, dst: R) {
+    let o = st.reg(object);
+    match ic::load_or_mega_len::<GET_NAMED_STAR_LEN>(
+        st.cx, st.fp, st.pc, st.next, st.info(), o, s.0, name.0,
+    ) {
+        Some(v) => {
+            ic::ic_count!(hit, Load);
+            st.acc = v;
+            let d = dsl::star_dst::<GET_NAMED_STAR_LEN>(st.pc, st.next, dst);
+            st.set_reg(d, v);
+            Flow::Next
+        }
+        None => {
+            ic::ic_count!(miss, Load, st.info(), s.0);
+            Flow::Cold
+        }
+    }
+} cold {
+    let (o, k) = (st.reg(object), st.constant(name));
+    let r = ic::get_named_cold_len::<GET_NAMED_STAR_LEN>(st.cx, st.fp, st.pc, st.next, o, k, s.0);
+    match st.result(r) {
+        Done::Next => {
+            let v = st.acc;
+            st.set_reg(dst, v);
+            Done::Next
+        }
+        other => other,
+    }
+});
+op!(LdaCurrentContextSlotStar(st, i: CSlot, dst: R) {
+    const LEN: usize = dsl::one_byte_len(ep9_bytecode::Opcode::LdaCurrentContextSlotStar);
+    let c = st.hdr(slot::CONTEXT);
+    match ctx_load(st, c, i, 0) {
+        Flow::Next => {
+            let v = st.acc;
+            let d = dsl::star_dst::<LEN>(st.pc, st.next, dst);
+            st.set_reg(d, v);
+            Flow::Next
+        }
+        other => other,
+    }
+} cold { star_cold(ctx_cold(st), st, dst) });
+op!(LdaContextSlotStar(st, context: R, i: CSlot, depth: Depth, dst: R) {
+    const LEN: usize = dsl::one_byte_len(ep9_bytecode::Opcode::LdaContextSlotStar);
+    let c = st.reg(context);
+    match ctx_load(st, c, i, depth.0) {
+        Flow::Next => {
+            let v = st.acc;
+            let d = dsl::star_dst::<LEN>(st.pc, st.next, dst);
+            st.set_reg(d, v);
+            Flow::Next
+        }
+        other => other,
+    }
+} cold { star_cold(ctx_cold(st), st, dst) });
+
+/// The end of the cold body of a fused context load: the `Star dst` of the pair only when the
+/// load gave a value (`Done::Next`).
+#[inline(always)]
+fn star_cold(d: Done, st: &mut St<'_>, dst: R) -> Done {
+    if let Done::Next = d {
+        let v = st.acc;
+        st.set_reg(dst, v);
+    }
+    d
 }
 
 /// The budget units and the T0 call count of `call_fast` (H23 "Interrupt poll", H16): one unit

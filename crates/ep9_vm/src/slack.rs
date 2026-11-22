@@ -170,6 +170,14 @@ pub(crate) fn this_store_names(code: &[u8], names: &mut [u32; MAX_NAMES]) -> Opt
                 h.acc = false;
                 continue;
             }
+            Opcode::GetNamedPropertyStar => {
+                // The pair `GetNamedProperty` then `Star dst` (operand 3; STAR-DST probe).
+                h.acc = false;
+                if !h.set(insn.register(3), false) {
+                    return None;
+                }
+                continue;
+            }
             _ => {}
         }
         if h.acc && info.acc.reads() {
