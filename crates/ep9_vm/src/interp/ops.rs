@@ -2838,7 +2838,7 @@ op!(GetNamedPropertyStar(st, object: R, name: K, s: FSlot, dst: R) {
         Some(v) => {
             ic::ic_count!(hit, Load);
             st.acc = v;
-            let d = dsl::star_dst::<GET_NAMED_STAR_LEN>(st.pc, st.next, dst);
+            let d = named_star_dst(st.pc, st.next, dst);
             st.set_reg(d, v);
             Flow::Next
         }
@@ -2885,6 +2885,63 @@ op!(LdaContextSlotStar(st, context: R, i: CSlot, depth: Depth, dst: R) {
         other => other,
     }
 } cold { star_cold(ctx_cold(st), st, dst) });
+
+/// The `dst` of `GetNamedPropertyStar` at its hit exit: [`dsl::star_dst`], and on x86-64 the
+/// same register with a branch on the sign of the one-byte operand in place of the select of
+/// [`R::of_out_operand`] (the aarch64 form of that function; K-4 fix of the STAR-DST probe).
+///
+/// The hit paths of the IC (the field kinds, the array and string lengths, the prototype
+/// load) join before this read, so its code is one block. With the select it was 9
+/// instructions on x86-64 (the read, `lea`, `test`, `cmov`, the store and a dispatch of 4),
+/// too long for LLVM to copy into each hit path, as it does with the 3-instruction dispatch of
+/// `GetNamedProperty`; a hit then also takes a jump to it. The branch form is 7 (the read,
+/// `test`, `js`, the store and the dispatch of 3): a field hit runs the 41 instructions of
+/// `GetNamedProperty` + 5 (the read, `test`, `js`, the store, the jump to the shared block).
+/// The negative arm (a parameter or the receiver as `dst`) is cold.
+#[inline(always)]
+fn named_star_dst(pc: *const u8, next: *const u8, decoded: R) -> R {
+    #[cfg(target_arch = "x86_64")]
+    {
+        star_dst_branch::<GET_NAMED_STAR_LEN>(pc, next, decoded)
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        dsl::star_dst::<GET_NAMED_STAR_LEN>(pc, next, decoded)
+    }
+}
+
+/// [`dsl::star_dst`] with the `R::from_operand_branch` decode (the aarch64 form of
+/// [`R::of_out_operand`]): `v - HEADER` for a negative operand on its own cold arm. The
+/// `asm!` block keeps the arm a branch (LLVM does not speculate it into a select). It builds
+/// on every target for the test; only x86-64 calls it.
+#[cfg(any(target_arch = "x86_64", test))]
+#[inline(always)]
+fn star_dst_branch<const LEN: usize>(pc: *const u8, next: *const u8, decoded: R) -> R {
+    if next == pc.wrapping_add(LEN) {
+        // SAFETY: as in `dsl::star_dst`: `pc` is a one-byte-scale fused opcode of verified
+        // code (`next` is `pc + LEN`), whose last byte is its one-byte `dst` operand.
+        let b = unsafe { core::ptr::read_volatile(pc.add(LEN - 1)) };
+        let o = isize::from(b as i8);
+        if o < 0 {
+            core::hint::cold_path();
+            let mut n = o;
+            // SAFETY: an empty block (a comment): no instruction, no memory access, no flag
+            // change. `n` comes back as it went in.
+            unsafe {
+                core::arch::asm!(
+                    "/* {n} */",
+                    n = inout(reg) n,
+                    options(pure, nomem, nostack, preserves_flags)
+                );
+            }
+            R(n - crate::frame::HEADER as isize)
+        } else {
+            R(o)
+        }
+    } else {
+        decoded
+    }
+}
 
 /// The end of the cold body of a fused context load: the `Star dst` of the pair only when the
 /// load gave a value (`Done::Next`).
@@ -3312,6 +3369,34 @@ mod int32_fast_paths {
                 ((x as i32) >> 16, ((x >> 32) as i32) >> 15)
             };
             check(a, b);
+        }
+    }
+}
+
+/// [`star_dst_branch`] (the x86-64 hit exit of `GetNamedPropertyStar`) gives the register of
+/// [`dsl::star_dst`] for every one-byte `dst`, and the decoded one at another scale.
+#[cfg(test)]
+mod star_dst_branch_form {
+    use super::{GET_NAMED_STAR_LEN, R, dsl, star_dst_branch};
+
+    #[test]
+    fn equals_the_select_form() {
+        const LEN: usize = GET_NAMED_STAR_LEN;
+        let decoded = R(1234);
+        for b in 0..=u8::MAX {
+            let mut code = [0u8; LEN + 2];
+            code[LEN - 1] = b;
+            let pc = code.as_ptr();
+            let one = pc.wrapping_add(LEN);
+            let want = dsl::star_dst::<LEN>(pc, one, decoded);
+            assert_eq!(
+                star_dst_branch::<LEN>(pc, one, decoded),
+                want,
+                "dst byte {b:#04x}"
+            );
+            assert_eq!(want, R::of_out_operand(i32::from(b as i8)));
+            let wide = pc.wrapping_add(LEN + 1);
+            assert_eq!(star_dst_branch::<LEN>(pc, wide, decoded), decoded);
         }
     }
 }
