@@ -3,8 +3,10 @@
 # The x86-64 rustflags are the handler alignment of H15:39 (M10-PRE-ALIGN-FORM): every function that
 # LLVM compiles starts on a 64-byte line (not naked_asm! functions or compiler_builtins). They change
 # code placement only, never behavior. Stable Rust 1.99.1 has no per-function align attribute, so this
-# is the only form. RUSTFLAGS (or CARGO_ENCODED_RUSTFLAGS) in the environment replaces these rustflags
-# (cargo order): an override without the flag loses the alignment, and `disasm-check --frames` fails.
+# is the only form. Cargo joins and replaces flag sources by its own precedence rules: RUSTFLAGS (or
+# CARGO_ENCODED_RUSTFLAGS) in the environment replaces these rustflags, and other sources (for example
+# extra rustc arguments) can add flags. So the flag text is not the evidence: `disasm-check --frames`
+# reads the built archive and fails when a checked hot handler does not start on a 64-byte line.
 [alias]
 xtask = "run --package xtask --"
 
