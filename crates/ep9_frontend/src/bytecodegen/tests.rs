@@ -819,7 +819,7 @@ pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
         Err(e) => return vec![format!("compile: {e}")],
     };
     // STAR-DST (rule O13): the optimized unit through the expansion, so a fused instruction
-    // equals its pair (no change with the switch not set).
+    // equals its pair (the default fuses the set; the expansion gives each pair back).
     let opt = star_dst_expand_unit(opt.unit());
     let (p, o) = (plain.unit(), &opt);
     let mut out = Vec::new();
@@ -1848,7 +1848,7 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
         }
     };
     // STAR-DST (rule O13): the arm through the expansion (a fused instruction equals its pair;
-    // no change with the switch not set).
+    // the arm-2 default fuses the set; the expansion gives each pair back).
     let expanded = star_dst_expand_unit(units[1].unit());
     let (u0, un) = (units[0].unit(), &expanded);
     if u0.functions.len() != un.functions.len() {
