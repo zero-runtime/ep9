@@ -14,7 +14,7 @@ strings (7):
 scopes (1):
   scope0 script outer=- flags=[] slots=["f":var, "o":var, "a":var]
 function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs=9 range=0..85
-  code (266 bytes):
+  code (261 bytes):
       0 S> CallRuntime DeclareGlobals, ()               ; 68 05 00 00 00
       5 S> LdaGlobal k0, s0  ; k0 = String str0 "f"     ; 10 00 00
       8    Star r0                                      ; 0c 00
@@ -46,76 +46,71 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
      65    Star r8                                      ; 0c 08
      67 E> GetIterator r8, s7, s8                       ; 8f 08 07 08
      71    Star r5                                      ; 0c 05
-     73 E> GetNamedProperty r5, k2, s9  ; k2 = String str3 "next" ; 21 05 02 09
-     77    Star r6                                      ; 0c 06
-     79 E> CallProperty0 r6, r5, s10                    ; 60 06 05 0a
-     83    Star r7                                      ; 0c 07
-     85    JumpIfJSReceiver @92                         ; 88 07
-     87 E> CallRuntime ThrowIteratorResultNotAnObject, r7 ; 68 01 00 07 01
-     92 E> GetNamedProperty r7, k3, s11  ; k3 = String str4 "done" ; 21 07 03 0b
-     96    JumpIfToBooleanTrue @118                     ; 81 16
-     98 E> GetNamedProperty r7, k4, s12  ; k4 = String str5 "value" ; 21 07 04 0c
-    102    Star r7                                      ; 0c 07
-    104 E> StaInArrayLiteral r3, r4, s13                ; 28 03 04 0d
-    108    Ldar r4                                      ; 0b 04
-    110 E> Inc s14                                      ; 42 0e
-    112    Star r4                                      ; 0c 04
-    114    JumpLoop @79, [0], s15                       ; 7d 23 00 0f
-    118    LdaSmi [1]                                   ; 04 01
-    120 E> StaInArrayLiteral r3, r4, s5                 ; 28 03 04 05
-    124    Ldar r4                                      ; 0b 04
-    126 E> Inc s6                                       ; 42 06
-    128    Mov r3, r2                                   ; 0d 03 02
-    131 E> CallWithSpread r0, r1-r2, s16                ; 67 00 01 02 10
-    136 S> LdaGlobal k6, s17  ; k6 = String str1 "o"    ; 10 06 11
-    139    Star r1                                      ; 0c 01
-    141 E> GetNamedProperty r1, k5, s18  ; k5 = String str6 "m" ; 21 01 05 12
-    145    Star r0                                      ; 0c 00
-    147 E> LdaGlobal k1, s1  ; k1 = String str2 "a"     ; 10 01 01
-    150 E> CreateArrayFromIterable                      ; 6f
-    151    Star r2                                      ; 0c 02
-    153 E> CallWithSpread r0, r1-r2, s19                ; 67 00 01 02 13
-    158 S> LdaGlobal k0, s0  ; k0 = String str0 "f"     ; 10 00 00
-    161    Star r0                                      ; 0c 00
-    163 E> LdaGlobal k1, s1  ; k1 = String str2 "a"     ; 10 01 01
-    166 E> CreateArrayFromIterable                      ; 6f
-    167    Star r1                                      ; 0c 01
-    169    Ldar r0                                      ; 0b 00
-    171 E> ConstructWithSpread r0, r1, s20              ; 6a 00 01 01 14
-    176 S> LdaGlobal k0, s0  ; k0 = String str0 "f"     ; 10 00 00
-    179    Star r0                                      ; 0c 00
-    181 E> CreateEmptyArrayLiteral s21                  ; 6e 15
-    183    Star r2                                      ; 0c 02
-    185    LdaZero                                      ; 03
-    186    Star r3                                      ; 0c 03
-    188 E> LdaGlobal k1, s1  ; k1 = String str2 "a"     ; 10 01 01
-    191    Star r7                                      ; 0c 07
-    193 E> GetIterator r7, s24, s25                     ; 8f 07 18 19
-    197    Star r4                                      ; 0c 04
-    199 E> GetNamedProperty r4, k2, s26  ; k2 = String str3 "next" ; 21 04 02 1a
-    203    Star r5                                      ; 0c 05
-    205 E> CallProperty0 r5, r4, s27                    ; 60 05 04 1b
-    209    Star r6                                      ; 0c 06
-    211    JumpIfJSReceiver @218                        ; 88 07
-    213 E> CallRuntime ThrowIteratorResultNotAnObject, r6 ; 68 01 00 06 01
-    218 E> GetNamedProperty r6, k3, s28  ; k3 = String str4 "done" ; 21 06 03 1c
-    222    JumpIfToBooleanTrue @244                     ; 81 16
-    224 E> GetNamedProperty r6, k4, s29  ; k4 = String str5 "value" ; 21 06 04 1d
-    228    Star r6                                      ; 0c 06
-    230 E> StaInArrayLiteral r2, r3, s30                ; 28 02 03 1e
-    234    Ldar r3                                      ; 0b 03
-    236 E> Inc s31                                      ; 42 1f
-    238    Star r3                                      ; 0c 03
-    240    JumpLoop @205, [0], s32                      ; 7d 23 00 20
-    244    LdaSmi [2]                                   ; 04 02
-    246 E> StaInArrayLiteral r2, r3, s22                ; 28 02 03 16
-    250    Ldar r3                                      ; 0b 03
-    252 E> Inc s23                                      ; 42 17
-    254    Ldar r0                                      ; 0b 00
-    256    Mov r2, r1                                   ; 0d 02 01
-    259 E> ConstructWithSpread r0, r1, s33              ; 6a 00 01 01 21
-    264    LdaUndefined                                 ; 05
-    265    Return                                       ; 92
+     73 E> GetNamedPropertyStar r5, k2, s9, r6  ; k2 = String str3 "next" ; 9e 05 02 09 06
+     78 E> CallProperty0 r6, r5, s10                    ; 60 06 05 0a
+     82    Star r7                                      ; 0c 07
+     84    JumpIfJSReceiver @91                         ; 88 07
+     86 E> CallRuntime ThrowIteratorResultNotAnObject, r7 ; 68 01 00 07 01
+     91 E> GetNamedProperty r7, k3, s11  ; k3 = String str4 "done" ; 21 07 03 0b
+     95    JumpIfToBooleanTrue @116                     ; 81 15
+     97 E> GetNamedPropertyStar r7, k4, s12, r7  ; k4 = String str5 "value" ; 9e 07 04 0c 07
+    102 E> StaInArrayLiteral r3, r4, s13                ; 28 03 04 0d
+    106    Ldar r4                                      ; 0b 04
+    108 E> Inc s14                                      ; 42 0e
+    110    Star r4                                      ; 0c 04
+    112    JumpLoop @78, [0], s15                       ; 7d 22 00 0f
+    116    LdaSmi [1]                                   ; 04 01
+    118 E> StaInArrayLiteral r3, r4, s5                 ; 28 03 04 05
+    122    Ldar r4                                      ; 0b 04
+    124 E> Inc s6                                       ; 42 06
+    126    Mov r3, r2                                   ; 0d 03 02
+    129 E> CallWithSpread r0, r1-r2, s16                ; 67 00 01 02 10
+    134 S> LdaGlobal k6, s17  ; k6 = String str1 "o"    ; 10 06 11
+    137    Star r1                                      ; 0c 01
+    139 E> GetNamedPropertyStar r1, k5, s18, r0  ; k5 = String str6 "m" ; 9e 01 05 12 00
+    144 E> LdaGlobal k1, s1  ; k1 = String str2 "a"     ; 10 01 01
+    147 E> CreateArrayFromIterable                      ; 6f
+    148    Star r2                                      ; 0c 02
+    150 E> CallWithSpread r0, r1-r2, s19                ; 67 00 01 02 13
+    155 S> LdaGlobal k0, s0  ; k0 = String str0 "f"     ; 10 00 00
+    158    Star r0                                      ; 0c 00
+    160 E> LdaGlobal k1, s1  ; k1 = String str2 "a"     ; 10 01 01
+    163 E> CreateArrayFromIterable                      ; 6f
+    164    Star r1                                      ; 0c 01
+    166    Ldar r0                                      ; 0b 00
+    168 E> ConstructWithSpread r0, r1, s20              ; 6a 00 01 01 14
+    173 S> LdaGlobal k0, s0  ; k0 = String str0 "f"     ; 10 00 00
+    176    Star r0                                      ; 0c 00
+    178 E> CreateEmptyArrayLiteral s21                  ; 6e 15
+    180    Star r2                                      ; 0c 02
+    182    LdaZero                                      ; 03
+    183    Star r3                                      ; 0c 03
+    185 E> LdaGlobal k1, s1  ; k1 = String str2 "a"     ; 10 01 01
+    188    Star r7                                      ; 0c 07
+    190 E> GetIterator r7, s24, s25                     ; 8f 07 18 19
+    194    Star r4                                      ; 0c 04
+    196 E> GetNamedPropertyStar r4, k2, s26, r5  ; k2 = String str3 "next" ; 9e 04 02 1a 05
+    201 E> CallProperty0 r5, r4, s27                    ; 60 05 04 1b
+    205    Star r6                                      ; 0c 06
+    207    JumpIfJSReceiver @214                        ; 88 07
+    209 E> CallRuntime ThrowIteratorResultNotAnObject, r6 ; 68 01 00 06 01
+    214 E> GetNamedProperty r6, k3, s28  ; k3 = String str4 "done" ; 21 06 03 1c
+    218    JumpIfToBooleanTrue @239                     ; 81 15
+    220 E> GetNamedPropertyStar r6, k4, s29, r6  ; k4 = String str5 "value" ; 9e 06 04 1d 06
+    225 E> StaInArrayLiteral r2, r3, s30                ; 28 02 03 1e
+    229    Ldar r3                                      ; 0b 03
+    231 E> Inc s31                                      ; 42 1f
+    233    Star r3                                      ; 0c 03
+    235    JumpLoop @201, [0], s32                      ; 7d 22 00 20
+    239    LdaSmi [2]                                   ; 04 02
+    241 E> StaInArrayLiteral r2, r3, s22                ; 28 02 03 16
+    245    Ldar r3                                      ; 0b 03
+    247 E> Inc s23                                      ; 42 17
+    249    Ldar r0                                      ; 0b 00
+    251    Mov r2, r1                                   ; 0d 02 01
+    254 E> ConstructWithSpread r0, r1, s33              ; 6a 00 01 01 21
+    259    LdaUndefined                                 ; 05
+    260    Return                                       ; 92
   constants (7):
       0 String str0 "f"
       1 String str2 "a"
@@ -175,35 +170,35 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
      62 E 39 (1:40)
      67 E 36 (1:37)
      73 E 34 (1:35)
-     79 E 36 (1:37)
-     87 E 34 (1:35)
-     92 E 34 (1:35)
-     98 E 34 (1:35)
-    104 E 34 (1:35)
-    110 E 34 (1:35)
-    120 E 34 (1:35)
-    126 E 34 (1:35)
-    131 E 34 (1:35)
-    136 S 46 (1:47)
-    141 E 48 (1:49)
-    147 E 53 (1:54)
-    150 E 50 (1:51)
-    153 E 48 (1:49)
-    158 S 57 (1:58)
-    163 E 66 (1:67)
-    166 E 63 (1:64)
-    171 E 57 (1:58)
-    176 S 70 (1:71)
-    181 E 70 (1:71)
-    188 E 79 (1:80)
-    193 E 76 (1:77)
-    199 E 70 (1:71)
-    205 E 76 (1:77)
-    213 E 70 (1:71)
-    218 E 70 (1:71)
-    224 E 70 (1:71)
-    230 E 70 (1:71)
-    236 E 70 (1:71)
-    246 E 70 (1:71)
-    252 E 70 (1:71)
-    259 E 70 (1:71)
+     78 E 36 (1:37)
+     86 E 34 (1:35)
+     91 E 34 (1:35)
+     97 E 34 (1:35)
+    102 E 34 (1:35)
+    108 E 34 (1:35)
+    118 E 34 (1:35)
+    124 E 34 (1:35)
+    129 E 34 (1:35)
+    134 S 46 (1:47)
+    139 E 48 (1:49)
+    144 E 53 (1:54)
+    147 E 50 (1:51)
+    150 E 48 (1:49)
+    155 S 57 (1:58)
+    160 E 66 (1:67)
+    163 E 63 (1:64)
+    168 E 57 (1:58)
+    173 S 70 (1:71)
+    178 E 70 (1:71)
+    185 E 79 (1:80)
+    190 E 76 (1:77)
+    196 E 70 (1:71)
+    201 E 76 (1:77)
+    209 E 70 (1:71)
+    214 E 70 (1:71)
+    220 E 70 (1:71)
+    225 E 70 (1:71)
+    231 E 70 (1:71)
+    241 E 70 (1:71)
+    247 E 70 (1:71)
+    254 E 70 (1:71)

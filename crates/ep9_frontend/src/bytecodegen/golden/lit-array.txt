@@ -13,7 +13,7 @@ strings (6):
 scopes (1):
   scope0 script outer=- flags=[] slots=["x":var, "y":var]
 function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs=6 range=0..86
-  code (135 bytes):
+  code (133 bytes):
       0 S> CallRuntime DeclareGlobals, ()               ; 68 05 00 00 00
       5 S> CreateEmptyArrayLiteral s0                   ; 6e 00
       7 S> CreateArrayLiteral k3, s1, #0x01  ; k3 = ArrayBoilerplate [k0, k1, k2] ; 6d 03 01 01
@@ -39,29 +39,27 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
      63    Star r5                                      ; 0c 05
      65 E> GetIterator r5, s11, s12                     ; 8f 05 0b 0c
      69    Star r2                                      ; 0c 02
-     71 E> GetNamedProperty r2, k13, s13  ; k13 = String str2 "next" ; 21 02 0d 0d
-     75    Star r3                                      ; 0c 03
-     77 E> CallProperty0 r3, r2, s14                    ; 60 03 02 0e
-     81    Star r4                                      ; 0c 04
-     83    JumpIfJSReceiver @90                         ; 88 07
-     85 E> CallRuntime ThrowIteratorResultNotAnObject, r4 ; 68 01 00 04 01
-     90 E> GetNamedProperty r4, k14, s15  ; k14 = String str3 "done" ; 21 04 0e 0f
-     94    JumpIfToBooleanTrue @116                     ; 81 16
-     96 E> GetNamedProperty r4, k15, s16  ; k15 = String str4 "value" ; 21 04 0f 10
-    100    Star r4                                      ; 0c 04
-    102 E> StaInArrayLiteral r0, r1, s17                ; 28 00 01 11
-    106    Ldar r1                                      ; 0b 01
-    108 E> Inc s18                                      ; 42 12
-    110    Star r1                                      ; 0c 01
-    112    JumpLoop @77, [0], s19                       ; 7d 23 00 13
-    116 E> LdaGlobal k6, s5  ; k6 = String str1 "y"     ; 10 06 05
-    119 E> StaInArrayLiteral r0, r1, s9                 ; 28 00 01 09
-    123    Ldar r1                                      ; 0b 01
+     71 E> GetNamedPropertyStar r2, k13, s13, r3  ; k13 = String str2 "next" ; 9e 02 0d 0d 03
+     76 E> CallProperty0 r3, r2, s14                    ; 60 03 02 0e
+     80    Star r4                                      ; 0c 04
+     82    JumpIfJSReceiver @89                         ; 88 07
+     84 E> CallRuntime ThrowIteratorResultNotAnObject, r4 ; 68 01 00 04 01
+     89 E> GetNamedProperty r4, k14, s15  ; k14 = String str3 "done" ; 21 04 0e 0f
+     93    JumpIfToBooleanTrue @114                     ; 81 15
+     95 E> GetNamedPropertyStar r4, k15, s16, r4  ; k15 = String str4 "value" ; 9e 04 0f 10 04
+    100 E> StaInArrayLiteral r0, r1, s17                ; 28 00 01 11
+    104    Ldar r1                                      ; 0b 01
+    106 E> Inc s18                                      ; 42 12
+    108    Star r1                                      ; 0c 01
+    110    JumpLoop @76, [0], s19                       ; 7d 22 00 13
+    114 E> LdaGlobal k6, s5  ; k6 = String str1 "y"     ; 10 06 05
+    117 E> StaInArrayLiteral r0, r1, s9                 ; 28 00 01 09
+    121    Ldar r1                                      ; 0b 01
+    123 E> Inc s10                                      ; 42 0a
     125 E> Inc s10                                      ; 42 0a
-    127 E> Inc s10                                      ; 42 0a
-    129 E> SetNamedProperty r0, k16, s20  ; k16 = String str5 "length" ; 24 00 10 14
-    133    LdaUndefined                                 ; 05
-    134    Return                                       ; 92
+    127 E> SetNamedProperty r0, k16, s20  ; k16 = String str5 "length" ; 24 00 10 14
+    131    LdaUndefined                                 ; 05
+    132    Return                                       ; 92
   constants (17):
       0 Number 1.0
       1 Number 2.0
@@ -120,14 +118,14 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
      60 E 76 (1:77)
      65 E 73 (1:74)
      71 E 69 (1:70)
-     77 E 73 (1:74)
-     85 E 69 (1:70)
-     90 E 69 (1:70)
-     96 E 69 (1:70)
-    102 E 69 (1:70)
-    108 E 69 (1:70)
-    116 E 79 (1:80)
-    119 E 69 (1:70)
+     76 E 73 (1:74)
+     84 E 69 (1:70)
+     89 E 69 (1:70)
+     95 E 69 (1:70)
+    100 E 69 (1:70)
+    106 E 69 (1:70)
+    114 E 79 (1:80)
+    117 E 69 (1:70)
+    123 E 69 (1:70)
     125 E 69 (1:70)
     127 E 69 (1:70)
-    129 E 69 (1:70)

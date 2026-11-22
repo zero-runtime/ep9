@@ -12,7 +12,7 @@ strings (5):
 scopes (1):
   scope0 script outer=- flags=[] slots=["o":var, "f":var]
 function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs=3 range=0..78
-  code (158 bytes):
+  code (154 bytes):
       0 S> CallRuntime DeclareGlobals, ()               ; 68 05 00 00 00
       5 S> LdaGlobal k1, s0  ; k1 = String str0 "o"     ; 10 01 00
       8    JumpIfUndefinedOrNull @18                    ; 87 0a
@@ -28,57 +28,53 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
      30    Jump @33                                     ; 7e 03
      32    LdaUndefined                                 ; 05
      33 S> LdaGlobal k1, s0  ; k1 = String str0 "o"     ; 10 01 00
-     36    JumpIfUndefinedOrNull @52                    ; 87 10
+     36    JumpIfUndefinedOrNull @51                    ; 87 0f
      38    Star r1                                      ; 0c 01
-     40 E> GetNamedProperty r1, k0, s3  ; k0 = String str2 "a" ; 21 01 00 03
-     44    Star r0                                      ; 0c 00
-     46 E> GetNamedProperty r0, k2, s4  ; k2 = String str3 "b" ; 21 00 02 04
-     50    Jump @53                                     ; 7e 03
-     52    LdaUndefined                                 ; 05
-     53 S> LdaGlobal k1, s0  ; k1 = String str0 "o"     ; 10 01 00
-     56    JumpIfUndefinedOrNull @72                    ; 87 10
-     58    Star r1                                      ; 0c 01
-     60 E> GetNamedProperty r1, k3, s5  ; k3 = String str4 "m" ; 21 01 03 05
-     64    Star r0                                      ; 0c 00
-     66 E> CallProperty0 r0, r1, s6                     ; 60 00 01 06
-     70    Jump @73                                     ; 7e 03
-     72    LdaUndefined                                 ; 05
-     73 S> LdaGlobal k1, s0  ; k1 = String str0 "o"     ; 10 01 00
-     76    Star r1                                      ; 0c 01
-     78 E> GetNamedProperty r1, k3, s7  ; k3 = String str4 "m" ; 21 01 03 07
-     82    Star r0                                      ; 0c 00
-     84    JumpIfUndefinedOrNull @92                    ; 87 08
-     86 E> CallProperty0 r0, r1, s8                     ; 60 00 01 08
-     90    Jump @93                                     ; 7e 03
-     92    LdaUndefined                                 ; 05
-     93 S> LdaGlobal k4, s9  ; k4 = String str1 "f"     ; 10 04 09
-     96    Star r0                                      ; 0c 00
-     98    JumpIfUndefinedOrNull @105                   ; 87 07
-    100 E> CallUndefinedReceiver0 r0, s10               ; 64 00 0a
-    103    Jump @106                                    ; 7e 03
-    105    LdaUndefined                                 ; 05
-    106 S> LdaGlobal k1, s0  ; k1 = String str0 "o"     ; 10 01 00
-    109    JumpIfUndefinedOrNull @135                   ; 87 1a
-    111    Star r2                                      ; 0c 02
-    113 E> GetNamedProperty r2, k0, s11  ; k0 = String str2 "a" ; 21 02 00 0b
-    117    JumpIfUndefinedOrNull @135                   ; 87 12
-    119    Star r1                                      ; 0c 01
-    121 E> GetNamedProperty r1, k2, s12  ; k2 = String str3 "b" ; 21 01 02 0c
-    125    Star r0                                      ; 0c 00
-    127    JumpIfUndefinedOrNull @135                   ; 87 08
-    129 E> CallProperty0 r0, r1, s13                    ; 60 00 01 0d
-    133    Jump @136                                    ; 7e 03
-    135    LdaUndefined                                 ; 05
-    136 S> LdaGlobal k1, s0  ; k1 = String str0 "o"     ; 10 01 00
-    139    JumpIfUndefinedOrNull @149                   ; 87 0a
-    141    Star r1                                      ; 0c 01
-    143 E> GetNamedProperty r1, k0, s14  ; k0 = String str2 "a" ; 21 01 00 0e
-    147    Jump @150                                    ; 7e 03
-    149    LdaUndefined                                 ; 05
-    150    Star r0                                      ; 0c 00
-    152 E> GetNamedProperty r0, k2, s15  ; k2 = String str3 "b" ; 21 00 02 0f
-    156    LdaUndefined                                 ; 05
-    157    Return                                       ; 92
+     40 E> GetNamedPropertyStar r1, k0, s3, r0  ; k0 = String str2 "a" ; 9e 01 00 03 00
+     45 E> GetNamedProperty r0, k2, s4  ; k2 = String str3 "b" ; 21 00 02 04
+     49    Jump @52                                     ; 7e 03
+     51    LdaUndefined                                 ; 05
+     52 S> LdaGlobal k1, s0  ; k1 = String str0 "o"     ; 10 01 00
+     55    JumpIfUndefinedOrNull @70                    ; 87 0f
+     57    Star r1                                      ; 0c 01
+     59 E> GetNamedPropertyStar r1, k3, s5, r0  ; k3 = String str4 "m" ; 9e 01 03 05 00
+     64 E> CallProperty0 r0, r1, s6                     ; 60 00 01 06
+     68    Jump @71                                     ; 7e 03
+     70    LdaUndefined                                 ; 05
+     71 S> LdaGlobal k1, s0  ; k1 = String str0 "o"     ; 10 01 00
+     74    Star r1                                      ; 0c 01
+     76 E> GetNamedPropertyStar r1, k3, s7, r0  ; k3 = String str4 "m" ; 9e 01 03 07 00
+     81    JumpIfUndefinedOrNull @89                    ; 87 08
+     83 E> CallProperty0 r0, r1, s8                     ; 60 00 01 08
+     87    Jump @90                                     ; 7e 03
+     89    LdaUndefined                                 ; 05
+     90 S> LdaGlobal k4, s9  ; k4 = String str1 "f"     ; 10 04 09
+     93    Star r0                                      ; 0c 00
+     95    JumpIfUndefinedOrNull @102                   ; 87 07
+     97 E> CallUndefinedReceiver0 r0, s10               ; 64 00 0a
+    100    Jump @103                                    ; 7e 03
+    102    LdaUndefined                                 ; 05
+    103 S> LdaGlobal k1, s0  ; k1 = String str0 "o"     ; 10 01 00
+    106    JumpIfUndefinedOrNull @131                   ; 87 19
+    108    Star r2                                      ; 0c 02
+    110 E> GetNamedProperty r2, k0, s11  ; k0 = String str2 "a" ; 21 02 00 0b
+    114    JumpIfUndefinedOrNull @131                   ; 87 11
+    116    Star r1                                      ; 0c 01
+    118 E> GetNamedPropertyStar r1, k2, s12, r0  ; k2 = String str3 "b" ; 9e 01 02 0c 00
+    123    JumpIfUndefinedOrNull @131                   ; 87 08
+    125 E> CallProperty0 r0, r1, s13                    ; 60 00 01 0d
+    129    Jump @132                                    ; 7e 03
+    131    LdaUndefined                                 ; 05
+    132 S> LdaGlobal k1, s0  ; k1 = String str0 "o"     ; 10 01 00
+    135    JumpIfUndefinedOrNull @145                   ; 87 0a
+    137    Star r1                                      ; 0c 01
+    139 E> GetNamedProperty r1, k0, s14  ; k0 = String str2 "a" ; 21 01 00 0e
+    143    Jump @146                                    ; 7e 03
+    145    LdaUndefined                                 ; 05
+    146    Star r0                                      ; 0c 00
+    148 E> GetNamedProperty r0, k2, s15  ; k2 = String str3 "b" ; 21 00 02 0f
+    152    LdaUndefined                                 ; 05
+    153    Return                                       ; 92
   constants (5):
       0 String str2 "a"
       1 String str0 "o"
@@ -111,19 +107,19 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
      27 E 20 (1:21)
      33 S 24 (1:25)
      40 E 27 (1:28)
-     46 E 29 (1:30)
-     53 S 32 (1:33)
-     60 E 35 (1:36)
-     66 E 35 (1:36)
-     73 S 40 (1:41)
-     78 E 42 (1:43)
-     86 E 42 (1:43)
-     93 S 49 (1:50)
-    100 E 49 (1:50)
-    106 S 56 (1:57)
-    113 E 59 (1:60)
-    121 E 62 (1:63)
-    129 E 62 (1:63)
-    136 S 69 (1:70)
-    143 E 73 (1:74)
-    152 E 76 (1:77)
+     45 E 29 (1:30)
+     52 S 32 (1:33)
+     59 E 35 (1:36)
+     64 E 35 (1:36)
+     71 S 40 (1:41)
+     76 E 42 (1:43)
+     83 E 42 (1:43)
+     90 S 49 (1:50)
+     97 E 49 (1:50)
+    103 S 56 (1:57)
+    110 E 59 (1:60)
+    118 E 62 (1:63)
+    125 E 62 (1:63)
+    132 S 69 (1:70)
+    139 E 73 (1:74)
+    148 E 76 (1:77)

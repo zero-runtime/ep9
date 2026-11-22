@@ -62,18 +62,17 @@ function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] p
      16 S 31 (1:32)
      20 S 38 (1:39)
 function f2 normal name="g" parent=f1 outer_scope=scope1 flags=[simple-params] params=0 length=0 regs=2 range=45..79
-  code (21 bytes):
-      0 S> LdaCurrentContextSlot [0]                    ; 18 00
-      2    Star r1                                      ; 0c 01
-      4    LdaCurrentContextSlot [1]                    ; 18 01
-      6 E> Add r1, s0                                   ; 2a 01 00
-      9    Star r0                                      ; 0c 00
-     11    LdaCurrentContextSlot [2]                    ; 18 02
-     13 E> ThrowReferenceErrorIfHole k0  ; k0 = String str3 "c" ; 94 00
-     15 E> Add r0, s1                                   ; 2a 00 01
-     18    Return                                       ; 92
-     19    LdaUndefined                                 ; 05
-     20    Return                                       ; 92
+  code (20 bytes):
+      0 S> LdaCurrentContextSlotStar [0], r1            ; 9f 00 01
+      3    LdaCurrentContextSlot [1]                    ; 18 01
+      5 E> Add r1, s0                                   ; 2a 01 00
+      8    Star r0                                      ; 0c 00
+     10    LdaCurrentContextSlot [2]                    ; 18 02
+     12 E> ThrowReferenceErrorIfHole k0  ; k0 = String str3 "c" ; 94 00
+     14 E> Add r0, s1                                   ; 2a 00 01
+     17    Return                                       ; 92
+     18    LdaUndefined                                 ; 05
+     19    Return                                       ; 92
   constants (1):
       0 String str3 "c"
   feedback (2):
@@ -82,6 +81,6 @@ function f2 normal name="g" parent=f1 outer_scope=scope1 flags=[simple-params] p
   handlers (0):
   positions (4):
       0 S 60 (1:61)
-      6 E 67 (1:68)
-     13 E 75 (1:76)
-     15 E 67 (1:68)
+      5 E 67 (1:68)
+     12 E 75 (1:76)
+     14 E 67 (1:68)
