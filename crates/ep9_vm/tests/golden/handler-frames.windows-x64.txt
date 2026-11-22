@@ -12,8 +12,8 @@
 # .cargo/config.toml are lost: RUSTFLAGS in the environment replaces them), and so does a line that
 # differs from this file.
 target x86_64-pc-windows-msvc
-align64 ics 166/166
-align64 sib 166/166
+align64 ics 169/169
+align64 sib 169/169
 ics BadOpcode 0
 ics CallAnyReceiver 6
 ics CallProperty 6
