@@ -795,42 +795,48 @@ const CASES: &[Case] = &[
     },
     Case {
         path: "ic-named",
-        name: "a megamorphic load (the stub cache probe of the GetNamedProperty handler) or Reflect.get",
+        name: "a megamorphic load (the stub cache probe of the GetNamedProperty handler and of the fused GetNamedPropertyStar handler: `var v = o.x`) or Reflect.get",
         src: "function mk(i) { var o = {}; o['p' + i] = i; o.x = i; return o; }\n\
-              function getx(o) { return o.x; }\n\
+              function getx(o) { return o.x; } function getxs(o) { var v = o.x; return v; }\n\
               var os = []; for (var i = 0; i < 12; i++) os.push(mk(i));\n\
-              var s = 0; for (var r = 0; r < 30; r++) for (var i = 0; i < 12; i++) s += getx(os[i]);\n\
-              var P = { x: 100 }; var c = Object.create(P); c.k = 1; s += getx(c) + getx(c);\n\
-              P.x = 7; s += getx(c); Object.defineProperty(c, 'x', { value: 9 }); s += getx(c);\n\
-              print(s, getx({}), getx(Object.create(null)), getx('str'), getx(5));",
+              var s = 0, t = 0; for (var r = 0; r < 30; r++) for (var i = 0; i < 12; i++) { s += getx(os[i]); t += getxs(os[i]); }\n\
+              var P = { x: 100 }; var c = Object.create(P); c.k = 1; s += getx(c) + getx(c); t += getxs(c) + getxs(c);\n\
+              P.x = 7; s += getx(c); t += getxs(c); Object.defineProperty(c, 'x', { value: 9 }); s += getx(c); t += getxs(c);\n\
+              print(s, getx({}), getx(Object.create(null)), getx('str'), getx(5));\n\
+              print(t, getxs({}), getxs(Object.create(null)), getxs('str'), getxs(5));",
         spec: Some(
             "function mk(i) { var o = {}; o['p' + i] = i; o.x = i; return o; }\n\
-             function getx(o) { return Reflect.get(Object(o), 'x', o); }\n\
+             function getx(o) { return Reflect.get(Object(o), 'x', o); } function getxs(o) { var v = Reflect.get(Object(o), 'x', o); return v; }\n\
              var os = []; for (var i = 0; i < 12; i++) os.push(mk(i));\n\
-             var s = 0; for (var r = 0; r < 30; r++) for (var i = 0; i < 12; i++) s += getx(os[i]);\n\
-             var P = { x: 100 }; var c = Object.create(P); c.k = 1; s += getx(c) + getx(c);\n\
-             P.x = 7; s += getx(c); Object.defineProperty(c, 'x', { value: 9 }); s += getx(c);\n\
-             print(s, getx({}), getx(Object.create(null)), getx('str'), getx(5));",
+             var s = 0, t = 0; for (var r = 0; r < 30; r++) for (var i = 0; i < 12; i++) { s += getx(os[i]); t += getxs(os[i]); }\n\
+             var P = { x: 100 }; var c = Object.create(P); c.k = 1; s += getx(c) + getx(c); t += getxs(c) + getxs(c);\n\
+             P.x = 7; s += getx(c); t += getxs(c); Object.defineProperty(c, 'x', { value: 9 }); s += getx(c); t += getxs(c);\n\
+             print(s, getx({}), getx(Object.create(null)), getx('str'), getx(5));\n\
+             print(t, getxs({}), getxs(Object.create(null)), getxs('str'), getxs(5));",
         ),
     },
     Case {
         path: "ic-named",
-        name: "the smi handler kinds of a named load (in-object and out-of-line fields, array and string length) or Reflect.get",
+        name: "the smi handler kinds of a named load and of the fused GetNamedPropertyStar (in-object and out-of-line fields, array and string length) or Reflect.get",
         src: "function fresh(n) { var o = {}; for (var i = 0; i < n; i++) o['p' + i] = i; o.x = n; return o; }\n\
               function gx(o) { return o.x; } function len(o) { return o.length; }\n\
-              var s = 0, r = [];\n\
-              for (var k = 0; k < 3; k++) for (var n = 0; n < 14; n++) s += gx(fresh(n));\n\
+              function gxs(o) { var v = o.x; return v; } function lens(o) { var n = o.length; return n; }\n\
+              var s = 0, r = [], q = [];\n\
+              for (var k = 0; k < 3; k++) for (var n = 0; n < 14; n++) { s += gx(fresh(n)); q.push(gxs(fresh(n))); }\n\
               var a = [1, 2, 3], t = 'abcd';\n\
-              for (var k = 0; k < 20; k++) { a.push(k); r.push(len(a), len(t + k), len(fresh(k & 3))); }\n\
-              print(s, r.join());",
+              for (var k = 0; k < 20; k++) { a.push(k); r.push(len(a), len(t + k), len(fresh(k & 3))); q.push(lens(a), lens(t + k), lens(fresh(k & 3))); }\n\
+              print(s, r.join());\n\
+              print(q.join());",
         spec: Some(
             "function fresh(n) { var o = {}; for (var i = 0; i < n; i++) o['p' + i] = i; o.x = n; return o; }\n\
              function gx(o) { return Reflect.get(Object(o), 'x', o); } function len(o) { return Reflect.get(Object(o), 'length', o); }\n\
-             var s = 0, r = [];\n\
-             for (var k = 0; k < 3; k++) for (var n = 0; n < 14; n++) s += gx(fresh(n));\n\
+             function gxs(o) { var v = Reflect.get(Object(o), 'x', o); return v; } function lens(o) { var n = Reflect.get(Object(o), 'length', o); return n; }\n\
+             var s = 0, r = [], q = [];\n\
+             for (var k = 0; k < 3; k++) for (var n = 0; n < 14; n++) { s += gx(fresh(n)); q.push(gxs(fresh(n))); }\n\
              var a = [1, 2, 3], t = 'abcd';\n\
-             for (var k = 0; k < 20; k++) { a.push(k); r.push(len(a), len(t + k), len(fresh(k & 3))); }\n\
-             print(s, r.join());",
+             for (var k = 0; k < 20; k++) { a.push(k); r.push(len(a), len(t + k), len(fresh(k & 3))); q.push(lens(a), lens(t + k), lens(fresh(k & 3))); }\n\
+             print(s, r.join());\n\
+             print(q.join());",
         ),
     },
     // M8-P0 TS-STORE: a megamorphic 0x24 store probes the stub cache in the handler's cold
