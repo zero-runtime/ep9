@@ -75,10 +75,13 @@
 //! only with each Linux x64 leg of the same CPU model. Per item and build, each pair gives the
 //! ratio interval [Windows low / Linux high, Windows high / Linux low] of the two leg intervals
 //! (for TS: 1 / the gross ep9 time `time_s` at each end, 10:157; not the ratio to node).
-//! A pair counts for a part only when both legs give an interval (a void or missing row gives
-//! none): such a pair is named and not counted, so it does not stop the part on its own. The
-//! part needs at least 2 independent same-model Linux x64 legs among its counted pairs (legs,
-//! not pairs: plan v16 V16-D27), else it is neither, and the text names the count and the legs.
+//! A void or missing row gives no interval. A pair counts for a part only when both legs give
+//! an interval. A pair whose Windows leg gives one and whose Linux leg gives none is named and
+//! not counted, so it does not stop the part on its own; a Windows row with no interval stops
+//! the part (V16-D27 counts Linux legs only). The part needs at least 2 independent Linux x64
+//! legs of one CPU model among its counted pairs (legs, not pairs: plan v16 V16-D27; 2 legs of 2
+//! CPU models are 1 leg per model), else it is neither, and the text names the count and the
+//! legs (per CPU model when the counted pairs are of more than one).
 //! The part is above when every counted pair's low end is >= 0.9, below when every counted
 //! pair's high end is < 0.9, else neither. The cell reads `MARGINAL (no gate host): AGREE
 //! above` when every part is above, `FAIL-SIDE (no gate host): AGREE below` when a part is
@@ -2643,11 +2646,13 @@ fn cross_form(c: &Ctx, ids: &[&str], builds: &[&str]) -> Result<(HostForm, Strin
                 continue;
             };
             // V16-D27: a pair counts only when both legs give an interval; the part needs
-            // MIN_LINUX_LEGS distinct Linux legs among the counted pairs.
+            // MIN_LINUX_LEGS distinct Linux legs of one CPU model among the counted pairs. A
+            // Windows row with no interval stops the part (the rule counts Linux legs only).
             let mut ivs = Vec::new();
             let mut texts = Vec::new();
-            let mut counted = BTreeSet::new();
+            let mut counted: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
             let mut dropped = Vec::new();
+            let mut win_void = false;
             for (w, l) in &pairs {
                 let pair = format!("{}/{}", leg_name(w), leg_name(l));
                 match (leg_interval(w, b, item), leg_interval(l, b, item)) {
@@ -2655,10 +2660,16 @@ fn cross_form(c: &Ctx, ids: &[&str], builds: &[&str]) -> Result<(HostForm, Strin
                         let (lo, hi) = (wi.0 / li.1, wi.1 / li.0);
                         texts.push(format!("{pair} [{lo:.3}, {hi:.3}]"));
                         ivs.push((wi, li));
-                        counted.insert(leg_name(l));
+                        counted
+                            .entry(leg_cpu(l).unwrap_or(""))
+                            .or_default()
+                            .insert(leg_name(l));
                     }
                     (wi, li) => {
-                        dropped.push(pair.clone());
+                        win_void |= wi.is_err();
+                        if wi.is_ok() {
+                            dropped.push(pair.clone());
+                        }
                         let e = |x: Result<(f64, f64), String>| x.err().unwrap_or_default();
                         texts.push(format!(
                             "{pair}: {}",
@@ -2671,8 +2682,12 @@ fn cross_form(c: &Ctx, ids: &[&str], builds: &[&str]) -> Result<(HostForm, Strin
                     }
                 }
             }
-            let enough = counted.len() >= MIN_LINUX_LEGS;
-            let side = if enough { cross_side(&ivs) } else { None };
+            let enough = counted.values().any(|s| s.len() >= MIN_LINUX_LEGS);
+            let side = if enough && !win_void {
+                cross_side(&ivs)
+            } else {
+                None
+            };
             all_above &= side == Some(true);
             any_below |= side == Some(false);
             let word = match side {
@@ -2680,10 +2695,10 @@ fn cross_form(c: &Ctx, ids: &[&str], builds: &[&str]) -> Result<(HostForm, Strin
                 Some(false) => "AGREE below",
                 None => "NO AGREEMENT",
             };
-            let count = if enough && dropped.is_empty() {
+            let count = if enough && dropped.is_empty() && !win_void {
                 String::new()
             } else {
-                format!("; {}", leg_count(&counted, &dropped))
+                format!("; {}", leg_count(&counted, &dropped, win_void))
             };
             parts.push(format!(
                 "{b} item {item}: {}{count}: {word}",
@@ -2715,7 +2730,7 @@ fn cross_form(c: &Ctx, ids: &[&str], builds: &[&str]) -> Result<(HostForm, Strin
     Ok((
         form,
         format!(
-            "Windows / Linux x64 on same-CPU-model GitHub runner pairs (V15-D16: the same hardware class of 10-quality.md:84; the interval >= {WINDOWS_MIN} needed, 09:66; not a gate host, 10:157; a part needs at least {MIN_LINUX_LEGS} independent same-model Linux x64 legs whose row is not void, legs not pairs, V16-D27; {} and {}): pairs {names}; {}{}; {prov}",
+            "Windows / Linux x64 on same-CPU-model GitHub runner pairs (V15-D16: the same hardware class of 10-quality.md:84; the interval >= {WINDOWS_MIN} needed, 09:66; not a gate host, 10:157; a part needs at least {MIN_LINUX_LEGS} independent Linux x64 legs of one CPU model whose row is not void, legs not pairs, and a void Windows row stops it, V16-D27; {} and {}): pairs {names}; {}{}; {prov}",
             wp.display(),
             lp.display(),
             parts.join("; "),
@@ -2728,24 +2743,42 @@ fn cross_form(c: &Ctx, ids: &[&str], builds: &[&str]) -> Result<(HostForm, Strin
     ))
 }
 
-/// The V16-D27 count text of a part: the independent same-model Linux legs of its counted pairs,
-/// the need when they are fewer than [`MIN_LINUX_LEGS`], and the pairs that are not counted.
-fn leg_count(counted: &BTreeSet<&str>, dropped: &[String]) -> String {
-    let n = counted.len();
-    let names = if n == 0 {
-        "none".to_string()
-    } else {
-        counted.iter().copied().collect::<Vec<_>>().join(", ")
+/// The V16-D27 count text of a part: the independent same-model Linux legs of its counted pairs
+/// (per CPU model when they are of more than one), the need when no CPU model has
+/// [`MIN_LINUX_LEGS`] of them, the pairs that are not counted, and a void Windows row (it stops
+/// the part).
+fn leg_count(
+    counted: &BTreeMap<&str, BTreeSet<&str>>,
+    dropped: &[String],
+    win_void: bool,
+) -> String {
+    let n = counted.values().map(BTreeSet::len).max().unwrap_or(0);
+    let s = if n == 1 { "" } else { "s" };
+    let join = |legs: &BTreeSet<&str>| legs.iter().copied().collect::<Vec<_>>().join(", ");
+    let first = match counted.len() {
+        0 => "0 independent same-model Linux legs with this row not void (none)".to_string(),
+        1 => format!(
+            "{n} independent same-model Linux leg{s} with this row not void ({})",
+            counted.values().map(join).collect::<String>()
+        ),
+        _ => format!(
+            "at most {n} independent same-model Linux leg{s} of one CPU model with this row not void ({})",
+            counted
+                .iter()
+                .map(|(m, legs)| format!("{}: {}", if m.is_empty() { "?" } else { m }, join(legs)))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
     };
-    let mut text = vec![format!(
-        "{n} independent same-model Linux leg{} with this row not void ({names})",
-        if n == 1 { "" } else { "s" }
-    )];
+    let mut text = vec![first];
     if n < MIN_LINUX_LEGS {
-        text.push(format!("{MIN_LINUX_LEGS} needed"));
+        text.push(format!("{MIN_LINUX_LEGS} needed, of one CPU model"));
     }
     if !dropped.is_empty() {
         text.push(format!("not counted: {}", dropped.join(", ")));
+    }
+    if win_void {
+        text.push("a Windows row is void: the part stops (the rule counts Linux legs only)".into());
     }
     format!("{} (V16-D27)", text.join("; "))
 }
@@ -4517,7 +4550,7 @@ mod tests {
             "{ev}"
         );
         assert!(
-            ev.contains("a part needs at least 2 independent same-model Linux x64 legs whose row is not void, legs not pairs, V16-D27;"),
+            ev.contains("a part needs at least 2 independent Linux x64 legs of one CPU model whose row is not void, legs not pairs, and a void Windows row stops it, V16-D27;"),
             "{ev}"
         );
         assert!(!rep.missing.iter().any(|m| m.starts_with("--linux-pathb")));
@@ -5025,7 +5058,7 @@ mod tests {
                 "{ev}"
             );
             assert!(
-                ev.contains("; 1 independent same-model Linux leg with this row not void (l1); 2 needed (V16-D27): NO AGREEMENT"),
+                ev.contains("; 1 independent same-model Linux leg with this row not void (l1); 2 needed, of one CPU model (V16-D27): NO AGREEMENT"),
                 "{ev}"
             );
             assert!(
@@ -5040,7 +5073,7 @@ mod tests {
         })
         .unwrap();
         assert!(
-            rep.cells[1].evidence.contains("jit item 2: w2/l1 [0.926, 0.992], w3/l1 [0.934, 1.000]; 1 independent same-model Linux leg with this row not void (l1); 2 needed (V16-D27): NO AGREEMENT"),
+            rep.cells[1].evidence.contains("jit item 2: w2/l1 [0.926, 0.992], w3/l1 [0.934, 1.000]; 1 independent same-model Linux leg with this row not void (l1); 2 needed, of one CPU model (V16-D27): NO AGREEMENT"),
             "{}",
             rep.cells[1].evidence
         );
@@ -5097,27 +5130,130 @@ mod tests {
         for k in [0, 5] {
             let ev = &two[k].1;
             assert!(
-                ev.contains(&format!("jitless item 1: w2/l1: {v1}, w2/l2: {v2}, w2/l3 [0.925, 1.007], w3/l1: {v1}, w3/l2: {v2}, w3/l3 [0.932, 1.014]; 1 independent same-model Linux leg with this row not void (l3); 2 needed; not counted: w2/l1, w2/l2, w3/l1, w3/l2 (V16-D27): NO AGREEMENT")),
+                ev.contains(&format!("jitless item 1: w2/l1: {v1}, w2/l2: {v2}, w2/l3 [0.925, 1.007], w3/l1: {v1}, w3/l2: {v2}, w3/l3 [0.932, 1.014]; 1 independent same-model Linux leg with this row not void (l3); 2 needed, of one CPU model; not counted: w2/l1, w2/l2, w3/l1, w3/l2 (V16-D27): NO AGREEMENT")),
                 "{ev}"
             );
         }
     }
 
+    /// V16-D27 (EI4 check F1): l1 is of the model of w2 and w3, l2 of the model of w1 and w4
+    /// (with the w1 values), l3 of neither. The counted pairs hold 2 Linux legs, but 1 leg per
+    /// CPU model, so each part reads NO AGREEMENT and names both models, although every pair is
+    /// above 0.9 (a count across the models read AGREE above).
+    #[test]
+    fn windows_cross_form_with_two_legs_of_two_models_reads_no_agreement() {
+        let r = repo("pathb-run-2models");
+        let (m, i) = (
+            "AMD EPYC 7763 64-Core Processor",
+            "Intel Xeon Platinum 8370C",
+        );
+        let count = format!(
+            "at most 1 independent same-model Linux leg of one CPU model with this row not void ({m}: l1; {i}: l2); 2 needed, of one CPU model (V16-D27): NO AGREEMENT"
+        );
+        let cells = run_cross(&r, "pathb-run-linux-2models.json");
+        for (form, ev) in &cells {
+            assert_eq!(*form, Some(HostForm::NoAgreement), "{ev}");
+            assert!(
+                ev.contains(&format!(
+                    "pairs w2/l1 ({m}), w1/l2 ({i}), w3/l1 ({m}), w4/l2 ({i});"
+                )),
+                "{ev}"
+            );
+            assert!(ev.contains(&format!("; {count}")), "{ev}");
+            assert!(
+                !ev.contains("AGREE above") && !ev.contains("not counted"),
+                "{ev}"
+            );
+        }
+        assert!(
+            cells[0].1.contains(&format!("jit item 1: w2/l1 [0.926, 1.007], w1/l2 [0.957, 1.045], w3/l1 [0.932, 1.014], w4/l2 [0.964, 1.053]; {count}")),
+            "{}",
+            cells[0].1
+        );
+    }
+
+    /// V16-D27 (EI4 check F2): the jitless item 1 row of w2 has no interval. The rule counts
+    /// Linux legs only, so a void Windows row stops the part (as before the rule): the part, and
+    /// the cells that hold it (items 1 and D11), read NO AGREEMENT, not the AGREE above of w3
+    /// alone. The pairs of w2 are named, and are not in the "not counted" list of Linux voids.
+    /// The other parts read as before, with no count text.
+    #[test]
+    fn windows_cross_form_with_a_void_windows_row_reads_no_agreement() {
+        use HostForm::{AgreeAbove, NoAgreement};
+        let r = repo("pathb-run-winvoid");
+        let row =
+            "      \"median\": 1.38,\n      \"interval\": [\n       1.35,\n       1.41\n      ],";
+        let win = fixture("pathb-run-win.json").replace(SHA, &r.head);
+        assert_eq!(win.matches(row).count(), 1, "the jitless item 1 row of w2");
+        write(
+            &r.root,
+            "inputs/win-void.json",
+            &win.replace(row, "      \"median\": 1.38,\n      \"interval\": null,"),
+        );
+        let o = Options {
+            pathb: Some(r.root.join("inputs/win-void.json")),
+            linux_pathb: Some(input(&r, "pathb-run-linux.json")),
+            ..opts(&r, WINDOWS_X64)
+        };
+        let rep = run(&o).unwrap();
+        let forms: Vec<Option<HostForm>> = SPEED.iter().map(|&i| rep.forms[i]).collect();
+        let want = [
+            NoAgreement,
+            AgreeAbove,
+            AgreeAbove,
+            AgreeAbove,
+            AgreeAbove,
+            NoAgreement,
+        ];
+        assert_eq!(forms, want.map(Some));
+        for k in [0, 5] {
+            let ev = &rep.cells[SPEED[k]].evidence;
+            assert!(
+                ev.contains("jitless item 1: w2/l1: ")
+                    && ev.contains(", w3/l1 [0.932, 1.014], w3/l2 [0.932, 1.014]; 2 independent same-model Linux legs with this row not void (l1, l2); a Windows row is void: the part stops (the rule counts Linux legs only) (V16-D27): NO AGREEMENT"),
+                "{ev}"
+            );
+            assert!(!ev.contains("not counted"), "{ev}");
+        }
+        let ev = &rep.cells[SPEED[1]].evidence;
+        assert!(!ev.contains("independent same-model Linux leg"), "{ev}");
+    }
+
     /// V16-D27: the count text of a part.
     #[test]
     fn leg_count_names_the_legs_the_need_and_the_pairs_not_counted() {
-        let set = |x: &[&'static str]| x.iter().copied().collect::<BTreeSet<&str>>();
+        let m = "AMD EPYC 7763 64-Core Processor";
+        let i = "Intel Xeon Platinum 8370C";
+        let set = |x: &[(&'static str, &'static str)]| {
+            let mut c: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+            for (k, l) in x {
+                c.entry(*k).or_default().insert(*l);
+            }
+            c
+        };
         assert_eq!(
-            leg_count(&set(&[]), &["w2/l1".into()]),
-            "0 independent same-model Linux legs with this row not void (none); 2 needed; not counted: w2/l1 (V16-D27)"
+            leg_count(&set(&[]), &["w2/l1".into()], false),
+            "0 independent same-model Linux legs with this row not void (none); 2 needed, of one CPU model; not counted: w2/l1 (V16-D27)"
         );
         assert_eq!(
-            leg_count(&set(&["l1"]), &[]),
-            "1 independent same-model Linux leg with this row not void (l1); 2 needed (V16-D27)"
+            leg_count(&set(&[(m, "l1")]), &[], false),
+            "1 independent same-model Linux leg with this row not void (l1); 2 needed, of one CPU model (V16-D27)"
         );
         assert_eq!(
-            leg_count(&set(&["l3", "l1"]), &["w2/l2".into()]),
+            leg_count(&set(&[(m, "l3"), (m, "l1")]), &["w2/l2".into()], false),
             "2 independent same-model Linux legs with this row not void (l1, l3); not counted: w2/l2 (V16-D27)"
+        );
+        // F1: 2 legs of 2 CPU models are 1 leg per model.
+        assert_eq!(
+            leg_count(&set(&[(m, "l1"), (i, "l2")]), &[], false),
+            format!(
+                "at most 1 independent same-model Linux leg of one CPU model with this row not void ({m}: l1; {i}: l2); 2 needed, of one CPU model (V16-D27)"
+            )
+        );
+        // F2: a void Windows row stops the part.
+        assert_eq!(
+            leg_count(&set(&[(m, "l1"), (m, "l2")]), &[], true),
+            "2 independent same-model Linux legs with this row not void (l1, l2); a Windows row is void: the part stops (the rule counts Linux legs only) (V16-D27)"
         );
     }
 }

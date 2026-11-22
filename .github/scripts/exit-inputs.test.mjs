@@ -501,8 +501,9 @@ test("readLeg and the legs block: the host.toml id, run_id and run_attempt of ea
 // gha-pathb-l2 missing, an id that is not a slot). The void-leg fixtures (V16-D27; a win-x64
 // part needs 2 independent same-model Linux legs whose row gives an interval): -1leg (l1 of the
 // Windows pair's model, l2 and l3 of another model: 1 leg), -void (l1..l3 of the Windows pair's
-// model, a void kernel row on l2 in jitless item 1: 2 legs, l1 and l3) and -void2 (that row void
-// on l1 and l2: 1 leg, l3).
+// model, a void kernel row on l2 in jitless item 1: 2 legs, l1 and l3), -void2 (that row void
+// on l1 and l2: 1 leg, l3) and -2models (l1 of the Windows pair's model, l2 of the Intel model of
+// w1 and w4 with the w1 values: 2 legs of 2 CPU models, 1 leg per model).
 test("compare: the m2-exit fixtures pathb-run-*.json (run ids and slot ids in the legs block)", () => {
   const gates = { w1: gateOf(1.0), w2: gateOf(1.05), w3: gateOf(1.06), w4: gateOf(1.01), l1: gateOf(1.1), l2: gateOf(1.1), l3: gateOf(1.1) };
   const readGate = (runs) => gates[runs[0].source.split("/")[0]];
@@ -552,4 +553,10 @@ test("compare: the m2-exit fixtures pathb-run-*.json (run ids and slot ids in th
   const v2 = compare(same(), { readGate: (runs) => g2[runs[0].source.split("/")[0]] });
   assert.deepEqual(["l1", "l2", "l3"].map((l) => item1(v2, l, "jitless").interval), [null, null, [1.4, 1.46]]);
   fixture("pathb-run-linux-void2.json", v2);
+  // V16-D27, the 2-model fixture: each Windows model pairs with 1 Linux leg (w2, w3 with l1; w1,
+  // w4 with l2), so no CPU model has 2 legs.
+  const g3 = { ...gates, l2: gateOf(1.0) };
+  const twoModels = compare([ids(lin("l1"), "gha-pathb-l1"), ids(lin("l2", intel), "gha-pathb-l2"), l3()], { readGate: (runs) => g3[runs[0].source.split("/")[0]] });
+  assert.deepEqual(twoModels.legs.map((l) => l.cpu), [WIN_CPU, intel, EPYC4]);
+  fixture("pathb-run-linux-2models.json", twoModels);
 });
