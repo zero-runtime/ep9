@@ -809,9 +809,10 @@ fn same_constants(a: &[ep9_bytecode::Constant], b: &[ep9_bytecode::Constant]) ->
         })
 }
 
-/// The checks of one source text: the plain and the optimized unit have the same binding
-/// loads and stores (H24 R4), the same other instructions in the same order, the same
-/// statement positions (H24 R5) and the same side tables except code offsets.
+/// The checks of one source text (guard v2: plain against the merged mode): the plain and the
+/// optimized unit have the same binding loads and stores, except the dead loads that T1 proves
+/// (H24 R4), the same other instructions in the same order, the same statement entries, each
+/// inside its statement (H24 R5), and the same side tables except code offsets.
 pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
     let (plain, opt, named) = match super::compile_both(src, opts) {
         Ok(t) => t,
@@ -819,19 +820,14 @@ pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
     };
     let (p, o) = (plain.unit(), opt.unit());
     let mut out = Vec::new();
-    // Guard v2 (LDAR-ELIDE): in arm 1 or arm 2, a binding load may be missing only if T1 proves
-    // it dead, and a statement entry may move inside its statement.
-    let arm = super::regopt::Mode::from_env();
-    let t1 = (arm != super::regopt::Mode::Arm0).then(|| ldar_elision_differences(src, opts, arm));
-    if let Some(t1) = &t1 {
-        out.extend(t1.differences.iter().map(|d| format!("LDAR-ELIDE T1: {d}")));
-    }
+    // Guard v2 (LDAR-ELIDE, M11-P0): plain against the merged mode. A binding load may be
+    // missing only if T1 (arm 0 against the merged mode) proves it dead, and a statement entry
+    // may move inside its statement.
+    let t1 = ldar_elision_differences(src, opts, super::regopt::DEFAULT);
+    out.extend(t1.differences.iter().map(|d| format!("LDAR-ELIDE T1: {d}")));
     for (i, (fp, fo)) in p.functions.iter().zip(&o.functions).enumerate() {
         let n = named[i];
-        let mut dead: Vec<String> = t1
-            .as_ref()
-            .and_then(|t| t.dropped.get(i).cloned())
-            .unwrap_or_default();
+        let mut dead: Vec<String> = t1.dropped.get(i).cloned().unwrap_or_default();
         let (ap, ao) = (binding_accesses(fp, n), binding_accesses(fo, n));
         // Stores and variable accesses are the same.
         let fixed = |v: &[String]| -> Vec<String> {
@@ -846,8 +842,9 @@ pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
                 "f{i}: binding stores or variable accesses differ (H24 R4)"
             ));
         }
-        // Each `Ldar` and `Mov` from a binding stays (regopt O2). The optimizer may add more:
-        // it reads a binding that holds a temporary's value (O4, O5).
+        // Each `Mov` from a binding, and each `Ldar` from one that T1 does not prove dead, stays
+        // (regopt O2). The optimizer may add more: it reads a binding that holds a temporary's
+        // value (O4, O5).
         let mut extra: Vec<&String> = ao.iter().collect();
         for a in ap
             .iter()
@@ -858,7 +855,7 @@ pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
                     extra.remove(at);
                 }
                 None => match dead.iter().position(|x| x == a) {
-                    // T1 proved this load dead (LDAR-ELIDE A1).
+                    // T1 proved this load dead (LDAR-ELIDE O2).
                     Some(at) => {
                         dead.remove(at);
                     }
@@ -869,10 +866,7 @@ pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
         if non_transfers(fp) != non_transfers(fo) {
             out.push(format!("f{i}: instructions other than transfers differ"));
         }
-        if t1.is_none() && statement_positions(fp) != statement_positions(fo) {
-            out.push(format!("f{i}: statement positions differ"));
-        }
-        if t1.is_some() && !statements_moved_inside(fp, fo) {
+        if !statements_moved_inside(fp, fo) {
             out.push(format!("f{i}: statement positions differ (guard v2)"));
         }
         if fp.register_count != fo.register_count
@@ -898,9 +892,10 @@ pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
     out
 }
 
-/// V12-D46 guard: every golden case (the H24 R4 goldens among them, for example `var-closure`
-/// and `assign-const`) keeps every binding load and store of its source with the register
-/// optimizer, and the optimizer changes only transfers.
+/// V12-D46 guard, v2 (guard v2: plain against the merged mode, M11-P0): every golden case (the
+/// H24 R4 goldens among them, for example `var-closure` and `assign-const`) keeps every binding
+/// store and every binding load whose value is read with the register optimizer, and the
+/// optimizer changes only transfers.
 #[test]
 fn register_optimizer_keeps_binding_loads_and_stores() {
     let mut failures = Vec::new();
@@ -1367,7 +1362,7 @@ fn synthetic_class_bindings_live_in_the_class_context() {
     assert!(class.needs_context);
 }
 
-// ---- LDAR-ELIDE probe: dead statement-position `Ldar` (regopt rules A1-A3) ----
+// ---- LDAR-ELIDE: dead binding `Ldar` (regopt rules O2, O9, O12; merged as arm 2, M11-P0) ----
 
 use super::regopt::Mode as Arm;
 
@@ -1554,18 +1549,15 @@ fn ldar_elide_expected_texts() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
-/// S1b: arm 0 is today's output (the plain mode is the guard reference; arm 0 is the default
-/// with `EP9_LDAR_ELIDE` not set). Every golden case gives the same bytes in arm 0 and through
-/// [`compile_case`].
+/// The default is arm 2 (M11-P0, DL M11-P0-LDAR-VERDICT): every golden case gives the same
+/// bytes through [`compile_case`] and in arm 2. Arm 0 is the test-only reference of T1: the
+/// m10-p5 bytecode (the octane-typescript dump sha256 288c4ded...).
 #[test]
-fn ldar_elide_arm0_is_todays_output() {
-    if Arm::from_env() != Arm::Arm0 {
-        return;
-    }
+fn ldar_elide_default_is_arm2() {
     for &(name, mode, src) in CASES {
-        let a0 = arm_units(src, mode.opts(), &[Arm::Arm0]);
-        let today = compile_case(mode, src).unwrap();
-        assert_eq!(a0[0].to_bytes(), today.to_bytes(), "{name}");
+        let a2 = arm_units(src, mode.opts(), &[Arm::Arm2]);
+        let default = compile_case(mode, src).unwrap();
+        assert_eq!(a2[0].to_bytes(), default.to_bytes(), "{name}");
     }
 }
 
@@ -1646,9 +1638,9 @@ fn t1_covering(f: &ep9_bytecode::Function, off: u32) -> Option<u32> {
 
 /// Why the load at `code[k]` is not dead (rule L1, with L2: `Mov` instructions may come first),
 /// or `Ok(n)`: `code[n]` writes the accumulator and does not read it. With `o7` (a load that
-/// the arm kept), a throwing `code[n]` inside a handler range is a reason too (rule A1 emits the
+/// the arm kept), a throwing `code[n]` inside a handler range is a reason too (rule O2 emits the
 /// owed load there; the load is still dead: a handler gets the exception in the accumulator),
-/// and so is a `Mov` run before the write (rule A1 emits the owed load before an emitted `Mov`). A label or a
+/// and so is a `Mov` run before the write (rule O2 emits the owed load before an emitted `Mov`). A label or a
 /// statement entry is a reason on every instruction of the scan with `o7`, and only on
 /// `code[k + 1]` without it.
 fn t1_dead_after(
@@ -1678,7 +1670,7 @@ fn t1_dead_after(
         if x.op != Opcode::Mov && !write_only {
             return Err("live");
         }
-        // A label or a statement entry on the next instruction settles an owed load (A1, A2).
+        // A label or a statement entry on the next instruction settles an owed load (O2, O9).
         // After a `Mov` run (L2) a deferred transfer replaced the load, so without `o7` the
         // test is liveness only: the load is dead even when the write is at a label or a
         // statement entry.
@@ -1698,7 +1690,7 @@ fn t1_dead_after(
             return Err("handler range");
         }
         if o7 && n > k + 1 {
-            // L2: dead, but A1 emits the owed load before the emitted `Mov`.
+            // L2: dead, but O2 emits the owed load before the emitted `Mov`.
             return Err("mov");
         }
         return Ok(n);
@@ -1760,7 +1752,7 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
                 .iter()
                 .any(|p| p.bytecode_offset == off && p.is_statement)
         };
-        // Arm 2 emits a binding `Ldar` that has an expression entry in place (A1 does not owe
+        // Arm 2 emits a binding `Ldar` that has an expression entry in place (O2 does not owe
         // it), so T1 does not align it as a dropped load.
         let expr0 = |off: u32| {
             arm == Arm::Arm2
@@ -1966,9 +1958,9 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
                     {
                         rep.kept.push(format!("f{fi} @{} Ldar {r}: expr", y.off));
                     }
-                    // Arm 2 owes each other `Ldar` from a binding register (A1), also with no
+                    // Arm 2 owes each other `Ldar` from a binding register (O2), also with no
                     // statement entry, and drops it when the next instruction writes the
-                    // accumulator (L1). After a `Mov` (L2) it can stay: A1 emits an owed load
+                    // accumulator (L1). After a `Mov` (L2) it can stay: O2 emits an owed load
                     // before an emitted `Mov`, and T1 cannot tell that `Mov` from one that the
                     // replay makes for an operand of the next instruction.
                     Some(r)
@@ -2011,7 +2003,7 @@ fn ldar_elision_differential() {
             "function w1(p) { var r; r = (p, this); return r; } \
              function w8(p) { var r; try { r = (p, this); } catch (e) {} return r; }",
         ),
-        // A3, the throw default. u24: a load before a throw at the next statement is kept.
+        // O12, the throw default. u24: a load before a throw at the next statement is kept.
         // u25: the `LdaGlobal` of a declared global has no expression position of its own; it
         // takes the carried statement with the throw default, the offset of `g25` (INV-1).
         (
@@ -2022,7 +2014,7 @@ fn ldar_elision_differential() {
         ),
         // A dead load with no statement entry: arm 1 keeps it, arm 2 drops it.
         ("unmarked", Sloppy, "function f(p) { return (0, p, 1); }"),
-        // A dead statement load before an emitted `Mov` (L2): A1 emits the owed load before
+        // A dead statement load before an emitted `Mov` (L2): O2 emits the owed load before
         // the `Mov`, so it is kept with the reason "mov" (corpus: babel, chai, lebab).
         (
             "mov",
@@ -2100,7 +2092,7 @@ fn ldar_elision_mutants_fail() {
         sloppy,
         "INV-2"
     ));
-    // (g) the throw default of A3 is not used: a throwing instruction with no expression
+    // (g) the throw default of O12 is not used: a throwing instruction with no expression
     // position of its own takes the carried statement offset; the `LdaGlobal` of `g25` reports
     // the offset of `return` (INV-1).
     assert!(t1_fails(

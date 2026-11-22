@@ -188,7 +188,8 @@ pub fn compile(
 }
 
 /// Test only: compile `source` twice from one scope analysis, with the register optimizer off
-/// and on, and give the named-local count of each function (G1; the H24 R4 guard test).
+/// and in the merged mode, and give the named-local count of each function (G1; the H24 R4
+/// guard test).
 #[cfg(test)]
 pub(crate) fn compile_both(
     source: &str,
@@ -208,13 +209,8 @@ pub(crate) fn compile_both(
             regopt::Mode::Plain,
         )
         .and_then(|plain| {
-            generate_with(
-                fe,
-                &analysis,
-                CompileOptions::default(),
-                regopt::Mode::from_env(),
-            )
-            .map(|opt| (plain, opt, named))
+            generate_with(fe, &analysis, CompileOptions::default(), regopt::DEFAULT)
+                .map(|opt| (plain, opt, named))
         }))
     })?
 }
@@ -360,7 +356,7 @@ pub(crate) fn generate(
     sa: &ScopeAnalysis,
     options: CompileOptions,
 ) -> Result<VerifiedUnit, CodegenError> {
-    generate_with(fe, sa, options, regopt::Mode::from_env())
+    generate_with(fe, sa, options, regopt::DEFAULT)
 }
 
 /// [`generate`], with the register optimizer on or off.

@@ -17,29 +17,28 @@
 //! | # | Rule | Why |
 //! |---|---|---|
 //! | O1 | A register is *observable* if it is the receiver, a parameter or a named local (a binding, G1). Every write to it is emitted | the frame, the debugger and the arguments object read it |
-//! | O2 | Every load from a binding register (`Ldar` or `Mov` from a parameter or a named local) is emitted | H24 R4 "no binding folds": each read of a binding loads the binding |
+//! | O2 | A `Mov` from a binding register (a parameter or a named local) is emitted. An `Ldar` from a binding register is *owed*, not emitted, unless an expression position is pending: then it is emitted in place. An `Ldar` from the receiver is owed when it takes a pending statement position; else it is a deferred transfer (O3). An owed `Ldar` puts the accumulator in the set of its register. It is emitted before: an instruction that reads the accumulator or does not write it; an emitted `Star` or `Mov`; a transfer that the replay materializes; a flush (O6); a handler-range start or end label; a throwing instruction inside a handler range (O7); a statement position; the function end. It is left out only when its value is dead: the next instruction writes the accumulator and does not read it, or a second `Ldar` replaces it. A deferred transfer to a temporary (O3) does not end the owed state. So some dead loads stay: before an emitted `Mov`, before a throwing instruction inside a handler range, and the anchor (O9) | H24 R4: no binding folds; a load whose value no instruction reads is left out (M11-P0 LDAR-ELIDE, DL M11-P0-LDAR-VERDICT) |
 //! | O3 | A transfer between the accumulator and temporaries is deferred: the destination joins the equivalence set of the source and is not materialized | BytecodeGen copies values to temporaries freely (G4) |
 //! | O4 | A register operand that is a temporary reads a materialized equivalent (never the accumulator). A call operand reads only a local, or a parameter or the receiver that the function never writes. A read of the accumulator, of a list, a pair or an in-out register materializes it | V8 `GetInputRegister`; lists and pairs must stay consecutive locals; JIT code passes call operands from frame slots, and a parameter's slot keeps its incoming value (Spike C `tier.rs`) |
 //! | O5 | Before a materialized register or the accumulator gets a new value, one other member of its set gets the value if no other member holds it and the member's value is not dead (a scan to its next write or release in the block) | no value is lost; this keeps the G4 hazard `a + (a = 1)` correct; a dead copy costs a `Mov` |
 //! | O6 | Flush (materialize every live register, then end every set) before a jump, a switch, `Debugger`, `SuspendGenerator` and `ResumeGenerator`, and at each label that a jump, a jump table or a handler uses | each edge into a join point has the same state |
 //! | O7 | Inside a handler range, before an instruction that may throw, materialize every temporary that was allocated at the range start | the handler reads only registers allocated before its range (stack allocation, G1) |
 //! | O8 | At a statement position, materialize every temporary that is in a set with an observable register | a debugger write at a breakpoint does not change a temporary copy |
-//! | O9 | A transfer with a pending statement position is emitted. An elided transfer drops a pending expression position | each statement keeps its position (H24 R5); an expression position names its own instruction |
+//! | O9 | A transfer with a pending statement position is emitted, except an owed `Ldar`. The statement position of an owed `Ldar` leaves the pending position and is *carried*. It goes to the owed `Ldar` when that is emitted, else to the first instruction that the replay gives the builder. If no instruction took it before the next statement position, flush, handler-range start or end, or the function end, the replay emits the `Ldar` with it (the anchor: the instruction of the plain code; the accumulator is not materialized then, so no value changes). An elided transfer drops a pending expression position, never the carry | each statement that emits code keeps one statement entry (H24 R5); an expression position names its own instruction |
 //! | O10 | After a terminator the state is "flushed" with no code: only a label (O6) reaches the next instruction | the state at that label is the flushed state of its jumps |
 //! | O11 | A new register whose set holds no value is materialized (its value is dead). A read of a register whose set has no materialized member is an internal error | a BytecodeGen bug (a read after release) must not compile |
+//! | O12 | The instruction that takes a carried statement position `o` (O9) gets a statement entry. Its source offset is its own expression position if one is pending (only an instruction of BytecodeGen and an emitted transfer take it), else the throw default if it can throw, else `o` | V8 `BytecodeArrayBuilder::AttachOrEmitDeferredSourceInfo`; the source offset that an instruction gives for a throw does not change (H24 R5) |
 //!
 //! With the optimizer off ([`Mode::Plain`]), the replay emits every event as recorded, so the
-//! output is the same as the output of a plain [`FunctionBuilder`].
+//! output is the same as the output of a plain [`FunctionBuilder`]. The plain mode is the
+//! reference of the H24 R4 guard (guard v2: plain against the merged mode). The front end
+//! compiles with [`DEFAULT`], the merged LDAR-ELIDE mode (arm 2, M11-P0), and reads no
+//! environment value.
 //!
-//! LDAR-ELIDE probe (not merged): the mode [`Mode::Arm1`] and [`Mode::Arm2`] change rules O2 and
-//! O9 as below. [`Mode::Arm0`] uses the table above (today's output, byte for byte). The process
-//! reads the mode once from `EP9_LDAR_ELIDE` (not set or `0` = arm 0, `1` = arm 1, `2` = arm 2).
-//!
-//! | # | Rule (arm 1 and arm 2) |
-//! |---|---|
-//! | A1 (O2) | Every `Mov` from a binding register is emitted. An `Ldar` from the receiver or a binding register that takes a pending statement position is *owed*, not emitted: the accumulator joins the set of the register (arm 2: each `Ldar` from a binding register is owed). An `Ldar` from the receiver with no pending statement position stays a deferred transfer (O3). The owed `Ldar` is emitted before: an instruction that reads the accumulator or does not write it; an emitted `Star` or `Mov`; a transfer that the replay materializes; a flush (O6); a handler-range start or end; a throwing instruction inside a handler range (O7); a statement position; the function end. It is dropped when the next instruction writes the accumulator and does not read it, or when a second `Ldar` replaces it. A deferred transfer to a temporary (O3) does not end the owed state |
-//! | A2 (O9) | A transfer with a pending statement position is emitted, except an owed `Ldar`. The statement position of an owed `Ldar` leaves the pending position and is *carried*. It goes to the owed `Ldar` when that is emitted, else to the first instruction that the replay gives the builder. If no instruction took it before the next statement position, flush, handler-range start or end, or the function end, the replay emits the `Ldar` with it (the anchor: today's instruction; the accumulator is not materialized then, so no value changes). An elided transfer drops a pending expression position, never the carry |
-//! | A3 | The instruction that takes a carried statement position `o` gets a statement entry. Its source offset is its own expression position if one is pending (only an instruction of BytecodeGen and an emitted transfer take it), else the throw default if it can throw, else `o` (V8 `BytecodeArrayBuilder::AttachOrEmitDeferredSourceInfo`) |
+//! Test-only modes (T1, T3): `Mode::Arm0` uses the rules before M11-P0 (O2: every load from a
+//! binding register is emitted; O9 and O12: no carry), which give the m10-p5 bytecode, the
+//! reference of T1. `Mode::Arm1` owes only an `Ldar` that takes a pending statement position.
+//! `Mode::Mutant` breaks one rule on purpose.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -110,37 +109,31 @@ pub(crate) struct Mark {
     top: u32,
 }
 
-/// The register optimizer mode (LDAR-ELIDE probe: the arms of the same-binary A/B).
+/// The register optimizer mode. The front end uses [`DEFAULT`]; [`Mode::Plain`] is the guard
+/// reference, and the other modes are test only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
     /// The optimizer is off (the reference of the H24 R4 guard).
     Plain,
-    /// The optimizer with the rules O1-O11 (today's output).
+    /// Test only (T1 reference): the optimizer with the rules before M11-P0 (the m10-p5
+    /// output): every load from a binding register is emitted, and no statement is carried.
+    #[cfg(test)]
     Arm0,
-    /// Arm 0, and a dead `Ldar` from the receiver or a binding at a statement start is not
-    /// emitted (A1-A3).
+    /// Test only: arm 0, and a dead `Ldar` from the receiver or a binding at a statement start
+    /// is left out (O2, O9, O12).
+    #[cfg(test)]
     Arm1,
-    /// Arm 1, and each dead `Ldar` from a binding is not emitted (A1, arm 2).
+    /// Arm 1, and each dead `Ldar` from a binding is left out (O2): the merged mode.
     Arm2,
     /// Test only (T3): arm 1 with one rule broken on purpose (`1..=6`: the mutants a-f of the
-    /// design, section 3.3; `7`: the A3 throw default is not used; `8`: a 2-entry jump table
+    /// design, section 3.3; `7`: the O12 throw default is not used; `8`: a 2-entry jump table
     /// gets its labels in the wrong order; `9`: the arm-2 elision rule).
     #[cfg(test)]
     Mutant(u8),
 }
 
-impl Mode {
-    /// The mode of this process: `EP9_LDAR_ELIDE` (not set, `0` or another value = arm 0,
-    /// `1` = arm 1, `2` = arm 2), read once.
-    pub(crate) fn from_env() -> Self {
-        static MODE: std::sync::OnceLock<Mode> = std::sync::OnceLock::new();
-        *MODE.get_or_init(|| match std::env::var("EP9_LDAR_ELIDE").as_deref() {
-            Ok("1") => Self::Arm1,
-            Ok("2") => Self::Arm2,
-            _ => Self::Arm0,
-        })
-    }
-}
+/// The merged LDAR-ELIDE mode (M11-P0, DL M11-P0-LDAR-VERDICT): the mode of the front end.
+pub(crate) const DEFAULT: Mode = Mode::Arm2;
 
 /// The function builder of BytecodeGen: the [`FunctionBuilder`] API, with the register
 /// optimizer between BytecodeGen and the builder.
@@ -375,8 +368,9 @@ impl Emitter {
         let inner_at = if mode != Mode::Plain {
             let mut r = Replay::new(&mut b, named, &events, &args, &table_labels, &handlers);
             r.elide = match mode {
-                Mode::Arm1 => 1,
                 Mode::Arm2 => 2,
+                #[cfg(test)]
+                Mode::Arm1 => 1,
                 #[cfg(test)]
                 Mode::Mutant(m) => {
                     r.mutant = m;
@@ -615,21 +609,22 @@ struct Replay<'b> {
     free: Vec<u32>,
     /// A position for the next emitted instruction of the function (builder rules).
     pending: Option<(u32, bool)>,
-    /// LDAR-ELIDE arm: 0 (rules O1-O11), 1 or 2 (rules A1-A3).
+    /// LDAR-ELIDE arm: 2 (the merged rules O1-O12); in tests also 0 (the rules before M11-P0)
+    /// or 1.
     elide: u8,
-    /// A1: the register of the owed `Ldar`. It is valid while the accumulator is not
+    /// O2: the register of the owed `Ldar`. It is valid while the accumulator is not
     /// materialized and is in the set of the register ([`Replay::emit_lazy`]).
     lazy: Option<usize>,
-    /// A1 (arm 2): the pending expression position of the owed `Ldar`. The load takes it when
+    /// O2 (arm 2): the pending expression position of the owed `Ldar`. The load takes it when
     /// it is emitted (INV-1); it is dropped with the load.
     lazy_expr: Option<u32>,
-    /// A2: the carried statement position (the statement offset of an owed `Ldar`).
+    /// O9: the carried statement position (the statement offset of an owed `Ldar`).
     carry_stmt: Option<u32>,
-    /// A2: the register of the `Ldar` that took the carried statement (for the anchor).
+    /// O9: the register of the `Ldar` that took the carried statement (for the anchor).
     carry_src: usize,
-    /// A3: a copy of the throw default of the builder (`Ev::Throw`).
+    /// O12: a copy of the throw default of the builder (`Ev::Throw`).
     throw_pos: Option<u32>,
-    /// A1: the start and end labels of handler ranges (the owed `Ldar` is emitted before one).
+    /// O2: the start and end labels of handler ranges (the owed `Ldar` is emitted before one).
     edges: HashSet<Label>,
     /// Test only (T3): the broken rule of [`Mode::Mutant`], or 0.
     #[cfg(test)]
@@ -811,7 +806,7 @@ impl<'b> Replay<'b> {
                 }
             }
         }
-        // A1, A2: the function end.
+        // O2, O9: the function end.
         self.settle();
     }
 
@@ -925,10 +920,10 @@ impl<'b> Replay<'b> {
     // ---- Code ----
 
     /// Emits the transfer `dst = src` (no position of its own; it takes a carried statement
-    /// position, A3).
+    /// position, O12).
     fn emit_transfer(&mut self, src: usize, dst: usize) {
         if dst != ACC {
-            // A1: an emitted `Star` or `Mov` comes after the owed `Ldar`.
+            // O2: an emitted `Star` or `Mov` comes after the owed `Ldar`.
             self.emit_lazy();
         }
         self.position(false, false);
@@ -945,7 +940,7 @@ impl<'b> Replay<'b> {
     }
 
     /// The position hook: before each instruction that the replay gives the builder. With a
-    /// carried statement position: rule A3 (`own`: the instruction takes the pending expression
+    /// carried statement position: rule O12 (`own`: the instruction takes the pending expression
     /// position; `throws`: it may throw). Else an `own` instruction takes the pending position.
     fn position(&mut self, own: bool, throws: bool) {
         if let Some(o) = self.carry_stmt.take() {
@@ -1074,7 +1069,7 @@ impl<'b> Replay<'b> {
     /// `k` is written next: save its value for its set, then make it a set of its own.
     fn prepare_output(&mut self, k: usize) {
         if k == ACC {
-            // A1: an owed `Ldar` that is not emitted now is dead.
+            // O2: an owed `Ldar` that is not emitted now is dead.
             self.lazy = None;
         }
         if self.mat[k] {
@@ -1087,7 +1082,7 @@ impl<'b> Replay<'b> {
     /// Makes register (or the accumulator) `k` hold its value.
     fn materialize(&mut self, k: usize) {
         if k == ACC {
-            // A1: an owed `Ldar` loads its own register.
+            // O2: an owed `Ldar` loads its own register.
             self.emit_lazy();
         }
         if self.mat[k] {
@@ -1251,7 +1246,7 @@ impl<'b> Replay<'b> {
         self.unmat = unmat;
     }
 
-    /// A1: emits the owed `Ldar` if the accumulator still waits for it. The load reads its own
+    /// O2: emits the owed `Ldar` if the accumulator still waits for it. The load reads its own
     /// register, not another member of the set.
     fn emit_lazy(&mut self) {
         if let Some(b) = self.lazy.take()
@@ -1262,7 +1257,7 @@ impl<'b> Replay<'b> {
         {
             if let Some(p) = self.lazy_expr.take() {
                 // The load gets its own expression position, as in arm 0; with a carried
-                // statement position, the entry takes this offset (A3).
+                // statement position, the entry takes this offset (O12).
                 let next = self.pending.replace((p, false));
                 self.position(true, false);
                 self.pending = next;
@@ -1272,7 +1267,7 @@ impl<'b> Replay<'b> {
         }
     }
 
-    /// A1, A2: emits the owed `Ldar`; then, if no instruction took the carried statement
+    /// O2, O9: emits the owed `Ldar`; then, if no instruction took the carried statement
     /// position, emits the anchor `Ldar` with it.
     fn settle(&mut self) {
         self.emit_lazy();
@@ -1287,7 +1282,7 @@ impl<'b> Replay<'b> {
             // would load over a live value: an internal error (also in a release build).
             if self.mat[ACC] {
                 self.carry_stmt = None;
-                self.fail("A2 anchor with a materialized accumulator");
+                self.fail("O9 anchor with a materialized accumulator");
                 return;
             }
             let src = self.carry_src;
@@ -1298,12 +1293,12 @@ impl<'b> Replay<'b> {
     /// `Ldar`, `Star` or `Mov` from BytecodeGen: `dst = src`.
     fn transfer(&mut self, src: usize, dst: usize) {
         if dst == ACC && !self.same(src, ACC) {
-            // A1: the accumulator gets a new value: an owed `Ldar` is dead.
+            // O2: the accumulator gets a new value: an owed `Ldar` is dead.
             self.lazy = None;
         }
         let mut stmt = matches!(self.pending, Some((_, true)))
             || (self.mutant(4) && self.carry_stmt.is_some());
-        // A1: the `Ldar` is owed (arm 1: at a statement start; arm 2: also any binding). Arm 2
+        // O2: the `Ldar` is owed (arm 1: at a statement start; arm 2: also any binding). Arm 2
         // does not owe a binding `Ldar` with an expression position: it is emitted in place, so
         // the next instruction keeps its source offset (INV-1).
         let owe = dst == ACC
@@ -1315,7 +1310,7 @@ impl<'b> Replay<'b> {
                         || (stmt && src == RECEIVER)
                 }
             };
-        // A2: the statement position of an owed `Ldar` leaves `pending`. It is carried from the
+        // O9: the statement position of an owed `Ldar` leaves `pending`. It is carried from the
         // end of this transfer (an O5 save below comes before the statement, as today).
         let carried = match self.pending {
             Some((o, true)) if owe => {
@@ -1330,7 +1325,7 @@ impl<'b> Replay<'b> {
             return;
         }
         // O9: the elided transfer drops its expression position. An owed `Ldar` keeps it for
-        // the time it is emitted (A1 above owes no binding load with an expression position,
+        // the time it is emitted (O2 above owes no binding load with an expression position,
         // so this is a guard only).
         let expr = match self.pending {
             Some((p, false)) if owe => Some(p),
@@ -1372,10 +1367,10 @@ impl<'b> Replay<'b> {
         }
     }
 
-    /// A2: starts to carry the statement position `o` of the owed `Ldar` from `src`.
+    /// O9: starts to carry the statement position `o` of the owed `Ldar` from `src`.
     fn carry(&mut self, o: Option<u32>, src: usize) {
         if let Some(o) = o {
-            debug_assert!(self.carry_stmt.is_none(), "A2: two carried statements");
+            debug_assert!(self.carry_stmt.is_none(), "O9: two carried statements");
             self.carry_stmt = Some(o);
             self.carry_src = src;
         }
@@ -1384,7 +1379,7 @@ impl<'b> Replay<'b> {
     /// An emitted transfer (O1, O2, O9). The source is any register that holds the value.
     fn real_transfer(&mut self, src: usize, dst: usize) {
         if dst != ACC {
-            // A1: an emitted `Star` or `Mov` comes after the owed `Ldar`.
+            // O2: an emitted `Star` or `Mov` comes after the owed `Ldar`.
             self.emit_lazy();
         }
         let from = if src == ACC {
@@ -1419,7 +1414,7 @@ impl<'b> Replay<'b> {
         let info = op.info();
         let flags = info.flags;
         if info.acc.reads() || !info.acc.writes() {
-            // A1: only an instruction that writes the accumulator with no read drops an owed
+            // O2: only an instruction that writes the accumulator with no read drops an owed
             // `Ldar`.
             self.emit_lazy();
         }

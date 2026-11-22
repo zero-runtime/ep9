@@ -269,31 +269,30 @@ fn run(files: &[(PathBuf, bool, bool)]) -> Report {
                                     Some(regopt.join(", ")),
                                 ));
                             }
-                            // LDAR-ELIDE probe, T1 (release run only): arm 0 against arm 1 and
-                            // arm 2. A difference fails the run; each dead statement load that
-                            // an arm keeps is counted by its reason.
+                            // LDAR-ELIDE T1 (release run only): arm 0 against the merged mode
+                            // (arm 2, M11-P0). Arm 1 is not shipped, so it is not run. A
+                            // difference fails the run; each dead statement load that the mode
+                            // keeps is counted by its reason.
                             if !cfg!(debug_assertions) {
-                                for arm in [super::regopt::Mode::Arm1, super::regopt::Mode::Arm2] {
-                                    let t1 =
-                                        super::tests::ldar_elision_differences(&src, opts, arm);
-                                    if !t1.differences.is_empty() {
-                                        t1_lines.push(format!(
-                                            "{arm:?}\t{}\t{opts:?}\t{}",
-                                            short_path(path),
-                                            t1.differences.join(", ")
-                                        ));
-                                        local.push((
-                                            format!("REGOPT LDAR-ELIDE T1 failure ({arm:?})"),
-                                            Some(t1.differences.join(", ")),
-                                        ));
-                                    }
-                                    for k in t1.kept {
-                                        let why = k.rsplit(": ").next().unwrap_or("").to_owned();
-                                        local.push((
-                                            format!("LDAR-ELIDE kept ({arm:?}): {why}"),
-                                            Some(k),
-                                        ));
-                                    }
+                                let arm = super::regopt::DEFAULT;
+                                let t1 = super::tests::ldar_elision_differences(&src, opts, arm);
+                                if !t1.differences.is_empty() {
+                                    t1_lines.push(format!(
+                                        "{arm:?}\t{}\t{opts:?}\t{}",
+                                        short_path(path),
+                                        t1.differences.join(", ")
+                                    ));
+                                    local.push((
+                                        format!("REGOPT LDAR-ELIDE T1 failure ({arm:?})"),
+                                        Some(t1.differences.join(", ")),
+                                    ));
+                                }
+                                for k in t1.kept {
+                                    let why = k.rsplit(": ").next().unwrap_or("").to_owned();
+                                    local.push((
+                                        format!("LDAR-ELIDE kept ({arm:?}): {why}"),
+                                        Some(k),
+                                    ));
                                 }
                             }
                         }

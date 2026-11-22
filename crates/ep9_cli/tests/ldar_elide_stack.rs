@@ -1,15 +1,23 @@
-//! LDAR-ELIDE probe, T4: the stack traces of 15 `this` and parameter cases are the same in
-//! arm 0, arm 1 and arm 2 (`EP9_LDAR_ELIDE`; the `ep9` binary reads it once per process). The
-//! expected text is the m10-p5 output (jit = jitless, byte-equal), so a dropped dead `Ldar`
-//! never moves the line or column of a throw (INV-1).
+//! LDAR-ELIDE merge (M11-P0, DL M11-P0-LDAR-VERDICT): the `ep9` binary has one optimized
+//! mode, arm 2, and reads no LDAR-ELIDE switch. The probe switch `EP9_LDAR_ELIDE` is gone, so
+//! these tests run the binary with the switch not set and with the old values set, and every
+//! run must give the same output.
 //!
 //! ```text
-//! ep9 t3.js   (EP9_LDAR_ELIDE = 0, 1, 2)  ->  stdout = M10P5 (15 lines)
+//! ep9 t3.js                (switch not set; EP9_LDAR_ELIDE = 0, 1, 2)  ->  stdout = M10P5 (15 lines)
+//! ep9 --print-bytecode     (switch not set; EP9_LDAR_ELIDE = 0, 1, 2)  ->  the gen-basic golden
+//! ep9 --facts-out slack.js (switch not set; EP9_LDAR_ELIDE = 1)        ->  equal facts
 //! ```
 //!
-//! T7: the slack scan (`ep9_vm` `slack.rs`) reads the bytecode of each constructor. The
-//! feedback facts of a constructor workload (result shapes with their slack capacity) are the
-//! same in every arm, except the unit content hash.
+//! T4: the stack traces of 15 `this` and parameter cases are the m10-p5 strings (jit =
+//! jitless, byte-equal), so a dropped dead `Ldar` never moves the line or column of a throw
+//! (INV-1).
+//!
+//! T7: the slack scan (`ep9_vm` `slack.rs`) reads the bytecode of each constructor. One binary
+//! cannot run two arms now, so the cross-arm fact (arm 0 against arm 2) rests on T1 in
+//! `ep9_frontend` (INV-4: only dead `Ldar` go; every other instruction, operand and slot is
+//! equal) and on the probe measurement (facts byte-equal in arms 0, 1 and 2). This test checks
+//! the facts of the merged binary with and without the old switch.
 
 use std::process::Command;
 
@@ -82,23 +90,33 @@ c14 loop this.a | TypeError: Cannot read properties of undefined (reading 'a') |
 c15 p.x = this; this.a | TypeError: Cannot read properties of undefined (reading 'a') |     at c15 (t3.js:34:36) |     at t3.js:49:38
 "#;
 
+/// The `ep9` command with the old switch not set (`None`) or set to a value.
+fn ep9(switch: Option<&str>) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ep9"));
+    match switch {
+        None => cmd.env_remove("EP9_LDAR_ELIDE"),
+        Some(v) => cmd.env("EP9_LDAR_ELIDE", v),
+    };
+    cmd
+}
+
+/// T4: `ep9 t3.js` prints the 15 m10-p5 strings, with the switch not set and set to 0, 1, 2.
 #[test]
-fn stack_traces_are_the_same_in_every_arm() {
+fn stack_traces_keep_the_m10p5_strings() {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ldar-elide-t4");
     std::fs::create_dir_all(&dir).expect("make the test dir");
     std::fs::write(dir.join("t3.js"), T3).expect("write t3.js");
     let mut failures = Vec::new();
-    for arm in ["0", "1", "2"] {
-        let out = Command::new(env!("CARGO_BIN_EXE_ep9"))
+    for arm in [None, Some("0"), Some("1"), Some("2")] {
+        let out = ep9(arm)
             .arg("t3.js")
             .current_dir(&dir)
-            .env("EP9_LDAR_ELIDE", arm)
             .output()
             .expect("run ep9");
         let stdout = String::from_utf8_lossy(&out.stdout);
         if out.status.code() != Some(0) || stdout != M10P5 {
             failures.push(format!(
-                "arm {arm}: status {:?}\n{stdout}\nstderr {}",
+                "switch {arm:?}: status {:?}\n{stdout}\nstderr {}",
                 out.status,
                 String::from_utf8_lossy(&out.stderr)
             ));
@@ -107,14 +125,13 @@ fn stack_traces_are_the_same_in_every_arm() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// The committed golden of `gen-basic` (the m10-p5 text; the merge role re-blesses it).
+/// The committed golden of `gen-basic` (the arm-2 text, re-blessed at the merge).
 const GEN_BASIC: &str = include_str!("../../ep9_frontend/src/bytecodegen/golden/gen-basic.txt");
 
-/// Arm 0 through the binary is today's output: `ep9 --print-bytecode` prints the committed
-/// golden text with the switch not set and with `EP9_LDAR_ELIDE=0`. The arm-1 row shows that
-/// the check can tell the arms apart.
+/// `ep9 --print-bytecode` prints the committed golden text, with the switch not set and set to
+/// 0, 1, 2: the binary prints the merged mode and does not read the switch.
 #[test]
-fn arm0_prints_the_golden_bytecode() {
+fn the_binary_prints_the_golden_bytecode() {
     let mut parts = GEN_BASIC.splitn(3, '\n');
     let src = parts
         .nth(1)
@@ -124,21 +141,15 @@ fn arm0_prints_the_golden_bytecode() {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ldar-elide-arm0");
     std::fs::create_dir_all(&dir).expect("make the test dir");
     std::fs::write(dir.join("gen.js"), src).expect("write gen.js");
-    for arm in [None, Some("0"), Some("1")] {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_ep9"));
-        cmd.args(["--print-bytecode", "gen.js"]).current_dir(&dir);
-        match arm {
-            None => cmd.env_remove("EP9_LDAR_ELIDE"),
-            Some(a) => cmd.env("EP9_LDAR_ELIDE", a),
-        };
-        let out = cmd.output().expect("run ep9");
-        assert_eq!(out.status.code(), Some(0), "arm {arm:?}");
+    for arm in [None, Some("0"), Some("1"), Some("2")] {
+        let out = ep9(arm)
+            .args(["--print-bytecode", "gen.js"])
+            .current_dir(&dir)
+            .output()
+            .expect("run ep9");
+        assert_eq!(out.status.code(), Some(0), "switch {arm:?}");
         let got = String::from_utf8_lossy(&out.stdout);
-        assert_eq!(
-            got.strip_suffix('\n') == Some(want),
-            arm != Some("1"),
-            "arm {arm:?}:\n{got}"
-        );
+        assert_eq!(got.strip_suffix('\n'), Some(want), "switch {arm:?}");
     }
 }
 
@@ -173,25 +184,28 @@ fn facts_without_unit_hash(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
+/// T7: `ep9 --facts-out slack.js` prints 40600 and writes the same facts (unit hash zeroed)
+/// with the switch not set and with `EP9_LDAR_ELIDE=1`.
 #[test]
-fn slack_facts_are_the_same_in_every_arm() {
+fn slack_facts_are_the_same_with_and_without_the_switch() {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ldar-elide-t7");
     std::fs::create_dir_all(&dir).expect("make the test dir");
     std::fs::write(dir.join("slack.js"), SLACK).expect("write slack.js");
     let mut facts = Vec::new();
-    for arm in ["0", "1", "2"] {
-        let file = format!("facts{arm}.bin");
-        let out = Command::new(env!("CARGO_BIN_EXE_ep9"))
-            .args(["--facts-out", &file, "slack.js"])
+    for (arm, file) in [(None, "facts.bin"), (Some("1"), "facts1.bin")] {
+        let out = ep9(arm)
+            .args(["--facts-out", file, "slack.js"])
             .current_dir(&dir)
-            .env("EP9_LDAR_ELIDE", arm)
             .output()
             .expect("run ep9");
-        assert_eq!(out.status.code(), Some(0), "arm {arm}");
-        assert_eq!(String::from_utf8_lossy(&out.stdout), "40600\n", "arm {arm}");
-        let bytes = std::fs::read(dir.join(&file)).expect("read the facts");
+        assert_eq!(out.status.code(), Some(0), "switch {arm:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "40600\n",
+            "switch {arm:?}"
+        );
+        let bytes = std::fs::read(dir.join(file)).expect("read the facts");
         facts.push(facts_without_unit_hash(&bytes));
     }
-    assert_eq!(facts[1], facts[0], "arm 1");
-    assert_eq!(facts[2], facts[0], "arm 2");
+    assert_eq!(facts[1], facts[0], "switch 1");
 }
