@@ -1419,6 +1419,11 @@ show("c14 loop this.a", c14);
 show("c15 p.x = this; this.a", () => c15({}));
 "#;
 
+/// Route LDAR-A1-MOV-TEXT (reduced from lebab f3179): an owed `Ldar i` comes before a `Mov`
+/// that the replay makes for an operand (the key of `u[e++] = i`), and the next instruction
+/// (`SetKeyedProperty`) reads the accumulator. Rule O2 emits the owed load before that `Mov`.
+const LDAR_MOV: &str = "function mv(n, i) { var e = 0, u = []; i && (u[e++] = i); return u; }";
+
 /// One unit per arm, from one scope analysis.
 fn arm_units(src: &str, opts: SourceOpts, arms: &[Arm]) -> Vec<VerifiedUnit> {
     super::compile_modes(src, opts, arms)
@@ -1544,6 +1549,32 @@ fn ldar_elide_expected_texts() {
             if got != want {
                 failures.push(format!("{arm} {name}:\n{got}\n-- want --\n{want}"));
             }
+        }
+    }
+    // The Mov case (O2): arm 1 does not owe `Ldar a1` (no statement position) and emits it in
+    // place; arm 2 owes it and emits it before `Mov r4, r3`. Arm 2 also drops the dead binding
+    // load `Ldar r1` (the object, class B-N).
+    let units = arm_units(LDAR_MOV, sloppy, &[Arm::Arm1, Arm::Arm2]);
+    let head =
+        "0 S> LdaZero\n1 Star r0\n3 S> CreateEmptyArrayLiteral s0\n5 Star r1\n7 S> Ldar a1\n";
+    let want1 = format!(
+        "{head}9 JumpIfToBooleanFalse @34\n11 Ldar r1\n13 Ldar r0\n15 E> ToNumeric s1\n\
+         17 Star r4\n19 E> Inc s1\n21 Star r0\n23 Ldar a1\n25 Mov r4, r3\n\
+         28 E> SetKeyedProperty r1, r3, s2\n32 Ldar a1\n34 S> Ldar r1\n36 Return\n\
+         37 LdaUndefined\n38 Return\n| 0 S 24 (1:25)\n| 3 S 31 (1:32)\n| 7 S 39 (1:40)\n\
+         | 15 E 47 (1:48)\n| 19 E 47 (1:48)\n| 28 E 45 (1:46)\n| 34 S 58 (1:59)"
+    );
+    let want2 = format!(
+        "{head}9 JumpIfToBooleanFalse @32\n11 Ldar r0\n13 E> ToNumeric s1\n15 Star r4\n\
+         17 E> Inc s1\n19 Star r0\n21 Ldar a1\n23 Mov r4, r3\n\
+         26 E> SetKeyedProperty r1, r3, s2\n30 Ldar a1\n32 S> Ldar r1\n34 Return\n\
+         35 LdaUndefined\n36 Return\n| 0 S 24 (1:25)\n| 3 S 31 (1:32)\n| 7 S 39 (1:40)\n\
+         | 13 E 47 (1:48)\n| 17 E 47 (1:48)\n| 26 E 45 (1:46)\n| 32 S 58 (1:59)"
+    );
+    for ((arm, unit), want) in ["arm 1", "arm 2"].iter().zip(&units).zip([want1, want2]) {
+        let got = arm_listing(unit, "mv");
+        if got != want {
+            failures.push(format!("{arm} mv:\n{got}\n-- want --\n{want}"));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
@@ -1722,8 +1753,10 @@ pub(crate) struct T1Report {
 /// offset if it had an entry, else the statement offset (INV-2).
 pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) -> T1Report {
     let mut rep = T1Report::default();
-    // The arm-1 rules: a T3 mutant is arm 1 with one rule broken.
-    let arm1 = matches!(arm, Arm::Arm1 | Arm::Mutant(_));
+    // The arm-1 rules: a T3 mutant is arm 1 with one rule broken, except mutant 10: it is arm 2
+    // with one rule broken, so the arm-2 rules judge it.
+    let arm2 = matches!(arm, Arm::Arm2 | Arm::Mutant(10));
+    let arm1 = matches!(arm, Arm::Arm1 | Arm::Mutant(_)) && !arm2;
     let (units, named) = match super::compile_modes(src, opts, &[Arm::Arm0, arm]) {
         Ok(t) => t,
         Err(e) => {
@@ -1755,11 +1788,10 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
         // Arm 2 emits a binding `Ldar` that has an expression entry in place (O2 does not owe
         // it), so T1 does not align it as a dropped load.
         let expr0 = |off: u32| {
-            arm == Arm::Arm2
-                && f0
-                    .positions
-                    .iter()
-                    .any(|p| p.bytecode_offset == off && !p.is_statement)
+            arm2 && f0
+                .positions
+                .iter()
+                .any(|p| p.bytecode_offset == off && !p.is_statement)
         };
         // Alignment: map[i] = the index in `an` of `a0[i]`, None for a dropped load.
         let mut map: Vec<Option<usize>> = Vec::with_capacity(a0.len());
@@ -1964,7 +1996,7 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
                     // before an emitted `Mov`, and T1 cannot tell that `Mov` from one that the
                     // replay makes for an operand of the next instruction.
                     Some(r)
-                        if arm == Arm::Arm2
+                        if arm2
                             && r != ep9_bytecode::Register::RECEIVER
                             && load(r)
                             && t1_dead_after(fnn, &an, k, &labels, true) == Ok(k + 1) =>
@@ -2036,6 +2068,8 @@ fn ldar_elision_differential() {
             Sloppy,
             "function e2(x) { return (0, { ...(x, 1) }) } function e3(x) { this, { ...(x, 1) }; } function e4(x, y) { return (0, { ...(x, y) }) }",
         ),
+        // O2: an owed load before a `Mov` that the replay makes for an operand (lebab f3179).
+        ("mov operand", Sloppy, LDAR_MOV),
     ];
     for &(name, mode, src) in CASES.iter().chain(extra) {
         for arm in [Arm::Arm1, Arm::Arm2] {
@@ -2116,7 +2150,15 @@ fn ldar_elision_mutants_fail() {
         sloppy,
         "with no statement entry is gone"
     ));
+    // (j) arm 2 without the emit of an owed load before a `Mov` that the replay makes: `Ldar
+    // a1` comes after `Mov r4, r3`, so T1 sees a live load that is gone and a changed order
+    // (corpus: lebab f3179, babylonjs). The arm-2 rules judge mutant 10.
+    assert!(t1_fails(10, LDAR_MOV, sloppy, "is gone and is not dead"));
     // The correct arm passes on the same sources.
+    for arm in [Arm::Arm1, Arm::Arm2] {
+        let r = ldar_elision_differences(LDAR_MOV, sloppy, arm);
+        assert!(r.differences.is_empty(), "{arm:?}: {:?}", r.differences);
+    }
     for src in [
         "function f(p) { return (0, p, 1); }",
         "function* g(a) { var x = yield a; return x; }",
@@ -2250,5 +2292,50 @@ fn ldar_elision_statement_cases() {
         assert!(has(u, "c7", "| 0 S 435 (25:3)"));
         assert!(has(u, "c8", "| 0 S 463 (28:5)"));
         assert!(has(u, "c1", "| 0 S 201 (4:8)"));
+    }
+    // Route LDAR-T5-CARRY-PINS (IC1 finding 5): the entry of a statement whose dead load is left
+    // out goes to the next emitted instruction, which can be code of the next construct: the
+    // loop update `i++` (k1), the finally epilogue (k2), the do-while condition `++i` (k3). T1
+    // (no difference) shows that values and throw offsets do not change (INV-1, INV-4).
+    let carry = "function k1(n) { var i; for (i = 0; i < n; i++) this; }\n\
+                 function k2() { try { } finally { this; } }\n\
+                 function k3(n) { var i = 0; do this; while (++i < n); }\n";
+    for arm in [Arm::Arm1, Arm::Arm2] {
+        let r = ldar_elision_differences(carry, sloppy, arm);
+        assert!(
+            r.differences.is_empty(),
+            "carry {arm:?}: {:?}",
+            r.differences
+        );
+    }
+    let pins: &[(&str, &str)] = &[
+        (
+            "k1",
+            "0 S> LdaZero\n1 Star r0\n3 Ldar a0\n5 E> TestLessThan r0, s0\n8 JumpIfFalse @20\n\
+             10 S> Ldar r0\n12 E> Inc s1\n14 Star r0\n16 JumpLoop @3, [0], s2\n\
+             20 LdaUndefined\n21 Return\n| 0 S 24 (1:25)\n| 5 E 36 (1:37)\n\
+             | 10 S 48 (1:49)\n| 12 E 43 (1:44)",
+        ),
+        (
+            "k2",
+            "0 S> LdaCurrentContext\n1 Star r2\n3 LdaSmi [-1]\n5 Star r0\n7 Jump @14\n\
+             9 Star r1\n11 LdaZero\n12 Star r0\n14 LdaTheHole\n15 SetPendingMessage\n\
+             16 Star r3\n18 S> Ldar r3\n20 SetPendingMessage\n21 Ldar r0\n\
+             23 SwitchOnSmi k0, [0]\n26 Jump @31\n28 Ldar r1\n30 E> ReThrow\n\
+             31 LdaUndefined\n32 Return\n| 0 S 72 (2:17)\n| 18 S 90 (2:35)\n| 30 E 72 (2:17)",
+        ),
+        (
+            "k3",
+            "0 S> LdaZero\n1 Star r0\n3 S> Ldar r0\n5 E> Inc s0\n7 Star r0\n9 Ldar a0\n\
+             11 E> TestLessThan r0, s1\n14 JumpIfFalse @20\n16 JumpLoop @3, [0], s2\n\
+             20 LdaUndefined\n21 Return\n| 0 S 121 (3:22)\n| 3 S 131 (3:32)\n\
+             | 5 E 144 (3:45)\n| 11 E 144 (3:45)",
+        ),
+    ];
+    let units = arm_units(carry, sloppy, &[Arm::Arm1, Arm::Arm2]);
+    for (arm, u) in ["arm 1", "arm 2"].iter().zip(&units) {
+        for &(name, want) in pins {
+            assert_eq!(arm_listing(u, name), want, "{arm} {name}");
+        }
     }
 }

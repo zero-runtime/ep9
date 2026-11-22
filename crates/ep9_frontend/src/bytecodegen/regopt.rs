@@ -127,7 +127,9 @@ pub(crate) enum Mode {
     Arm2,
     /// Test only (T3): arm 1 with one rule broken on purpose (`1..=6`: the mutants a-f of the
     /// design, section 3.3; `7`: the O12 throw default is not used; `8`: a 2-entry jump table
-    /// gets its labels in the wrong order; `9`: the arm-2 elision rule).
+    /// gets its labels in the wrong order; `9`: the arm-2 elision rule). `10` is arm 2 with one
+    /// rule broken: an owed `Ldar` is not emitted before a `Star` or `Mov` that the replay
+    /// makes (O2).
     #[cfg(test)]
     Mutant(u8),
 }
@@ -374,7 +376,7 @@ impl Emitter {
                 #[cfg(test)]
                 Mode::Mutant(m) => {
                     r.mutant = m;
-                    if m == 9 { 2 } else { 1 }
+                    if matches!(m, 9 | 10) { 2 } else { 1 }
                 }
                 _ => 0,
             };
@@ -922,8 +924,9 @@ impl<'b> Replay<'b> {
     /// Emits the transfer `dst = src` (no position of its own; it takes a carried statement
     /// position, O12).
     fn emit_transfer(&mut self, src: usize, dst: usize) {
-        if dst != ACC {
-            // O2: an emitted `Star` or `Mov` comes after the owed `Ldar`.
+        if dst != ACC && !self.mutant(10) {
+            // O2: an emitted `Star` or `Mov` comes after the owed `Ldar` (T3 (j): mutant 10 has
+            // no such emit).
             self.emit_lazy();
         }
         self.position(false, false);
