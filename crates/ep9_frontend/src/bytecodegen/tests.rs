@@ -1064,6 +1064,53 @@ fn golden_cases_have_a_consistent_context_chain() {
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 }
 
+/// The context check reads the 2 fused context loads (STAR-DST, rule O13): a 2-hop closure
+/// case with the slot operand of its first `LdaContextSlotStar` and of its first
+/// `LdaCurrentContextSlotStar` set to slot 5, which their target scopes (1 slot each) do not
+/// have. `big` has 8 context slots, so the verifier keeps the unit; the check reports each.
+#[test]
+fn context_check_reads_the_fused_context_loads() {
+    let src = "function big() { var v0 = 0, v1 = 1, v2 = 2, v3 = 3, v4 = 4, v5 = 5, v6 = 6, \
+               v7 = 7; return function () { return v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7; }; }\n\
+               function outer() { var a = 1; function mid() { var m = 2; function deep() { \
+               var w = 3; function z() { return w; } var t = a; var u = w; \
+               return t + u + m + z(); } return deep; } return mid; }";
+    let vu = compile_case(Sloppy, src).unwrap();
+    assert!(super::ctx_check::context_errors(&vu).is_empty());
+    let mut u = vu.unit().clone();
+    let want = ep9_bytecode::UnitString::new("deep");
+    let deep = (0..u.functions.len())
+        .find(|&f| u.functions[f].name.is_some_and(|n| *u.string(n) == want))
+        .expect("deep");
+    let code = &mut u.functions[deep].bytecode;
+    // (opcode, the byte offset of its slot operand)
+    let mut patched = Vec::new();
+    for (op, slot_at) in [
+        (Opcode::LdaContextSlotStar, 2),
+        (Opcode::LdaCurrentContextSlotStar, 1),
+    ] {
+        let at = ep9_bytecode::Instructions::new(code)
+            .map(|i| i.expect("decodes"))
+            .find(|i| i.opcode == op)
+            .map(|i| i.offset)
+            .unwrap_or_else(|| panic!("a {op:?} in deep"));
+        let k = at as usize + slot_at;
+        assert_eq!(code[k], 0, "{op:?}: slot 0 (a one-byte operand)");
+        code[k] = 5;
+        patched.push((op, at));
+    }
+    let vu = ep9_bytecode::verify(u).expect("slot 5 is in the verifier range");
+    let errors = super::ctx_check::context_errors(&vu);
+    for (op, at) in patched {
+        let head = format!("f{deep} @{at} {op:?}: slot 5 not in scope");
+        assert!(
+            errors.iter().any(|e| e.starts_with(&head)),
+            "{head}: {errors:?}"
+        );
+    }
+    assert_eq!(errors.len(), 2, "{errors:?}");
+}
+
 /// IteratorClose with a throw completion keeps the original exception even when the
 /// `return` lookup throws (ECMA-262 7.4.11 step 4): the lookup is under the handler that
 /// ignores errors, like the call. With other completions the lookup errors propagate.

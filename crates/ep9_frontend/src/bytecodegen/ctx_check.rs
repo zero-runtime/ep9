@@ -237,7 +237,12 @@ impl Checker<'_> {
                 }
                 st.acc = Cv::Other;
             }
-            Opcode::LdaContextSlot | Opcode::LdaImmutableContextSlot | Opcode::StaContextSlot => {
+            // The fused loads (STAR-DST, rule O13) check their slot as the load does, then
+            // store the accumulator to `dst` (the last operand), as `Star` does.
+            Opcode::LdaContextSlot
+            | Opcode::LdaImmutableContextSlot
+            | Opcode::StaContextSlot
+            | Opcode::LdaContextSlotStar => {
                 let v = st.reg(insn.register(0));
                 if let Some(from) = self.known(insn, "the context register", v) {
                     self.slot(insn, from, insn.unsigned(2), insn.unsigned(1));
@@ -245,16 +250,23 @@ impl Checker<'_> {
                 if op != Opcode::StaContextSlot {
                     st.acc = Cv::Other;
                 }
+                if op == Opcode::LdaContextSlotStar {
+                    st.set(insn.register(3), st.acc);
+                }
             }
             Opcode::LdaCurrentContextSlot
             | Opcode::LdaImmutableCurrentContextSlot
-            | Opcode::StaCurrentContextSlot => {
+            | Opcode::StaCurrentContextSlot
+            | Opcode::LdaCurrentContextSlotStar => {
                 let cur = st.current;
                 if let Some(from) = self.known(insn, "the current context", cur) {
                     self.slot(insn, from, 0, insn.unsigned(0));
                 }
                 if op != Opcode::StaCurrentContextSlot {
                     st.acc = Cv::Other;
+                }
+                if op == Opcode::LdaCurrentContextSlotStar {
+                    st.set(insn.register(1), st.acc);
                 }
             }
             _ => {
