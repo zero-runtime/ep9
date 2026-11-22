@@ -28,12 +28,13 @@
 //! | O10 | After a terminator the state is "flushed" with no code: only a label (O6) reaches the next instruction | the state at that label is the flushed state of its jumps |
 //! | O11 | A new register whose set holds no value is materialized (its value is dead). A read of a register whose set has no materialized member is an internal error | a BytecodeGen bug (a read after release) must not compile |
 //! | O12 | The instruction that takes a carried statement position `o` (O9) gets a statement entry. Its source offset is its own expression position if one is pending (only an instruction of BytecodeGen and an emitted transfer take it), else the throw default if it can throw, else `o` | V8 `BytecodeArrayBuilder::AttachOrEmitDeferredSourceInfo`; the source offset that an instruction gives for a throw does not change (H24 R5) |
+//! | O13 | At an emitted `Star` from the accumulator, the builder fuses the last instruction (a producer of the family) and the `Star` into one fused opcode if B1-B4 hold (`FunctionBuilder::fuse_star`) | one dispatch per pair (STAR-DST, DL M11-P3-PICK) |
 //!
 //! With the optimizer off ([`Mode::Plain`]), the replay emits every event as recorded, so the
 //! output is the same as the output of a plain [`FunctionBuilder`]. The plain mode is the
 //! reference of the H24 R4 guard (guard v2: plain against the merged mode). The front end
-//! compiles with [`DEFAULT`], the merged LDAR-ELIDE mode (arm 2, M11-P0), and reads no
-//! environment value.
+//! compiles with [`DEFAULT`], the merged LDAR-ELIDE mode (arm 2, M11-P0); on the STAR-DST probe
+//! branch it reads one environment value, the switch of rule O13 ([`star_dst`]).
 //!
 //! Test-only modes (T1, T3): `Mode::Arm0` uses the rules before M11-P0 (O2: every load from a
 //! binding register is emitted; O9 and O12: no carry), which give the m10-p5 bytecode, the
@@ -129,9 +130,33 @@ pub(crate) enum Mode {
     /// design, section 3.3; `7`: the O12 throw default is not used; `8`: a 2-entry jump table
     /// gets its labels in the wrong order; `9`: the arm-2 elision rule). `10` is arm 2 with one
     /// rule broken: an owed `Ldar` is not emitted before a `Star` or `Mov` that the replay
-    /// makes (O2).
+    /// makes (O2). `11..=20` are arm 2 with rule O13 (family 2; `20`: family 1) and one rule
+    /// broken (the T2 mutants of STAR-DST): `11` B2 is not tested; `12`, `13` B2 is not tested
+    /// at a handler-range start or end label; `14` B3 is not tested; `15`, `16` B4 is not
+    /// tested for the load or for `dst`; `17` a carried statement position (O9) is forced onto
+    /// each `Star` from the accumulator (B3 keeps the pair); `18` the fuse comes before the
+    /// owed `Ldar` (O2);
+    /// `19` the fused instruction stores to another register; `20` the family mask is not
+    /// used (family 1 fuses a context load).
     #[cfg(test)]
     Mutant(u8),
+    /// Test only (STAR-DST T1): arm 2 with rule O13 for the family `0..=2` (0: no fuse), read
+    /// from no environment value.
+    #[cfg(test)]
+    Fuse(u8),
+}
+
+/// The STAR-DST probe switch `EP9_STAR_DST` (probe branch only; the merge removes it), read
+/// once per process: the family of rule O13 in [`Mode::Arm2`]. Not set, `0` or another value:
+/// 0 (no fuse: the base bytecode); `1`: `GetNamedProperty` only; `2`: also
+/// `LdaCurrentContextSlot` and `LdaContextSlot`.
+pub(crate) fn star_dst() -> u8 {
+    static FUSE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *FUSE.get_or_init(|| match std::env::var("EP9_STAR_DST").as_deref() {
+        Ok("1") => 1,
+        Ok("2") => 2,
+        _ => 0,
+    })
 }
 
 /// The merged LDAR-ELIDE mode (M11-P0, DL M11-P0-LDAR-VERDICT): the mode of the front end.
@@ -376,8 +401,21 @@ impl Emitter {
                 #[cfg(test)]
                 Mode::Mutant(m) => {
                     r.mutant = m;
-                    if matches!(m, 9 | 10) { 2 } else { 1 }
+                    if matches!(m, 9 | 10) || m >= 11 { 2 } else { 1 }
                 }
+                #[cfg(test)]
+                Mode::Fuse(_) => 2,
+                _ => 0,
+            };
+            // Rule O13 (STAR-DST probe): the family of the fused `Star`.
+            r.fuse = match mode {
+                Mode::Arm2 => star_dst(),
+                #[cfg(test)]
+                Mode::Fuse(f) => f,
+                #[cfg(test)]
+                Mode::Mutant(20) => 1,
+                #[cfg(test)]
+                Mode::Mutant(m) if m >= 11 => 2,
                 _ => 0,
             };
             r.run();
@@ -631,6 +669,16 @@ struct Replay<'b> {
     /// Test only (T3): the broken rule of [`Mode::Mutant`], or 0.
     #[cfg(test)]
     mutant: u8,
+    /// Rule O13 (STAR-DST probe): the family of [`FunctionBuilder::fuse_star`], or 0.
+    fuse: u8,
+    /// Test only (STAR-DST T2): each bound label and its instruction index, and the start and
+    /// end labels of the handler ranges.
+    #[cfg(test)]
+    binds: Vec<(Label, u32)>,
+    #[cfg(test)]
+    starts: HashSet<Label>,
+    #[cfg(test)]
+    ends: HashSet<Label>,
     /// Per key below `base`: the function writes this parameter or the receiver (O4).
     written: Vec<bool>,
     /// Labels that a jump, a jump table or a handler target uses (O6).
@@ -725,6 +773,13 @@ impl<'b> Replay<'b> {
             edges: handlers.iter().flat_map(|h| [h.start, h.end]).collect(),
             #[cfg(test)]
             mutant: 0,
+            fuse: 0,
+            #[cfg(test)]
+            binds: Vec::new(),
+            #[cfg(test)]
+            starts: handlers.iter().map(|h| h.start).collect(),
+            #[cfg(test)]
+            ends: handlers.iter().map(|h| h.end).collect(),
             used,
             handler_top,
             inner_at: HashMap::new(),
@@ -764,6 +819,8 @@ impl<'b> Replay<'b> {
                         self.settle();
                     }
                     self.inner_at.insert(l, self.b.instruction_count());
+                    #[cfg(test)]
+                    self.binds.push((l, self.b.instruction_count()));
                     self.b.bind(l);
                 }
                 Ev::Stmt(o) => {
@@ -924,6 +981,11 @@ impl<'b> Replay<'b> {
     /// Emits the transfer `dst = src` (no position of its own; it takes a carried statement
     /// position, O12).
     fn emit_transfer(&mut self, src: usize, dst: usize) {
+        #[cfg(test)]
+        if src == ACC && self.mutant(17) && self.carry_stmt.is_none() {
+            // T2 (17): a carried statement position forced onto the `Star` (B3 keeps the pair).
+            self.carry_stmt = Some(0);
+        }
         if dst != ACC && !self.mutant(10) {
             // O2: an emitted `Star` or `Mov` comes after the owed `Ldar` (T3 (j): mutant 10 has
             // no such emit).
@@ -932,7 +994,13 @@ impl<'b> Replay<'b> {
         self.position(false, false);
         if src == ACC {
             let d = self.reg(dst);
-            self.b.star(d);
+            #[cfg(test)]
+            if self.mutant_fuse(d) {
+                return;
+            }
+            if self.fuse == 0 || !self.b.fuse_star(d, self.fuse) {
+                self.b.star(d);
+            }
         } else if dst == ACC {
             let s = self.reg(src);
             self.b.ldar(s);
@@ -1381,6 +1449,10 @@ impl<'b> Replay<'b> {
 
     /// An emitted transfer (O1, O2, O9). The source is any register that holds the value.
     fn real_transfer(&mut self, src: usize, dst: usize) {
+        #[cfg(test)]
+        if src == ACC && dst != ACC && self.mutant_owed_after(dst) {
+            return;
+        }
         if dst != ACC {
             // O2: an emitted `Star` or `Mov` comes after the owed `Ldar`.
             self.emit_lazy();
@@ -1492,6 +1564,60 @@ impl<'b> Replay<'b> {
         self.b.emit(op, &ops[..args.len()]);
         if flags.contains(OpcodeFlags::TERMINATOR) {
             self.reset();
+        }
+    }
+}
+
+/// Test only (STAR-DST T2): the mutants 11-20 of rule O13 ([`Mode::Mutant`]).
+#[cfg(test)]
+impl Replay<'_> {
+    /// Mutant 18: at an emitted `Star` from the accumulator while an `Ldar` is owed, the fuse
+    /// comes first and the owed `Ldar` after it (the O2 order broken). True if it fused (the
+    /// transfer is done).
+    fn mutant_owed_after(&mut self, dst: usize) -> bool {
+        if !self.mutant(18) || self.lazy.is_none() || self.mat[ACC] {
+            return false;
+        }
+        let d = self.reg(dst);
+        if !self.b.fuse_star(d, self.fuse) {
+            return false;
+        }
+        self.emit_lazy();
+        if !(self.same(ACC, dst) && self.mat[dst]) {
+            self.prepare_output(dst);
+            self.join(dst, ACC);
+        }
+        true
+    }
+
+    /// Mutants 11-16, 19 and 20 at the `Star` emit: true if the broken rule fused the `Star`.
+    fn mutant_fuse(&mut self, d: Register) -> bool {
+        let n = self.b.instruction_count();
+        let here = |set: &HashSet<Label>| {
+            self.binds
+                .iter()
+                .any(|&(l, at)| at == n && set.contains(&l))
+        };
+        let single = ep9_bytecode::OperandScale::for_signed(d.to_operand())
+            == ep9_bytecode::OperandScale::Single;
+        let fuse = self.fuse;
+        match self.mutant {
+            11 => self.b.fuse_star_relaxed(d, fuse, 1),
+            12 if here(&self.starts) => self.b.fuse_star_relaxed(d, fuse, 1),
+            13 if here(&self.ends) => self.b.fuse_star_relaxed(d, fuse, 1),
+            14 => self.b.fuse_star_relaxed(d, fuse, 2),
+            15 if single => self.b.fuse_star_relaxed(d, fuse, 4),
+            16 if !single => self.b.fuse_star_relaxed(d, fuse, 4),
+            19 => {
+                let wrong = if d == Register::RECEIVER {
+                    Register::parameter(0)
+                } else {
+                    Register::RECEIVER
+                };
+                self.b.fuse_star(wrong, fuse)
+            }
+            20 => self.b.fuse_star(d, 2),
+            _ => false,
         }
     }
 }

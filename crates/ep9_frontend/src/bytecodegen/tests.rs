@@ -818,7 +818,10 @@ pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
         Ok(t) => t,
         Err(e) => return vec![format!("compile: {e}")],
     };
-    let (p, o) = (plain.unit(), opt.unit());
+    // STAR-DST (rule O13): the optimized unit through the expansion, so a fused instruction
+    // equals its pair (no change with the switch not set).
+    let opt = star_dst_expand_unit(opt.unit());
+    let (p, o) = (plain.unit(), &opt);
     let mut out = Vec::new();
     // Guard v2 (LDAR-ELIDE, M11-P0): plain against the merged mode. A binding load may be
     // missing only if T1 (arm 0 against the merged mode) proves it dead, and a statement entry
@@ -1788,7 +1791,10 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
             return rep;
         }
     };
-    let (u0, un) = (units[0].unit(), units[1].unit());
+    // STAR-DST (rule O13): the arm through the expansion (a fused instruction equals its pair;
+    // no change with the switch not set).
+    let expanded = star_dst_expand_unit(units[1].unit());
+    let (u0, un) = (units[0].unit(), &expanded);
     if u0.functions.len() != un.functions.len() {
         rep.differences.push("function counts differ".into());
         return rep;
@@ -2446,4 +2452,804 @@ fn ldar_elision_statement_cases() {
             assert_eq!(arm_listing(u, name), want, "{arm} {name}");
         }
     }
+}
+
+// ---- STAR-DST (rule O13, the probe; DL M11-P3-PICK): the fused `Star` ----
+
+/// The load of a fused opcode (`GetNamedPropertyStar` -> `GetNamedProperty`), or `None`.
+fn star_pair_load(op: Opcode) -> Option<Opcode> {
+    match op {
+        Opcode::GetNamedPropertyStar => Some(Opcode::GetNamedProperty),
+        Opcode::LdaCurrentContextSlotStar => Some(Opcode::LdaCurrentContextSlot),
+        Opcode::LdaContextSlotStar => Some(Opcode::LdaContextSlot),
+        _ => None,
+    }
+}
+
+/// The loads of the family of rule O13 (1: the named load; 2: also the 2 context loads).
+fn star_family_load(op: Opcode, family: u8) -> bool {
+    match op {
+        Opcode::GetNamedProperty => family >= 1,
+        Opcode::LdaCurrentContextSlot | Opcode::LdaContextSlot => family >= 2,
+        _ => false,
+    }
+}
+
+/// One instruction of an expansion: the opcode, the operand values and, for a jump, the index
+/// of its target.
+struct StarInsn {
+    op: Opcode,
+    vals: Vec<i64>,
+    target: Option<usize>,
+}
+
+/// The expansion of rule O13: `f` with each fused instruction replaced by its pair (the load
+/// with the same operands, then `Star dst`). The code is encoded again as
+/// `FunctionBuilder::finish` encodes it (each instruction at its smallest scale, jumps grown to
+/// a fixpoint), and every code offset (jumps, jump tables, handler ranges, positions) moves
+/// with its instruction. With no fused instruction, `f` itself. Returns the function and, for
+/// each instruction of `f` (and its end), its first instruction index in the expansion.
+pub(crate) fn star_dst_expand(f: &ep9_bytecode::Function) -> (ep9_bytecode::Function, Vec<usize>) {
+    use ep9_bytecode::{Constant, OperandKind as K, OperandScale};
+    let insns: Vec<ep9_bytecode::Instruction<'_>> = ep9_bytecode::Instructions::new(&f.bytecode)
+        .map(|i| i.expect("verified code decodes"))
+        .collect();
+    let mut map = Vec::with_capacity(insns.len() + 1);
+    let mut n = 0;
+    for i in &insns {
+        map.push(n);
+        n += if star_pair_load(i.opcode).is_some() {
+            2
+        } else {
+            1
+        };
+    }
+    map.push(n);
+    if n == insns.len() {
+        return (f.clone(), map);
+    }
+    let code_len = f.bytecode.len() as u32;
+    let index_of = |off: u32| -> usize {
+        if off == code_len {
+            insns.len()
+        } else {
+            insns
+                .binary_search_by_key(&off, |i| i.offset)
+                .expect("a code offset is an instruction start")
+        }
+    };
+    let new_index = |off: u32| map[index_of(off)];
+    let mut out: Vec<StarInsn> = Vec::with_capacity(n);
+    for i in &insns {
+        let vals: Vec<i64> = (0..i.operand_count()).map(|k| i.operand(k)).collect();
+        match star_pair_load(i.opcode) {
+            Some(load) => {
+                let k = vals.len() - 1;
+                out.push(StarInsn {
+                    op: load,
+                    vals: vals[..k].to_vec(),
+                    target: None,
+                });
+                out.push(StarInsn {
+                    op: Opcode::Star,
+                    vals: vec![vals[k]],
+                    target: None,
+                });
+            }
+            None => out.push(StarInsn {
+                op: i.opcode,
+                vals,
+                target: i.jump_target().map(new_index),
+            }),
+        }
+    }
+    // Scales: what the operands other than jumps need, then jumps grown to a fixpoint.
+    let jump = |k: K| matches!(k, K::JumpFwd | K::JumpBack);
+    let mut scales: Vec<OperandScale> = out
+        .iter()
+        .map(|x| {
+            let mut s = OperandScale::Single;
+            for (spec, &v) in x.op.info().operands.iter().zip(&x.vals) {
+                if spec.kind.is_scalable() && !jump(spec.kind) {
+                    s = s.max(if spec.kind.is_signed() {
+                        OperandScale::for_signed(v as i32)
+                    } else {
+                        OperandScale::for_unsigned(v as u32)
+                    });
+                }
+            }
+            s
+        })
+        .collect();
+    let mut offsets = vec![0u64; out.len() + 1];
+    loop {
+        for i in 0..out.len() {
+            offsets[i + 1] = offsets[i] + out[i].op.info().size(scales[i]) as u64;
+        }
+        let mut changed = false;
+        for i in 0..out.len() {
+            if let Some(t) = out[i].target {
+                let d = offsets[i].abs_diff(offsets[t]);
+                let need = OperandScale::for_unsigned(u32::try_from(d).unwrap_or(u32::MAX));
+                if need > scales[i] {
+                    scales[i] = need;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut code = Vec::with_capacity(offsets[out.len()] as usize);
+    for (i, x) in out.iter().enumerate() {
+        if let Some(p) = Opcode::prefix_for(scales[i]) {
+            code.push(p as u8);
+        }
+        code.push(x.op as u8);
+        for (spec, &v) in x.op.info().operands.iter().zip(&x.vals) {
+            let v = if jump(spec.kind) {
+                offsets[i].abs_diff(offsets[x.target.expect("a jump")]) as i64
+            } else {
+                v
+            };
+            code.extend_from_slice(&(v as u32).to_le_bytes()[..spec.kind.size(scales[i])]);
+        }
+    }
+    let new_off = |off: u32| offsets[new_index(off)] as u32;
+    let mut g = f.clone();
+    for i in &insns {
+        if !i.opcode.info().flags.contains(OpcodeFlags::SWITCH) {
+            continue;
+        }
+        for k in 0..i.operand_count() {
+            if i.operand_kind(k) != K::Const {
+                continue;
+            }
+            let c = i.operand(k) as usize;
+            if let Some(Constant::JumpTable(t)) = f.constants.get(c) {
+                let base = new_off(i.offset);
+                let entries: Vec<u32> = t.iter().map(|e| new_off(i.offset + e) - base).collect();
+                g.constants[c] = Constant::JumpTable(entries.into());
+            }
+        }
+    }
+    for h in &mut g.handlers {
+        (h.start, h.end, h.target) = (new_off(h.start), new_off(h.end), new_off(h.target));
+    }
+    for p in &mut g.positions {
+        p.bytecode_offset = new_off(p.bytecode_offset);
+    }
+    g.bytecode = code;
+    (g, map)
+}
+
+/// `u` with every function expanded ([`star_dst_expand`]); `u` itself with no fused
+/// instruction. The H24 R4 guard and LDAR-ELIDE T1 read the optimized unit through it, so they
+/// hold under a forced `EP9_STAR_DST` too (a fused instruction equals its pair).
+pub(crate) fn star_dst_expand_unit(u: &ep9_bytecode::CompiledUnit) -> ep9_bytecode::CompiledUnit {
+    let mut x = u.clone();
+    for f in &mut x.functions {
+        *f = star_dst_expand(f).0;
+    }
+    x
+}
+
+/// The result of [`star_dst_differences`].
+#[derive(Default)]
+pub(crate) struct StarReport {
+    /// Broken invariants (INV-S1, INV-S2, INV-S4, INV-S7, the family); empty when the arm is
+    /// correct.
+    pub(crate) differences: Vec<String>,
+    /// The fused instructions of the arm, per opcode name.
+    pub(crate) fused: std::collections::BTreeMap<&'static str, usize>,
+    /// The arm-0 pairs of the family (a load, then `Star`) that the arm did not fuse, per
+    /// reason: "position" (an entry on the `Star`), "scale" (an operand above one byte),
+    /// "other" (a label on the `Star`: B2).
+    pub(crate) missed: std::collections::BTreeMap<&'static str, usize>,
+}
+
+/// The family of rule O13 of a T1 arm.
+fn star_family(arm: Arm) -> u8 {
+    match arm {
+        Arm::Fuse(f) => f,
+        Arm::Mutant(20) => 1,
+        Arm::Mutant(_) => 2,
+        _ => 0,
+    }
+}
+
+/// T1 of STAR-DST: `src` with rule O13 off (`Mode::Fuse(0)`, the merged LDAR mode) and in
+/// `arm` (`Mode::Fuse(1)`, `Mode::Fuse(2)` or a T2 mutant).
+pub(crate) fn star_dst_differences(src: &str, opts: SourceOpts, arm: Arm) -> StarReport {
+    match super::compile_modes(src, opts, &[Arm::Fuse(0), arm]) {
+        Ok((units, _)) => star_dst_compare(units[0].unit(), units[1].unit(), star_family(arm)),
+        Err(e) => StarReport {
+            differences: vec![format!("compile: {e}")],
+            ..StarReport::default()
+        },
+    }
+}
+
+/// T1 of STAR-DST in arms 1 and 2 from one scope analysis and one arm-0 compile (the corpus
+/// job and [`star_dst_on_files`]).
+pub(crate) fn star_dst_both(src: &str, opts: SourceOpts) -> Vec<(Arm, StarReport)> {
+    let arms = [Arm::Fuse(0), Arm::Fuse(1), Arm::Fuse(2)];
+    match super::compile_modes(src, opts, &arms) {
+        Ok((units, _)) => [1, 2]
+            .iter()
+            .map(|&k| {
+                let rep = star_dst_compare(units[0].unit(), units[k].unit(), k as u8);
+                (arms[k], rep)
+            })
+            .collect(),
+        Err(e) => [Arm::Fuse(1), Arm::Fuse(2)]
+            .into_iter()
+            .map(|arm| {
+                let differences = vec![format!("compile: {e}")];
+                (
+                    arm,
+                    StarReport {
+                        differences,
+                        ..StarReport::default()
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+/// The checks of T1: arm 0 (`u0`) against an arm with the family `family` (`un`). Every fused
+/// instruction expands to its pair, and then (a) the instruction list is the arm-0 list (jumps
+/// by target index), (b) the jump targets, the jump-table targets in order, the handler ranges
+/// and targets, the constants, the feedback slots, the frame size and the mapped-parameter list
+/// are equal (INV-S1), (c) the position entries are the arm-0 entries: a fused instruction has
+/// the entry of its load, the `Star` of the pair has none (INV-S4), (d) no label, jump target,
+/// table entry, handler-range edge or position entry is on that `Star` (INV-S2), (e) no fused
+/// instruction has a prefix, and the arm has no more prefixed instructions than arm 0
+/// (INV-S7), (f) a family-1 arm has no context form; and the expanded bytes are the arm-0
+/// bytes. (g) counts the arm-0 pairs of the family that the arm did not fuse, by reason.
+fn star_dst_compare(
+    u0: &ep9_bytecode::CompiledUnit,
+    un: &ep9_bytecode::CompiledUnit,
+    family: u8,
+) -> StarReport {
+    use ep9_bytecode::OperandScale;
+    let mut rep = StarReport::default();
+    if u0.functions.len() != un.functions.len() {
+        rep.differences.push("function counts differ".into());
+        return rep;
+    }
+    let decode = |f: &ep9_bytecode::Function| -> Vec<(u32, Opcode, OperandScale)> {
+        ep9_bytecode::Instructions::new(&f.bytecode)
+            .map(|i| {
+                let i = i.expect("verified code decodes");
+                (i.offset, i.opcode, i.scale)
+            })
+            .collect()
+    };
+    for (fi, (f0, fnn)) in u0.functions.iter().zip(&un.functions).enumerate() {
+        let tag = |d: String| format!("f{fi}: {d}");
+        let mut dd: Vec<String> = Vec::new();
+        let (c0, cn) = (decode(f0), decode(fnn));
+        // (e), (f): the fused instructions of the arm.
+        let mut fused_at = Vec::new();
+        for (k, &(off, op, scale)) in cn.iter().enumerate() {
+            let Some(load) = star_pair_load(op) else {
+                continue;
+            };
+            fused_at.push(k);
+            *rep.fused.entry(op.name()).or_default() += 1;
+            if scale != OperandScale::Single {
+                dd.push(tag(format!("{op:?} at {off} has a prefix (INV-S7)")));
+            }
+            if !star_family_load(load, family) {
+                dd.push(tag(format!("{op:?} at {off} is not in family {family}")));
+            }
+        }
+        let prefixed = |c: &[(u32, Opcode, OperandScale)]| {
+            c.iter().filter(|x| x.2 != OperandScale::Single).count()
+        };
+        if prefixed(&cn) > prefixed(&c0) {
+            dd.push(tag(format!(
+                "more prefixed instructions ({} > {}, INV-S7)",
+                prefixed(&cn),
+                prefixed(&c0)
+            )));
+        }
+        let (fe, map) = star_dst_expand(fnn);
+        let (x0, xe) = (t1_decode(f0), t1_decode(&fe));
+        let index = |code: &[T1Insn], f: &ep9_bytecode::Function, off: u32| -> Option<usize> {
+            if off as usize == f.bytecode.len() {
+                Some(code.len())
+            } else {
+                code.iter().position(|i| i.off == off)
+            }
+        };
+        // (a) the instruction list, jumps and tables by target index.
+        let listing = |code: &[T1Insn], f: &ep9_bytecode::Function| -> Vec<String> {
+            code.iter()
+                .map(|i| {
+                    let t: Vec<Option<usize>> =
+                        i.table.iter().map(|&o| index(code, f, o)).collect();
+                    format!(
+                        "{} -> {:?} {t:?}",
+                        i.text,
+                        i.target.map(|o| index(code, f, o))
+                    )
+                })
+                .collect()
+        };
+        let (l0, le) = (listing(&x0, f0), listing(&xe, &fe));
+        if l0 != le {
+            let at = l0
+                .iter()
+                .zip(&le)
+                .position(|(a, b)| a != b)
+                .unwrap_or(l0.len().min(le.len()));
+            dd.push(tag(format!(
+                "instructions differ at {at} (INV-S1): arm 0 {:?}, expanded {:?}",
+                l0.get(at),
+                le.get(at)
+            )));
+        }
+        // (b) the side tables.
+        let handlers = |code: &[T1Insn], f: &ep9_bytecode::Function| -> Vec<String> {
+            f.handlers
+                .iter()
+                .map(|h| {
+                    format!(
+                        "{:?} {:?} {:?} {:?} {:?}",
+                        index(code, f, h.start),
+                        index(code, f, h.end),
+                        index(code, f, h.target),
+                        h.context,
+                        h.kind
+                    )
+                })
+                .collect()
+        };
+        if handlers(&x0, f0) != handlers(&xe, &fe) {
+            dd.push(tag("handler ranges differ (INV-S1)".into()));
+        }
+        if !same_constants(&f0.constants, &fe.constants) {
+            dd.push(tag("constants differ (INV-S1)".into()));
+        }
+        if f0.feedback_slots != fnn.feedback_slots {
+            dd.push(tag("feedback slots differ (INV-S1, D2)".into()));
+        }
+        if f0.register_count != fnn.register_count || f0.mapped_parameters != fnn.mapped_parameters
+        {
+            dd.push(tag("frame size or mapped parameters differ (INV-S1)".into()));
+        }
+        // (c) the position entries by instruction index.
+        let entries = |code: &[T1Insn], f: &ep9_bytecode::Function| -> Vec<String> {
+            f.positions
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{:?} {} {}",
+                        index(code, f, p.bytecode_offset),
+                        p.source_offset,
+                        p.is_statement
+                    )
+                })
+                .collect()
+        };
+        if entries(&x0, f0) != entries(&xe, &fe) {
+            dd.push(tag("position entries differ (INV-S4)".into()));
+        }
+        // (d) nothing is on the `Star` of a fused pair in arm 0.
+        let labels = t1_labels(f0, &x0);
+        for &k in &fused_at {
+            let Some(star) = x0.get(map[k] + 1) else {
+                continue;
+            };
+            if labels.contains(&star.off) {
+                dd.push(tag(format!(
+                    "a label is on the Star at {} (INV-S2)",
+                    star.off
+                )));
+            }
+            if f0.positions.iter().any(|p| p.bytecode_offset == star.off) {
+                dd.push(tag(format!(
+                    "a position entry is on the Star at {} (INV-S2)",
+                    star.off
+                )));
+            }
+        }
+        // The expanded function is the arm-0 function, byte for byte.
+        if dd.is_empty() && fe != *f0 {
+            dd.push(tag("the expansion differs from arm 0 (INV-S1)".into()));
+        }
+        rep.differences.extend(dd);
+        // (g) the arm-0 pairs of the family that the arm did not fuse.
+        let fused_pairs: std::collections::BTreeSet<usize> =
+            fused_at.iter().map(|&k| map[k]).collect();
+        for j in 0..c0.len().saturating_sub(1) {
+            let ((_, load, s0), (star_off, next, s1)) = (c0[j], c0[j + 1]);
+            if next != Opcode::Star || !star_family_load(load, family) || fused_pairs.contains(&j) {
+                continue;
+            }
+            let why = if f0.positions.iter().any(|p| p.bytecode_offset == star_off) {
+                "position"
+            } else if s0 != OperandScale::Single || s1 != OperandScale::Single {
+                "scale"
+            } else {
+                "other"
+            };
+            *rep.missed.entry(why).or_default() += 1;
+        }
+    }
+    rep
+}
+
+/// The STAR-DST cases of the design (PK section 4.2 tests (2), (3), (5); SD section 10): named
+/// loads into temporaries and bindings, chains, context loads at depth 0, 1 and 2, loads at a
+/// label, a statement position, inside handler ranges, a generator, and a wide frame.
+const STAR_CASES: &[(&str, Mode, &str)] = &[
+    (
+        "named",
+        Sloppy,
+        "function n1(a) { var x = a.b; return x; } function n2(a) { return a.b.c.d; } \
+         function n3() { return this.a + this.b; } function n4(a) { f(a.b); } \
+         function n5(a, b) { b = a.x; return b; } function n6(a) { return a.p ? a.q : a.r; }",
+    ),
+    (
+        "contexts",
+        Sloppy,
+        "function c1() { var o = 1; function g() { var t = o; return t; } return g; } \
+         function c2() { var o = 1; function m() { var w = 2; \
+         function d() { var t = o; var u = w; return t + u; } return d; } return m; } \
+         function c3() { var o = null; return function () { return o.p; }; }",
+    ),
+    (
+        "positions",
+        Sloppy,
+        "function p1(a) { var x = a.b;\n var y = a.c; return x + y; } \
+         function p2(a) { a.b;\n var y = a; return y; } function p3(a, q) { q = a.b; q.c; }",
+    ),
+    (
+        "handlers",
+        Sloppy,
+        "function h1(a) { try { var x = a.b; return x; } catch (e) { return e.m; } } \
+         function h2(a) { var x; try { x = a.b; } finally { x = a.c; } return x; } \
+         function h3(a) { for (var k of a.list) { var v = k.p; } return v; }",
+    ),
+    (
+        "generator",
+        Sloppy,
+        "function* g1(a) { var x = a.b; yield x.c; return a.d; } \
+         async function g2(a) { var x = await a.b; return x.c; }",
+    ),
+];
+
+/// A function with 300 named locals: the loads into `v299` need a `Wide` `Star` (B4).
+fn star_wide_case() -> String {
+    let mut s = String::from("function w(a) { ");
+    for i in 0..300 {
+        s.push_str(&format!("var v{i} = a.p{i}; "));
+    }
+    s.push_str("return v299 + v0; }");
+    s
+}
+
+/// T1 of STAR-DST on every golden case, the LDAR-ELIDE cases, the STAR-DST cases and a wide
+/// frame, in arms 1 and 2: no difference. The cases fuse each of the 3 opcodes, and keep pairs
+/// for the reasons "position" (B3) and "scale" (B4).
+#[test]
+fn star_dst_differential() {
+    let mut failures = Vec::new();
+    let mut fused: std::collections::BTreeMap<&str, usize> = Default::default();
+    let mut missed: std::collections::BTreeMap<&str, usize> = Default::default();
+    let wide = star_wide_case();
+    let extra: Vec<(&str, Mode, &str)> = vec![
+        ("t3", Strict, LDAR_T3),
+        ("mov", Sloppy, LDAR_MOV),
+        ("wide", Sloppy, &wide),
+    ];
+    for &(name, mode, src) in CASES.iter().chain(STAR_CASES).chain(&extra) {
+        for (arm, r) in star_dst_both(src, mode.opts()) {
+            for d in r.differences {
+                failures.push(format!("{name} {arm:?}: {d}"));
+            }
+            if arm == Arm::Fuse(2) {
+                for (k, n) in r.fused {
+                    *fused.entry(k).or_default() += n;
+                }
+                for (k, n) in r.missed {
+                    *missed.entry(k).or_default() += n;
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    for op in [
+        "GetNamedPropertyStar",
+        "LdaCurrentContextSlotStar",
+        "LdaContextSlotStar",
+    ] {
+        assert!(fused.get(op).is_some_and(|&n| n > 0), "no {op}: {fused:?}");
+    }
+    // B4 keeps the pairs of the wide frame; B2 keeps a pair at a label. (No pair of these
+    // cases has a position entry on its `Star`: the octane-typescript dump has none either.)
+    for why in ["scale", "other"] {
+        assert!(
+            missed.get(why).is_some_and(|&n| n > 0),
+            "no missed pair ({why}): {missed:?}"
+        );
+    }
+}
+
+/// A wide load: 300 names come first, so `a.q` has a name constant past 255 and its `Star`
+/// a one-byte `dst` (`x` is r0).
+fn star_wide_load_case() -> String {
+    let mut s = String::from("function w(a) { var x; f(");
+    for i in 0..300 {
+        s.push_str(&format!("a.p{i}, "));
+    }
+    s.push_str("0); x = a.q; return x; }");
+    s
+}
+
+/// A script unit of one function made by the register optimizer in `mode` (STAR-DST T2 at the
+/// replay level): r0 and r1 are bindings, `body` emits the code, then `LdaUndefined`,
+/// `Return`.
+fn star_emitted(
+    mode: Arm,
+    body: impl FnOnce(&mut super::regopt::Emitter),
+) -> ep9_bytecode::CompiledUnit {
+    use ep9_bytecode::{CodeKind, FunctionId, FunctionMeta, UnitBuilder, UnitOptions};
+    let src = "0123456789";
+    let mut e = super::regopt::Emitter::new(
+        FunctionMeta::entry(CodeKind::Script, false, src.len() as u32),
+        2,
+        mode,
+    );
+    body(&mut e);
+    e.lda_undefined().return_();
+    let code = e.finish().unwrap_or_else(|err| panic!("{err}"));
+    let mut u = UnitBuilder::new(
+        src,
+        UnitOptions {
+            code_kind: CodeKind::Script,
+            strict: false,
+            typescript: None,
+            engine_build_id: [0; 16],
+            embed_source: false,
+        },
+    );
+    u.set_function(FunctionId(0), code);
+    u.finish()
+        .unwrap_or_else(|err| panic!("{err}"))
+        .into_inner()
+}
+
+/// The T2 replay cases: (name, body).
+type StarBody = fn(&mut super::regopt::Emitter);
+
+fn star_bodies() -> Vec<(&'static str, StarBody)> {
+    use ep9_bytecode::{FeedbackSlotKind, HandlerKind, Register};
+    fn load(e: &mut super::regopt::Emitter) {
+        let k = e.string_constant("b");
+        let s = e.feedback_slot(FeedbackSlotKind::LoadNamed);
+        e.get_named_property(Register::RECEIVER, k, s);
+    }
+    vec![
+        // A handler-range start between the load and its `Star` (SC a3).
+        ("range start", |e| {
+            let (start, end, target, done) =
+                (e.new_label(), e.new_label(), e.new_label(), e.new_label());
+            let ctx = Register::local(1);
+            e.lda_current_context().star(ctx);
+            load(e);
+            e.bind(start);
+            e.star(Register::local(0));
+            load(e);
+            e.bind(end);
+            e.jump(done);
+            e.bind(target);
+            e.bind(done);
+            e.add_handler(start, end, target, ctx, HandlerKind::Caught);
+        }),
+        // A handler-range end between the load and its `Star`.
+        ("range end", |e| {
+            let (start, end, target, done) =
+                (e.new_label(), e.new_label(), e.new_label(), e.new_label());
+            let ctx = Register::local(1);
+            e.lda_current_context().star(ctx);
+            e.bind(start);
+            load(e);
+            e.bind(end);
+            e.star(Register::local(0));
+            e.jump(done);
+            e.bind(target);
+            e.bind(done);
+            e.add_handler(start, end, target, ctx, HandlerKind::Caught);
+        }),
+        // A statement position between the load and its `Star` into a temporary: the transfer
+        // is emitted with the entry (O9).
+        ("statement", |e| {
+            let t = e.new_register();
+            load(e);
+            e.set_statement_position(5);
+            e.star(t);
+            e.lda_smi(1);
+            e.ldar(t);
+            e.star(Register::local(0));
+        }),
+        // A carried statement position: the owed `Ldar r1` of a statement after the load.
+        ("carried", |e| {
+            let t = e.new_register();
+            load(e);
+            e.star(t);
+            e.set_statement_position(5);
+            e.ldar(Register::local(1));
+            e.star(Register::local(0));
+            e.ldar(t);
+            e.star(Register::local(1));
+        }),
+    ]
+}
+
+/// `function f(a, p) { var u; u = (a.b, p); return u; }`: the dead load `a.b`, then the owed
+/// `Ldar p`, which rule O2 emits before the `Star u` (PK section 4.2 test (3)).
+const STAR_OWED: &str = "function f(a, p) { var u; u = (a.b, p); return u; }";
+
+/// T2 of STAR-DST: each mutant (`Mode::Mutant(11..=20)`) breaks one rule of O13, and T1 finds
+/// it with its own reason. The correct arms pass on the same inputs.
+#[test]
+fn star_dst_mutants_fail() {
+    let sloppy = SourceOpts::script(Strictness::Sloppy);
+    let strict = SourceOpts::script(Strictness::Strict);
+    let wide = star_wide_case();
+    let wide_load = star_wide_load_case();
+    let fails = |m: u8, src: &str, opts: SourceOpts, needle: &str| {
+        let d = star_dst_differences(src, opts, Arm::Mutant(m)).differences;
+        assert!(d.iter().any(|d| d.contains(needle)), "mutant {m}: {d:?}");
+    };
+    let bodies = star_bodies();
+    let body = |name: &str| bodies.iter().find(|b| b.0 == name).expect("a body").1;
+    let replay_fails = |m: u8, name: &str, needle: &str| {
+        let b = body(name);
+        let (u0, un) = (
+            star_emitted(Arm::Fuse(0), b),
+            star_emitted(Arm::Mutant(m), b),
+        );
+        let d = star_dst_compare(&u0, &un, star_family(Arm::Mutant(m))).differences;
+        assert!(
+            d.iter().any(|d| d.contains(needle)),
+            "mutant {m} {name}: {d:?}"
+        );
+    };
+    // 11: B2 is not tested: the fuse crosses a jump target (t3: the loop of c14).
+    fails(11, LDAR_T3, strict, "a label is on the Star");
+    // 12, 13: B2 is not tested at a handler-range start or end (SC a3): the range moves.
+    replay_fails(12, "range start", "handler ranges differ");
+    replay_fails(13, "range end", "handler ranges differ");
+    // 14: B3 is not tested: the statement entry of the `Star` goes to the next instruction.
+    replay_fails(14, "statement", "position entries differ");
+    // 15, 16: B4 is not tested for the load (a name constant past 255) or for `dst` (a local
+    // past r127): the fused instruction has a prefix.
+    fails(15, &wide_load, sloppy, "has a prefix (INV-S7)");
+    fails(16, &wide, sloppy, "has a prefix (INV-S7)");
+    // 17: a carried statement position forced onto each `Star` (PK test (2), replay level):
+    // B3 keeps every pair, with the entry on the `Star`; T1 sees the added entries.
+    for src in [STAR_OWED, wide.as_str()] {
+        fails(17, src, sloppy, "position entries differ");
+        let r = star_dst_differences(src, sloppy, Arm::Mutant(17));
+        assert!(r.fused.is_empty(), "mutant 17 fused {:?}", r.fused);
+    }
+    // 18: the owed `Ldar` after the fused instruction (the O2 order; PK test (3)): `u` gets
+    // `a.b`, not `p`.
+    fails(18, STAR_OWED, sloppy, "instructions differ");
+    // 19: the fused instruction stores to another register.
+    fails(19, &wide, sloppy, "instructions differ");
+    // 20: family 1 fuses a context load.
+    fails(
+        20,
+        "function c1() { var o = 1; function g() { var t = o; return t; } return g; }",
+        sloppy,
+        "is not in family 1",
+    );
+    // The correct arms pass on the same inputs, and fuse there.
+    for src in [LDAR_T3, STAR_OWED, wide.as_str(), wide_load.as_str()] {
+        for (arm, r) in star_dst_both(src, strict) {
+            assert!(r.differences.is_empty(), "{arm:?}: {:?}", r.differences);
+        }
+    }
+    for (name, b) in &bodies {
+        let u0 = star_emitted(Arm::Fuse(0), *b);
+        for f in [1, 2] {
+            let r = star_dst_compare(&u0, &star_emitted(Arm::Fuse(f), *b), f);
+            assert!(
+                r.differences.is_empty(),
+                "{name} family {f}: {:?}",
+                r.differences
+            );
+        }
+    }
+}
+
+/// PK section 4.2 tests (2), (3) and (5) at the front end: a statement position on the `Star`
+/// (replay level) keeps the pair with the entry on the `Star`; an owed `Ldar` between the load
+/// and the `Star` keeps the pair; `f(a.b)` with the fused load keeps the position entry (the
+/// throw location) of the load.
+#[test]
+fn star_dst_keeps_the_pair_for_a_position_and_an_owed_load() {
+    let sloppy = SourceOpts::script(Strictness::Sloppy);
+    // (2): the statement body (B3): the pair, with the statement entry on the `Star`.
+    let bodies = star_bodies();
+    let stmt = bodies.iter().find(|b| b.0 == "statement").unwrap().1;
+    let u = star_emitted(Arm::Fuse(2), stmt);
+    let f = &u.functions[0];
+    let star = ep9_bytecode::Instructions::new(&f.bytecode)
+        .map(Result::unwrap)
+        .find(|i| i.opcode == Opcode::Star)
+        .expect("the Star stays");
+    assert!(
+        f.positions
+            .iter()
+            .any(|p| p.bytecode_offset == star.offset && p.is_statement),
+        "{}",
+        ep9_bytecode::disassemble(&u)
+    );
+    // (3): the owed `Ldar a1` between the load and `Star r0`.
+    let units = arm_units(STAR_OWED, sloppy, &[Arm::Fuse(2)]);
+    let text = arm_listing(&units[0], "f");
+    assert!(
+        text.contains("GetNamedProperty a0, k0, s0\n4 Ldar a1\n6 Star r0\n")
+            && !text.contains("PropertyStar"),
+        "{text}"
+    );
+    // (5): `f(a.b)`: the fused load has the entry of the arm-0 load.
+    let src = "function d1(a) { f(a.b); }";
+    let units = arm_units(src, sloppy, &[Arm::Fuse(0), Arm::Fuse(2)]);
+    let (t0, t2) = (arm_listing(&units[0], "d1"), arm_listing(&units[1], "d1"));
+    assert!(
+        t2.contains("5 E> GetNamedPropertyStar a0, k1, s1, r1\n"),
+        "{t2}"
+    );
+    let entries = |t: &str| {
+        t.lines()
+            .filter(|l| l.starts_with('|'))
+            .map(|l| l.split_whitespace().skip(2).collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(entries(&t0), entries(&t2), "{t0}\n--\n{t2}");
+    assert!(
+        star_dst_differences(src, sloppy, Arm::Fuse(2))
+            .differences
+            .is_empty()
+    );
+}
+
+/// T1 of STAR-DST on the script files named in `EP9_STAR_DST_FILES` (`:`-separated, sloppy
+/// scripts), in arms 1 and 2; prints the fused sites and the pairs kept by reason. On demand:
+///
+/// ```text
+/// EP9_STAR_DST_FILES=a.js:b.js cargo test -p ep9_frontend --release --lib star_dst_on_files -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "on demand: needs EP9_STAR_DST_FILES"]
+fn star_dst_on_files() {
+    let files = std::env::var("EP9_STAR_DST_FILES").unwrap_or_default();
+    let mut failures = Vec::new();
+    for path in files.split(':').filter(|p| !p.is_empty()) {
+        let src = std::fs::read_to_string(path).expect("read the file");
+        for (arm, r) in star_dst_both(&src, SourceOpts::script(Strictness::Sloppy)) {
+            println!(
+                "{path} {arm:?}: {} differences, fused {:?}, kept pairs {:?}",
+                r.differences.len(),
+                r.fused,
+                r.missed
+            );
+            failures.extend(
+                r.differences
+                    .into_iter()
+                    .map(|d| format!("{path} {arm:?}: {d}")),
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

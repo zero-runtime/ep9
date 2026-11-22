@@ -294,6 +294,39 @@ fn run(files: &[(PathBuf, bool, bool)]) -> Report {
                                         Some(k),
                                     ));
                                 }
+                                // STAR-DST T1 (rule O13, the probe; release run only): fuse 0
+                                // against fuse 1 and fuse 2, from one arm-0 compile. A
+                                // difference fails the run; the fused sites and the kept
+                                // pairs are counted.
+                                for (arm, t1) in super::tests::star_dst_both(&src, opts) {
+                                    if !t1.differences.is_empty() {
+                                        t1_lines.push(format!(
+                                            "{arm:?}\t{}\t{opts:?}\t{}",
+                                            short_path(path),
+                                            t1.differences.join(", ")
+                                        ));
+                                        local.push((
+                                            format!("REGOPT STAR-DST T1 failure ({arm:?})"),
+                                            Some(t1.differences.join(", ")),
+                                        ));
+                                    }
+                                    for (op, n) in t1.fused {
+                                        for _ in 0..n {
+                                            local.push((
+                                                format!("STAR-DST fused ({arm:?}): {op}"),
+                                                None,
+                                            ));
+                                        }
+                                    }
+                                    for (why, n) in t1.missed {
+                                        for _ in 0..n {
+                                            local.push((
+                                                format!("STAR-DST kept pair ({arm:?}): {why}"),
+                                                None,
+                                            ));
+                                        }
+                                    }
+                                }
                             }
                         }
                         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -335,7 +368,8 @@ fn run(files: &[(PathBuf, bool, bool)]) -> Report {
                             !class.starts_with("NO POSITION")
                                 && !class.starts_with("CONTEXT")
                                 && !class.starts_with("REGOPT")
-                                && !class.starts_with("LDAR-ELIDE"),
+                                && !class.starts_with("LDAR-ELIDE")
+                                && !class.starts_with("STAR-DST"),
                         );
                         *rep.classes.entry(class.clone()).or_insert(0) += 1;
                         if let Some(err) = err {
@@ -377,8 +411,8 @@ fn corpus_verifier_clean_and_deterministic() {
     let files = corpus_files();
     let mut report = run(&files);
     print(&mut report);
-    // Test-only switch: `EP9_CORPUS_T1_LIST=<file>` writes every LDAR-ELIDE T1 failure, one per
-    // line and sorted (the log above prints one example per class).
+    // Test-only switch: `EP9_CORPUS_T1_LIST=<file>` writes every LDAR-ELIDE and STAR-DST T1
+    // failure, one per line and sorted (the log above prints one example per class).
     if let Some(out) = std::env::var_os("EP9_CORPUS_T1_LIST") {
         report.t1.sort();
         let mut text = report.t1.join("\n");
