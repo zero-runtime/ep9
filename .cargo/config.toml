@@ -4,7 +4,7 @@
 # LLVM compiles starts on a 64-byte line (not naked_asm! functions or compiler_builtins). They change
 # code placement only, never behavior. Stable Rust 1.99.1 has no per-function align attribute, so this
 # is the only form. RUSTFLAGS (or CARGO_ENCODED_RUSTFLAGS) in the environment replaces these rustflags
-# (cargo order): a build that sets it loses the alignment, and `cargo xtask disasm-check --frames` fails.
+# (cargo order): an override without the flag loses the alignment, and `disasm-check --frames` fails.
 [alias]
 xtask = "run --package xtask --"
 
