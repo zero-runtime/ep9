@@ -326,7 +326,7 @@ fn the_object_model_is_the_same_with_and_without_a_loaded_unit() {
 //
 // ```text
 // CLASSES --ep9_frontend--> B, D: `CallUndefinedReceiver0 a0 (offset 0); ...`
-// text: a counting frame stub per function (count += 1; return call_any(cx, fp, 2, 0)),
+// text: a counting frame stub per function (count += 1; return call_any(cx, fp, CALL_AT, 0)),
 //   unwind form 1 of the host --TestUnit::encode--> unit bytes --check--> Load
 //   --Cx::run_script_installing_unit_code--> B and D installed (AotBaseline)
 // each case: the same script with no install and with the unit code: the same result, and
