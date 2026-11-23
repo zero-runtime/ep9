@@ -7,16 +7,16 @@
 //! Each program is built twice, once with the pairs ([`Form::Pair`]) and once with the fused
 //! opcodes ([`Form::Fused`]), and runs under every dispatch expansion, in both feedback modes
 //! (`full` and `ics_only`: the two T0 handler tables), with and without GC stress, with eager
-//! feedback. The 2 forms must print the same lines (0 mismatches: the FASTDIFF form of each
-//! fused fast path against its pair) and export the same facts (each fused site is the same
-//! feedback site as its pair, with the same records; a function with 2 fused named loads
-//! checks the records of its 2 slots after each call). The receivers come from the runtime
-//! as globals: plain objects (in-object and out-of-line fields, a prototype field, a missing
-//! name), an array and a string (the length handlers), a getter that returns and one that
-//! throws, a proxy with a `get` trap, more shapes than a polymorphic entry holds (the stub
-//! cache probe of the fast body), and `undefined` and `null` (the TypeError). Each fused form
-//! also runs with a `Wide` and an `ExtraWide` prefix (`dst` past r127 and past r32767), and the
-//! context forms at depth 0 and 1 and on their cold path.
+//! feedback. The 2 forms must print the same lines (0 mismatches: the FASTDIFF form of each fused
+//! fast path against its pair) and, in the runs without GC stress, export the same facts (each
+//! fused site is the same feedback site as its pair, with the same records; a function with 2 fused
+//! named loads checks the records of its 2 slots after each call, with and without GC stress). The
+//! receivers come from the runtime as globals: plain objects (in-object and out-of-line fields, a
+//! prototype field, a missing name), an array and a string (the length handlers), a getter that
+//! returns and one that throws, a proxy with a `get` trap, more shapes than a polymorphic entry
+//! holds (the stub cache probe of the fast body), and `undefined` and `null` (the TypeError). Each
+//! fused form also runs with a `Wide` and an `ExtraWide` prefix (`dst` past r127 and past r32767),
+//! and the context forms at depth 0 and 1 and on their cold path.
 
 use ep9_bytecode::{
     ConstIndex, FeedbackSlot, FeedbackSlotKind, FunctionCode, FunctionFlags, FunctionId,
@@ -147,13 +147,15 @@ fn program(scopes: Vec<ScopeDef>, defs: Vec<Def>, calls: &[(String, String)]) ->
 
 /// What one run gives: the printed lines, the stub cache hits of the named loads (of the
 /// one-byte fast bodies, `ic::FAST_PROBE_HITS`, and of all their probes, fast and cold bodies,
-/// `ic::HANDLER_PROBE_HITS`), and the exported facts of the unit, one line per record (key,
+/// `ic::HANDLER_PROBE_HITS`), the exported facts of the unit, one line per record (key,
 /// facts, flags), with the unit hash written as `UNIT` (the call records name the unit by its
-/// content hash, which differs between the 2 forms).
+/// content hash, which differs between the 2 forms), and the GC count of the isolate when the
+/// facts were exported.
 struct RunOut {
     out: Vec<String>,
     probes: [u32; 2],
     facts: Vec<String>,
+    collections: u64,
 }
 
 /// The run of `make(form)` after `setup` defined its globals, in a new isolate of dispatch `d`
@@ -186,6 +188,7 @@ fn run_form(
             ic::FAST_PROBE_HITS.with(|c| c.get()),
             ic::HANDLER_PROBE_HITS.with(|c| c.get()),
         ];
+        let collections = iso.gc_stats().collections;
         let snap = export_facts(&iso, &hash).expect("the unit is loaded");
         let named = format!("{hash:?}");
         let facts = snap
@@ -194,14 +197,19 @@ fn run_form(
             .collect();
         iso.collect_garbage();
         iso.verify_heap().unwrap();
-        RunOut { out, probes, facts }
+        RunOut {
+            out,
+            probes,
+            facts,
+            collections,
+        }
     })
 }
 
 /// What [`same`] gives: the output of the first run, the smallest hit counts of the fused
 /// form in a run (`[fast bodies, all probes]`; all probes over the runs without GC stress
 /// only, as a GC empties the stub cache and a prefixed load can then miss each time), and the
-/// facts of the first run.
+/// facts of the first run (`full`, no GC stress).
 struct Same {
     out: Vec<String>,
     probes: [u32; 2],
@@ -209,8 +217,14 @@ struct Same {
 }
 
 /// Runs both forms of `make` everywhere: each run must print what the pair form printed under
-/// the first dispatch, both forms must hit the stub cache as often, and both forms must export
-/// the same facts (in `full` mode the facts are also the same in each run). With
+/// the first dispatch, both forms must hit the stub cache as often, and each run must export
+/// facts. In the runs without GC stress (no GC before the export) both forms must export the
+/// same facts, and in `full` mode the facts are also the same in each of these runs. The runs
+/// with GC stress do not compare facts: an IC key is weak (H16 K2, K7), so a major GC clears
+/// the key of a site whose receivers are all dead (the script's `message` load of a caught
+/// Error), and whether a stale word of the native stack (the conservative scan) keeps that
+/// shape alive through the GC depends on the build, the target and the code path, so it can
+/// differ between 2 runs and between the 2 forms. With
 /// `one_byte` (the fused instructions of `make` have no prefix) the hits of the fast bodies are
 /// equal too; a `Wide` or `ExtraWide` fused load probes in its cold body
 /// (`ic::get_named_cold_len`), where the pair with a one-byte load probed in the fast body.
@@ -250,11 +264,18 @@ fn same(
                     assert_eq!(pair_probes[0], fused_probes[0], "{label}: fast-body hits");
                 }
                 // The same feedback site: the same records under the same keys (V1, A3 of the
-                // review round 1).
-                assert_eq!(
-                    pair_run.facts, fused_run.facts,
-                    "{label}: the facts of the fused form differ from the pair"
-                );
+                // review round 1), in the runs with no GC before the export (see the doc).
+                if !stress {
+                    assert_eq!(
+                        [pair_run.collections, fused_run.collections],
+                        [0, 0],
+                        "{label}: a GC ran before the facts export"
+                    );
+                    assert_eq!(
+                        pair_run.facts, fused_run.facts,
+                        "{label}: the facts of the fused form differ from the pair"
+                    );
+                }
                 assert!(!fused_run.facts.is_empty(), "{label}: no facts");
                 probes[0] = probes[0].min(fused_probes[0]);
                 if !stress {
@@ -264,7 +285,7 @@ fn same(
                     None => first = Some(pair),
                     Some(f0) => assert_eq!(&pair, f0, "{label} differs from the first run"),
                 }
-                if f == Feedback::FULL {
+                if f == Feedback::FULL && !stress {
                     match &first_facts {
                         None => first_facts = Some(fused_run.facts),
                         Some(f0) => {
@@ -663,7 +684,9 @@ fn named_site(step: &TwoStep, i: usize, state: IcState, fields: &[u16]) -> bool 
 /// the 2 forms still have the same records, and `two` gives `x + length`. A fused handler that
 /// reads or writes a fixed slot, or that skips the first record of its cold path, fails here
 /// (the tests above have one named site per function, all at the slot `Asm::named`, and export
-/// the facts only at the end of a run, after later calls filled the slot again).
+/// the facts only at the end of a run, after later calls filled the slot again). The runs with
+/// GC stress check the facts too: the receivers are globals, so their shapes stay alive and no
+/// GC clears a key of the 2 slots.
 #[test]
 fn two_fused_named_loads_keep_their_own_slots() {
     for &d in Dispatch::ALL {
