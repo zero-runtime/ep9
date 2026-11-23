@@ -4,4 +4,4 @@
 # change gets a BCG-CORPUS row in docs/decisions-log.md.
 # Check:   cargo test -p ep9_frontend --release --locked --lib bytecodegen::corpus -- --ignored
 # Rewrite: the same command with EP9_BLESS_CORPUS=1 (crates/ep9_frontend/src/bytecodegen/corpus.rs)
-dd687603c81773cecfdd1fd41ccd8151ab4c68070bd7af6498523b39a8c1ff38
+f199320ebec39a23d86384432c3d7a209b3321a6fbcb01431eefe2736e0fcb3d
