@@ -63,8 +63,7 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
-    Expr, FnArg, GenericArgument, Item, Pat, PathArguments, ReceiverKind, ReturnType, Type,
-    TypeParamBound,
+    Expr, FnArg, GenericArgument, Item, Pat, PathArguments, ReturnType, Type, TypeParamBound,
 };
 
 use crate::disasm::repo_root;
@@ -1347,8 +1346,8 @@ impl Linter<'_> {
                     // syn 3 has no `Receiver::ty`: build the type that syn 2 gave (`Self`,
                     // `&'a mut Self` or the written type of `self: T`).
                     let ty: Type = match &r.kind {
-                        ReceiverKind::Typed(_, t) => (**t).clone(),
-                        ReceiverKind::Reference(_, lt, m) => syn::parse_quote!(& #lt #m Self),
+                        syn::ReceiverKind::Typed(_, t) => (**t).clone(),
+                        syn::ReceiverKind::Reference(_, lt, m) => syn::parse_quote!(& #lt #m Self),
                         _ => syn::parse_quote!(Self),
                     };
                     let s = self.m.summary(&ty, self_name.as_deref());
