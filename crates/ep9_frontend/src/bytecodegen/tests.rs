@@ -3007,21 +3007,40 @@ fn star_dst_differential() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    for op in [
-        "GetNamedPropertyStar",
-        "LdaCurrentContextSlotStar",
-        "LdaContextSlotStar",
-    ] {
-        assert!(fused.get(op).is_some_and(|&n| n > 0), "no {op}: {fused:?}");
-    }
-    // B4 keeps the pairs of the wide frame; B2 keeps a pair at a label. (No pair of these
-    // cases has a position entry on its `Star`: the octane-typescript dump has none either.)
-    for why in ["scale", "other"] {
-        assert!(
-            missed.get(why).is_some_and(|&n| n > 0),
-            "no missed pair ({why}): {missed:?}"
-        );
-    }
+    // The exact counts: each of the 3 opcodes fuses, and a pair that is not fused has a
+    // reason. B4 keeps the pairs of the wide frame ("scale"); B2 keeps a pair at a label
+    // ("other"). No pair of these cases has a position entry on its `Star` (the
+    // octane-typescript dump has none either). A lost fusion moves a pair from `fused` to
+    // "other", so both counts are pinned: a change of the cases or of codegen updates them.
+    let want: std::collections::BTreeMap<&str, usize> = [
+        ("GetNamedPropertyStar", 245),
+        ("LdaContextSlotStar", 1),
+        ("LdaCurrentContextSlotStar", 46),
+    ]
+    .into();
+    assert_eq!(fused, want, "the fused instructions");
+    let want: std::collections::BTreeMap<&str, usize> = [("other", 1), ("scale", 172)].into();
+    assert_eq!(missed, want, "the pairs that are not fused, per reason");
+}
+
+/// A named load whose `dst` is its object register (`p = p.x`; the goldens hold 31 lines of the
+/// form `GetNamedPropertyStar rN, k, s, rN`): the default fuses it, with the object and `dst`
+/// the same register, and its expansion is the arm-0 pair (no difference, no pair left).
+#[test]
+fn star_dst_aliased_load_is_fused() {
+    let src = "function a(p) { p = p.x; return p; }";
+    let sloppy = SourceOpts::script(Strictness::Sloppy);
+    let units = arm_units(src, sloppy, &[super::regopt::DEFAULT]);
+    let text = arm_listing(&units[0], "a");
+    assert!(
+        text.contains("GetNamedPropertyStar a0, k0, s0, a0\n"),
+        "{text}"
+    );
+    let (_, rep) = star_dst_both(src, sloppy).remove(0);
+    assert!(rep.differences.is_empty(), "{:?}", rep.differences);
+    let want: std::collections::BTreeMap<&str, usize> = [("GetNamedPropertyStar", 1)].into();
+    assert_eq!(rep.fused, want, "{text}");
+    assert!(rep.missed.is_empty(), "{:?}\n{text}", rep.missed);
 }
 
 /// A wide load: 300 names come first, so `a.q` has a name constant past 255 and its `Star`
