@@ -207,7 +207,7 @@ struct Same {
 
 /// Runs both forms of `make` everywhere: each run must print what the pair form printed under
 /// the first dispatch, both forms must hit the stub cache as often, and both forms must export
-/// the same facts (the facts of a feedback mode are the same in each run of that mode). With
+/// the same facts (in `full` mode the facts are also the same in each run). With
 /// `one_byte` (the fused instructions of `make` have no prefix) the hits of the fast bodies are
 /// equal too; a `Wide` or `ExtraWide` fused load probes in its cold body
 /// (`ic::get_named_cold_len`), where the pair with a one-byte load probed in the fast body.
