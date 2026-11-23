@@ -63,7 +63,8 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
-    Expr, FnArg, GenericArgument, Item, Pat, PathArguments, ReturnType, Type, TypeParamBound,
+    Expr, FnArg, GenericArgument, Item, Pat, PathArguments, ReceiverKind, ReturnType, Type,
+    TypeParamBound,
 };
 
 use crate::disasm::repo_root;
@@ -857,7 +858,7 @@ impl Model {
             Type::Tuple(t) => t.elems.iter().for_each(|e| self.walk_type(e, reach, at, f)),
             Type::Paren(p) => self.walk_type(&p.elem, reach, at, f),
             Type::Group(g) => self.walk_type(&g.elem, reach, at, f),
-            Type::BareFn(b) => {
+            Type::FnPtr(b) => {
                 for a in &b.inputs {
                     self.walk_type(&a.ty, reach, CUT, f);
                 }
@@ -899,8 +900,8 @@ impl Model {
             match &seg.arguments {
                 PathArguments::None => {}
                 PathArguments::Parenthesized(p) => {
-                    for t in &p.inputs {
-                        self.walk_type(t, reach, CUT, f);
+                    for a in &p.inputs {
+                        self.walk_type(&a.ty, reach, CUT, f);
                     }
                     if let ReturnType::Type(_, t) = &p.output {
                         self.walk_type(t, reach, CUT, f);
@@ -1175,8 +1176,9 @@ impl<'ast> Visit<'ast> for Free {
     fn visit_arm(&mut self, a: &'ast syn::Arm) {
         self.scoped(|s| {
             s.bind(&a.pat);
-            if let Some((_, g)) = &a.guard {
-                s.visit_expr(g);
+            // syn 3 keeps an arm's `if` guard in the pattern (`Pat::Guard`).
+            if let Pat::Guard(g) = &a.pat {
+                s.visit_expr(&g.guard);
             }
             s.visit_expr(&a.body);
         });
@@ -1342,7 +1344,14 @@ impl Linter<'_> {
         for a in inputs {
             match a {
                 FnArg::Receiver(r) => {
-                    let s = self.m.summary(&r.ty, self_name.as_deref());
+                    // syn 3 has no `Receiver::ty`: build the type that syn 2 gave (`Self`,
+                    // `&'a mut Self` or the written type of `self: T`).
+                    let ty: Type = match &r.kind {
+                        ReceiverKind::Typed(_, t) => (**t).clone(),
+                        ReceiverKind::Reference(_, lt, m) => syn::parse_quote!(& #lt #m Self),
+                        _ => syn::parse_quote!(Self),
+                    };
+                    let s = self.m.summary(&ty, self_name.as_deref());
                     self.bind(
                         "self".into(),
                         Binding {
