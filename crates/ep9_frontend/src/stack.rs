@@ -14,7 +14,7 @@
 //! | Bytes per unit | debug | release | worst form |
 //! |---|---|---|---|
 //! | oxc_parser, per pre-scan unit | 5,968 | 2,288 | debug: switch (oxc 0.159, 2026-11-24); release: nested objects |
-//! | oxc regex parser, per group | 20,320 | 1,328 | regex groups (weighted 4 units, `prescan::REGEX_WEIGHT`; oxc 0.159) |
+//! | oxc regex parser, per group | 20,320 | 1,392 | debug: groups; release: nested `v` classes (oxc 0.159); weighted 4 units, `prescan::REGEX_WEIGHT` |
 //! | layer-2 depth pass, per AST level | 800 | 80 | debug: arrays; release: class heritage, assignment |
 //! | oxc_semantic, per AST level | 1,440 | 256 | arrays / class heritage |
 //! | scope pass (`scope::analyze`), per AST level | 2,016 | 240 | class heritage |
