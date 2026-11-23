@@ -259,8 +259,10 @@ fn facts_without_unit_hash(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// T7: `ep9 --facts-out slack.js` prints 40600 and writes the same facts (unit hash zeroed) in
-/// each run (the binary reads no switch). That a fused named load is the same LoadNamed site
-/// as its pair is carried by T1 and by the probe runs (DL M11-P3-L16-PREREG-FILL).
+/// each run (the binary reads no switch, so this checks only that a run is repeatable). That
+/// a fused load is the same feedback site as its pair, with the same records, is the VM test
+/// T3 (`ep9_vm` `tests::star_dst`: the facts of the pair unit and of the fused unit are
+/// equal, for each dispatch, each feedback mode and with and without GC stress).
 #[test]
 fn slack_facts_are_the_same_in_each_arm() {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("star-dst-t7");

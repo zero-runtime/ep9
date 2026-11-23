@@ -1,12 +1,15 @@
 //! T3 of the STAR-DST probe (ABI 7; DL M11-P3-PICK): each fused opcode
 //! (`GetNamedPropertyStar`, `LdaCurrentContextSlotStar`, `LdaContextSlotStar`) runs as its pair
-//! (the load, then `Star dst`). The units are hand-built with the generic emitters, so CI runs
-//! the fused handlers with the `EP9_STAR_DST` switch of the front end not set.
+//! (the load, then `Star dst`). The front end emits the set by default; the units here are
+//! hand-built with the generic emitters, so each test fixes the shape of the pair and of the
+//! fused form.
 //!
 //! Each program is built twice, once with the pairs ([`Form::Pair`]) and once with the fused
-//! opcodes ([`Form::Fused`]), and runs under every dispatch expansion, with and without GC
-//! stress, with eager feedback. The 2 forms must print the same lines (0 mismatches: the
-//! FASTDIFF form of each fused fast path against its pair). The receivers come from the runtime
+//! opcodes ([`Form::Fused`]), and runs under every dispatch expansion, in both feedback modes
+//! (`full` and `ics_only`: the two T0 handler tables), with and without GC stress, with eager
+//! feedback. The 2 forms must print the same lines (0 mismatches: the FASTDIFF form of each
+//! fused fast path against its pair) and export the same facts (each fused site is the same
+//! feedback site as its pair, with the same records). The receivers come from the runtime
 //! as globals: plain objects (in-object and out-of-line fields, a prototype field, a missing
 //! name), an array and a string (the length handlers), a getter that returns and one that
 //! throws, a proxy with a `get` trap, more shapes than a polymorphic entry holds (the stub
@@ -20,11 +23,15 @@ use ep9_bytecode::{
 };
 
 use super::ic::{int, key, object_prototype, object_with};
-use super::{Asm, ScopeDef, config, isolate, meta, on_big_stack, take_output, unit_with_scopes};
+use super::{Asm, ScopeDef, config, meta, on_big_stack, print, take_output, unit_with_scopes};
+use crate::abi::export_facts;
 use crate::frame::{NULL, UNDEFINED};
 use crate::object::{self, attr};
 use crate::runtime::Runtime;
-use crate::{Args, Cx, Dispatch, JsResult, Local, accessor, ic, props, proxy, realm, string};
+use crate::{
+    Args, Cx, Dispatch, ExecOptions, Feedback, Isolate, JsResult, Local, accessor, ic, props,
+    proxy, realm, string,
+};
 
 /// The pair or the fused opcode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,26 +142,39 @@ fn program(scopes: Vec<ScopeDef>, defs: Vec<Def>, calls: &[(String, String)]) ->
     unit_with_scopes("", scopes, fns)
 }
 
-/// The output of `make(form)` after `setup` defined its globals, in a new isolate of dispatch
-/// `d` (GC stress `stress`, eager feedback), and the stub cache hits of the named loads: of
-/// the one-byte fast bodies (`ic::FAST_PROBE_HITS`) and of all their probes (fast and cold
-/// bodies, `ic::HANDLER_PROBE_HITS`).
+/// What one run gives: the printed lines, the stub cache hits of the named loads (of the
+/// one-byte fast bodies, `ic::FAST_PROBE_HITS`, and of all their probes, fast and cold bodies,
+/// `ic::HANDLER_PROBE_HITS`), and the exported facts of the unit, one line per record (key,
+/// facts, flags), with the unit hash written as `UNIT` (the call records name the unit by its
+/// content hash, which differs between the 2 forms).
+struct RunOut {
+    out: Vec<String>,
+    probes: [u32; 2],
+    facts: Vec<String>,
+}
+
+/// The run of `make(form)` after `setup` defined its globals, in a new isolate of dispatch `d`
+/// and feedback mode `f` (GC stress `stress`, eager feedback).
 fn run_form(
     d: Dispatch,
+    f: Feedback,
     stress: bool,
     setup: fn(&mut Cx<'_>) -> JsResult<()>,
     make: fn(Form) -> VerifiedUnit,
     form: Form,
-) -> (Vec<String>, [u32; 2]) {
+) -> RunOut {
     on_big_stack(move || {
         let mut c = config(d, stress);
         c.feedback_threshold = 0;
-        let mut iso = isolate(c);
+        let mut iso = Isolate::new_with(c, ExecOptions::default().feedback(f)).unwrap();
+        iso.register_host_function("print", 1, print);
         take_output();
         ic::FAST_PROBE_HITS.with(|c| c.set(0));
         ic::HANDLER_PROBE_HITS.with(|c| c.set(0));
         iso.with_cx_checkpoint(setup).unwrap();
-        let r = iso.with_cx_checkpoint(|cx| cx.run_script(make(form), "star.js").map(|_| ()));
+        let unit = make(form);
+        let hash = unit.content_hash();
+        let r = iso.with_cx_checkpoint(|cx| cx.run_script(unit, "star.js").map(|_| ()));
         let mut out = take_output();
         if let Err(e) = r {
             out.push(format!("uncaught {e} {:?}", e.stack));
@@ -163,57 +183,103 @@ fn run_form(
             ic::FAST_PROBE_HITS.with(|c| c.get()),
             ic::HANDLER_PROBE_HITS.with(|c| c.get()),
         ];
+        let snap = export_facts(&iso, &hash).expect("the unit is loaded");
+        let named = format!("{hash:?}");
+        let facts = snap
+            .records_with_meta()
+            .map(|(k, v, m)| format!("{k:?} {v:?} {m:?}").replace(&named, "UNIT"))
+            .collect();
         iso.collect_garbage();
         iso.verify_heap().unwrap();
-        (out, probes)
+        RunOut { out, probes, facts }
     })
 }
 
+/// What [`same`] gives: the output of the first run, the smallest hit counts of the fused
+/// form in a run (`[fast bodies, all probes]`; all probes over the runs without GC stress
+/// only, as a GC empties the stub cache and a prefixed load can then miss each time), and the
+/// facts of the first run.
+struct Same {
+    out: Vec<String>,
+    probes: [u32; 2],
+    facts: Vec<String>,
+}
+
 /// Runs both forms of `make` everywhere: each run must print what the pair form printed under
-/// the first dispatch, and both forms must hit the stub cache as often. With `one_byte` (the
-/// fused instructions of `make` have no prefix) the hits of the fast bodies are equal too; a
-/// `Wide` or `ExtraWide` fused load probes in its cold body (`ic::get_named_cold_len`), where
-/// the pair with a one-byte load probed in the fast body. Returns that output and the smallest
-/// fast-body hit count of a run.
+/// the first dispatch, both forms must hit the stub cache as often, and both forms must export
+/// the same facts (the facts of a feedback mode are the same in each run of that mode). With
+/// `one_byte` (the fused instructions of `make` have no prefix) the hits of the fast bodies are
+/// equal too; a `Wide` or `ExtraWide` fused load probes in its cold body
+/// (`ic::get_named_cold_len`), where the pair with a one-byte load probed in the fast body.
 fn same(
     setup: fn(&mut Cx<'_>) -> JsResult<()>,
     make: fn(Form) -> VerifiedUnit,
     one_byte: bool,
-) -> (Vec<String>, u32) {
+) -> Same {
     let mut first: Option<Vec<String>> = None;
-    let mut probes = u32::MAX;
+    let mut first_facts: Option<Vec<String>> = None;
+    let mut probes = [u32::MAX; 2];
     for &d in Dispatch::ALL {
-        for stress in [false, true] {
-            let (pair, pair_probes) = run_form(d, stress, setup, make, Form::Pair);
-            let (fused, fused_probes) = run_form(d, stress, setup, make, Form::Fused);
-            let label = format!("{} stress={stress}", d.name());
-            let diff: Vec<String> = pair
-                .iter()
-                .zip(&fused)
-                .enumerate()
-                .filter(|(_, (p, f))| p != f)
-                .map(|(i, (p, f))| format!("line {i}: pair {p:?}, fused {f:?}"))
-                .collect();
-            assert!(
-                diff.is_empty() && pair.len() == fused.len(),
-                "{label}: the fused form differs from the pair ({} and {} lines):\n{}",
-                pair.len(),
-                fused.len(),
-                diff.join("\n")
-            );
-            // The same IC path: the fast body probes the stub cache as often (one-byte forms).
-            assert_eq!(pair_probes[1], fused_probes[1], "{label}: stub cache hits");
-            if one_byte {
-                assert_eq!(pair_probes[0], fused_probes[0], "{label}: fast-body hits");
-            }
-            probes = probes.min(fused_probes[0]);
-            match &first {
-                None => first = Some(pair),
-                Some(f0) => assert_eq!(&pair, f0, "{label} differs from the first run"),
+        for f in [Feedback::FULL, Feedback::ICS_ONLY] {
+            for stress in [false, true] {
+                let pair_run = run_form(d, f, stress, setup, make, Form::Pair);
+                let fused_run = run_form(d, f, stress, setup, make, Form::Fused);
+                let (pair, pair_probes) = (pair_run.out, pair_run.probes);
+                let (fused, fused_probes) = (fused_run.out, fused_run.probes);
+                let label = format!("{} {} stress={stress}", d.name(), f.name());
+                let diff: Vec<String> = pair
+                    .iter()
+                    .zip(&fused)
+                    .enumerate()
+                    .filter(|(_, (p, f))| p != f)
+                    .map(|(i, (p, f))| format!("line {i}: pair {p:?}, fused {f:?}"))
+                    .collect();
+                assert!(
+                    diff.is_empty() && pair.len() == fused.len(),
+                    "{label}: the fused form differs from the pair ({} and {} lines):\n{}",
+                    pair.len(),
+                    fused.len(),
+                    diff.join("\n")
+                );
+                // The same IC path: the fast body probes the stub cache as often (one-byte forms).
+                assert_eq!(pair_probes[1], fused_probes[1], "{label}: stub cache hits");
+                if one_byte {
+                    assert_eq!(pair_probes[0], fused_probes[0], "{label}: fast-body hits");
+                }
+                // The same feedback site: the same records under the same keys (V1, A3 of the
+                // review round 1).
+                assert_eq!(
+                    pair_run.facts, fused_run.facts,
+                    "{label}: the facts of the fused form differ from the pair"
+                );
+                assert!(!fused_run.facts.is_empty(), "{label}: no facts");
+                probes[0] = probes[0].min(fused_probes[0]);
+                if !stress {
+                    probes[1] = probes[1].min(fused_probes[1]);
+                }
+                match &first {
+                    None => first = Some(pair),
+                    Some(f0) => assert_eq!(&pair, f0, "{label} differs from the first run"),
+                }
+                if f == Feedback::FULL {
+                    match &first_facts {
+                        None => first_facts = Some(fused_run.facts),
+                        Some(f0) => {
+                            assert_eq!(
+                                &fused_run.facts, f0,
+                                "{label}: facts differ from the first run"
+                            );
+                        }
+                    }
+                }
             }
         }
     }
-    (first.unwrap(), probes)
+    Same {
+        out: first.unwrap(),
+        probes,
+        facts: first_facts.unwrap(),
+    }
 }
 
 // ---- receivers (globals) --------------------------------------------------------------------
@@ -405,8 +471,9 @@ fn named_defs(form: Form, nm: &str, cases: &[&str]) -> Vec<Def> {
 const ONE_BYTE: &[&str] = &["dst", "acc", "self", "try"];
 const PREFIXED: &[&str] = &["wide", "xwide", "wobj", "wtry"];
 
-/// The receivers of the prefixed forms: a hit, a getter, a throw, a proxy, a string, an array
-/// and the TypeError (their frames are large, so fewer calls).
+/// The receivers of the prefixed forms: a hit, a getter, a throw, a proxy, a string, an array,
+/// the TypeError, and the `MEGA` shapes (the stub cache probe of the cold body); their frames
+/// are large, so fewer calls.
 const PREFIXED_RECEIVERS: &[&str] = &[
     "oIn",
     "oIn",
@@ -416,6 +483,14 @@ const PREFIXED_RECEIVERS: &[&str] = &[
     "sAbc",
     "arr",
     "undefined",
+    "m0",
+    "m1",
+    "m2",
+    "m3",
+    "m4",
+    "m5",
+    "m0",
+    "m1",
 ];
 
 fn named_unit(form: Form) -> VerifiedUnit {
@@ -443,9 +518,18 @@ fn named_unit_of(form: Form, cases: &[&str], receivers: &[&str]) -> VerifiedUnit
 /// object register) or past r127 and r32767.
 #[test]
 fn get_named_property_star_runs_as_its_pair() {
-    let (out, probes) = same(receivers, named_unit, true);
+    let Same { out, probes, facts } = same(receivers, named_unit, true);
     // The megamorphic site hits the stub cache in the fast body (one-byte forms).
-    assert!(probes > 0, "no stub cache probe hit");
+    assert!(probes[0] > 0, "no stub cache probe hit");
+    // The fused named loads (functions 1-8) have LoadNamed records.
+    let loads = facts
+        .iter()
+        .filter(|r| !r.contains("function: 0,") && r.contains("LoadNamed("))
+        .count();
+    assert!(
+        loads >= 8,
+        "{loads} LoadNamed records of the test functions: {facts:#?}"
+    );
     let n = RECEIVERS.len();
     assert_eq!(out.len(), 8 * n);
     let line = |f: usize, r: usize| out[f * n + r].as_str();
@@ -465,7 +549,11 @@ fn get_named_property_star_runs_as_its_pair() {
     assert_eq!(out[length + 14], "3");
     // The prefixed forms print what the one-byte forms print (x_dst, x_try, length_dst):
     // wide, xwide and wobj as dst, wtry as try.
-    let (wide, _) = same(receivers, named_prefixed_unit, false);
+    let Same {
+        out: wide, probes, ..
+    } = same(receivers, named_prefixed_unit, false);
+    // The `MEGA` shapes: a prefixed fused load probes the stub cache in its cold body.
+    assert!(probes[1] > 0, "no stub cache probe hit (prefixed)");
     let m = PREFIXED_RECEIVERS.len();
     assert_eq!(wide.len(), 8 * m);
     let like = |f: usize| -> Vec<&str> {
@@ -624,7 +712,7 @@ fn context_unit(form: Form) -> VerifiedUnit {
 /// `try`, `dst` keeps its value).
 #[test]
 fn context_slot_star_runs_as_its_pair() {
-    let (out, _) = same(receivers, context_unit, true);
+    let out = same(receivers, context_unit, true).out;
     let want: Vec<&str> = ["6", "5", "6", "6", "8", "9", "6", "5", "5", "6", "6"]
         .iter()
         .flat_map(|v| [*v; 3])
@@ -754,7 +842,7 @@ fn frames_unit(form: Form) -> VerifiedUnit {
 /// the fused instruction (the suspend saves `dst`, the resume restores it).
 #[test]
 fn fused_loads_in_mapped_and_generator_frames_run_as_their_pairs() {
-    let (out, _) = same(receivers, frames_unit, true);
+    let out = same(receivers, frames_unit, true).out;
     // oIn: the register b is 1, arguments[1] and the context slot are 2; the generator yields
     // 1, returns 1, then gives undefined; run returns undefined.
     assert_eq!(
