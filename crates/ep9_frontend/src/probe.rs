@@ -655,11 +655,11 @@ fn scope_pass_matches_oxc_on_corpus() {
         "files with a different ScopeAnalysis on the second run"
     );
     // Only the reviewed classes, at their reviewed counts (H01 "F1 corpus"). `Why::Other` is a
-    // bug in ep9 or in oxc.
+    // bug in ep9 or in oxc. `Why::CatchVar` is 0 since oxc 0.159.0 (#28739: a `var` that
+    // redeclares a catch parameter resolves to the catch symbol, as in ep9).
     let reviewed = std::collections::BTreeMap::from([
         (crate::scope::tests::Why::SplitBody, 54),
         (crate::scope::tests::Why::AnnexB, 488),
-        (crate::scope::tests::Why::CatchVar, 4),
     ]);
     assert_eq!(
         by_why, reviewed,
