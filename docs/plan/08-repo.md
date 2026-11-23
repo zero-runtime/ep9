@@ -194,7 +194,7 @@ echo "ep9-typecheck: $tc/target/release/ep9-typecheck"
 
 ## 6. How oxc is consumed
 
-- From crates.io with exact pins (D1 = E): `=0.159.0` on the 8 oxc crates of the root `Cargo.toml` since DEPS-BUMP-2 (2026-11-24).
+- From crates.io with exact pins (D1 = E): `=0.158.0` on the 8 oxc crates of the root `Cargo.toml` since DEPS-BUMP-1 (2026-11-10). DEPS-BUMP-2 (2026-11-24) kept it: with 0.159.0 a debug parse at the depth cap leaves a 1.009x worker stack margin (the design wants 1.5x).
 - One bump PR at a time, every 2 weeks (user rule 2026-11-10, route DEPS-BUMP; it was about every 8 weeks). The same PR bumps the other Cargo deps that no other track holds. Each bump carries a test262 diff and an instruction-count diff [R04].
 - Local patches only through the oxc track ([01-front-end.md](./01-front-end.md); ≤ 3 patches, each linked to an upstream PR). The depth-counter patch is the most likely one.
 - `oxc_transformer` runs only for TS legacy decorators (D4). Those files get no hints. All other TS lowering is in BytecodeGen (H3).

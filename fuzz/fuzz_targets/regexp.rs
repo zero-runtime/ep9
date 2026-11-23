@@ -214,7 +214,7 @@ const MAX_PROBE_SOURCES: usize = 48;
 
 /// The reviewed front-end/RX1 identifier difference of check 1 (the module doc): the
 /// code points, as inclusive ranges in order, that are ID_Continue for the front end
-/// (oxc_regular_expression 0.159.0 with `unicode-id-start` 1.5.0, Unicode 18.0.0) and not for
+/// (oxc_regular_expression 0.158.0 with `unicode-id-start` 1.5.0, Unicode 18.0.0) and not for
 /// RX1 (`ep9_rx1` unicode_tables.rs, UCD 17.0.0): 12,860 code points in 38 ranges (12,823 of
 /// them in 27 ranges are also ID_Start; the other way, 0). Made at the M9-P1 merge from a
 /// probe of every code point U+0080..U+10FFFF with a copy of [`probe_id_differs`],
