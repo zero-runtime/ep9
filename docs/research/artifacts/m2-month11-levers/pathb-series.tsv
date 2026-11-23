@@ -1,0 +1,13 @@
+read	tree	commit	boxes	box	build	ts_gate_median	ts_gate_interval	same_round_tjitless_over_tjit	box_neutral_ep9_over_qjs	ts_gross_s	switch	rule100	source
+PB10	m10-p5	591064fc	ep9-x86-m10-end-pathb-1,-2	1	jit	0.882	0.875-0.893	0.951	0.667 (2-box mean)	-	-	-	DL M10-END-D3; R22 2.3, 3.1
+PB10	m10-p5	591064fc	ep9-x86-m10-end-pathb-1,-2	2	jit	0.885	0.879-0.905	0.943	0.667 (2-box mean)	-	-	-	DL M10-END-D3; R22 2.3, 3.1
+PB10	m10-p5	591064fc	ep9-x86-m10-end-pathb-1,-2	1	jitless	0.942	0.923-0.955	0.951	0.630 (2-box mean)	-	-	-	DL M10-END-D3; R22 3.1
+PB10	m10-p5	591064fc	ep9-x86-m10-end-pathb-1,-2	2	jitless	0.942	0.922-0.960	0.943	0.630 (2-box mean)	-	-	-	DL M10-END-D3; R22 3.1
+PBm	m11-p0	0814321a	ep9-x86-m11-mid-pathb-1,-2	1	jit	0.936	0.908-0.952	0.956	0.642	7.978	DOES NOT FIRE	NO FALL	DL M11-P2-PATHB-MID; PBm:22,:78-79,:363
+PBm	m11-p0	0814321a	ep9-x86-m11-mid-pathb-1,-2	2	jit	0.924	0.918-0.939	0.948	0.638	8.001	DOES NOT FIRE	NO FALL	same
+PBm	m11-p0	0814321a	ep9-x86-m11-mid-pathb-1,-2	1	jitless	0.974	0.956-0.988	0.956	0.620	7.610	DOES NOT FIRE	NO FALL	PBm:23,:134-135
+PBm	m11-p0	0814321a	ep9-x86-m11-mid-pathb-1,-2	2	jitless	0.973	0.957-0.985	0.948	0.608	7.624	DOES NOT FIRE	NO FALL	same
+PBe	m11-p3	016a7061	ep9-x86-m11-end-pathb-1,-2	1	jit	0.970	0.954-0.977	0.997	0.605	6.117	DOES NOT FIRE	NO FALL	DL M11-END-PATHB; PBe:22,:78-79,:363
+PBe	m11-p3	016a7061	ep9-x86-m11-end-pathb-1,-2	2	jit	0.974	0.971-0.985	0.995	0.614	5.893	DOES NOT FIRE	NO FALL	same
+PBe	m11-p3	016a7061	ep9-x86-m11-end-pathb-1,-2	1	jitless	0.972	0.966-0.982	0.997	0.604	6.059	DOES NOT FIRE	NO FALL	PBe:23,:134-135
+PBe	m11-p3	016a7061	ep9-x86-m11-end-pathb-1,-2	2	jitless	0.980	0.968-0.990	0.995	0.611	5.847	DOES NOT FIRE	NO FALL	same

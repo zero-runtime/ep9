@@ -1,0 +1,14 @@
+form	oxc_0.158.0_debug_B_per_unit	oxc_0.159.0_debug_B_per_unit	oxc_0.158.0_release_B_per_unit	oxc_0.159.0_release_B_per_unit	debug_budget	release_budget	in_FORMS
+FORMS worst (measure_forms)	5824	5968	1488	1760	6199	2615	yes
+spread arguments f(...a,...,...f(...)) k>=6	6384	9216	1184	1616	6199	2615	no
+nested call with arguments (call, method, optional, async), nested last or middle, k>=6	6288	9120	1184	1552	6199	2615	no
+f(f(0)) k=1 or nested first	5920	6928	1184	1552	6199	2615	no
+tagged template with substitutions	5360	8656	1344	1984	6199	2615	no
+long switch clause	1760	8176	368	1392	6199	2615	no
+long sequence	3886	7216	<=992	<=1760	6199	2615	no
+long template	3776	7136	<=992	<=1760	6199	2615	no
+long array	3774	6464	<=992	<=1760	6199	2615	no
+function statements	4224	6592	-	<=2272	6199	2615	no
+arrow body call	5128	6656	-	<=2272	6199	2615	no
+release worst of all 190 rows	-	-	1904	2240	6199	2615	mixed
+AT CAP spread args k=6 n=24999: parse stack bytes	159608735	230410927	-	-	worker 232497152	-	margin 1.46x / 1.009x
