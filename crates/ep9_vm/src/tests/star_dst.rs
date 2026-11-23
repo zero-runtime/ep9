@@ -9,7 +9,8 @@
 //! (`full` and `ics_only`: the two T0 handler tables), with and without GC stress, with eager
 //! feedback. The 2 forms must print the same lines (0 mismatches: the FASTDIFF form of each
 //! fused fast path against its pair) and export the same facts (each fused site is the same
-//! feedback site as its pair, with the same records). The receivers come from the runtime
+//! feedback site as its pair, with the same records; a function with 2 fused named loads
+//! checks the records of its 2 slots after each call). The receivers come from the runtime
 //! as globals: plain objects (in-object and out-of-line fields, a prototype field, a missing
 //! name), an array and a string (the length handlers), a getter that returns and one that
 //! throws, a proxy with a `get` trap, more shapes than a polymorphic entry holds (the stub
@@ -18,9 +19,11 @@
 //! context forms at depth 0 and 1 and on their cold path.
 
 use ep9_bytecode::{
-    ConstIndex, FeedbackSlot, FunctionCode, FunctionFlags, FunctionId, HandlerKind, Register,
-    RegisterList, RuntimeId, ScopeId, ScopeKind, VariableMode, VerifiedUnit,
+    ConstIndex, FeedbackSlot, FeedbackSlotKind, FunctionCode, FunctionFlags, FunctionId,
+    HandlerKind, Register, RegisterList, RuntimeId, ScopeId, ScopeKind, VariableMode, VerifiedUnit,
 };
+
+use ep9_facts::{Access, IcState, SlotFacts};
 
 use super::ic::{int, key, object_prototype, object_with};
 use super::{Asm, ScopeDef, config, meta, on_big_stack, print, take_output, unit_with_scopes};
@@ -580,6 +583,125 @@ fn get_named_property_star_runs_as_its_pair() {
             .map(String::as_str)
             .collect();
         assert_eq!(got, like(one), "prefixed function {f}");
+    }
+}
+
+// ---- two named sites in one function ---------------------------------------------------------
+
+/// `two(a)`: `r1 = a.x` at the slot `Asm::named`, `r2 = a.length` at a second LoadNamed slot,
+/// both by [`load_star`], then `return r2 + r1`. It also gives the 2 slots.
+fn two_unit(form: Form) -> (VerifiedUnit, [u32; 2]) {
+    let mut a = Asm::new(meta("two", 1, 0, 0, 0));
+    let s2 = a.b.feedback_slot(FeedbackSlotKind::LoadNamed);
+    let s1 = a.named;
+    let (kx, kl) = (a.b.string_constant("x"), a.b.string_constant("length"));
+    let p = a.b.parameter(0);
+    let (r1, r2) = (a.b.new_register(), a.b.new_register());
+    load_star(&mut a, form, Load::Named(p, kx, s1), r1);
+    load_star(&mut a, form, Load::Named(p, kl, s2), r2);
+    a.b.ldar(r2).add(r1, a.bin).return_();
+    let defs = vec![("two".to_owned(), a.finish())];
+    (program(vec![], defs, &[]), [s1.0, s2.0])
+}
+
+/// The receivers of the calls of `two`: a first fill, a hit, a second shape.
+const TWO_CALLS: [&str; 3] = ["oIn", "oIn", "oPoly"];
+
+/// What `two` (function 1) gives after one call: the value, and the facts of its 2 slots.
+type TwoStep = (u64, [Option<SlotFacts>; 2]);
+
+/// The calls of [`TWO_CALLS`] in a new isolate (as [`run_form`] makes it): one [`TwoStep`] per
+/// call, with the facts exported after that call (not only at the end of the run).
+fn two_run(d: Dispatch, f: Feedback, stress: bool, form: Form) -> Vec<TwoStep> {
+    on_big_stack(move || {
+        let mut c = config(d, stress);
+        c.feedback_threshold = 0;
+        let mut iso = Isolate::new_with(c, ExecOptions::default().feedback(f)).unwrap();
+        iso.register_host_function("print", 1, print);
+        iso.with_cx_checkpoint(receivers).unwrap();
+        let (unit, slots) = two_unit(form);
+        let hash = unit.content_hash();
+        iso.with_cx_checkpoint(|cx| cx.run_script(unit, "two.js").map(|_| ()))
+            .unwrap();
+        let mut steps = Vec::new();
+        for recv in TWO_CALLS {
+            let v = iso
+                .with_cx(|cx| {
+                    let two = cx.global_binding("two")?.expect("two");
+                    let o = cx.global_binding(recv)?.expect("the receiver");
+                    Ok(cx.call(two, Local::undefined(), &[o])?.bits())
+                })
+                .unwrap();
+            let snap = export_facts(&iso, &hash).expect("the unit is loaded");
+            steps.push((v, slots.map(|s| snap.get(1, s).cloned())));
+        }
+        iso.collect_garbage();
+        iso.verify_heap().unwrap();
+        steps
+    })
+}
+
+/// The site of slot `i` after a step: a LoadNamed record in state `state` whose cases read the
+/// own fields `fields` of the receivers, in order.
+fn named_site(step: &TwoStep, i: usize, state: IcState, fields: &[u16]) -> bool {
+    match &step.1[i] {
+        Some(SlotFacts::LoadNamed(p)) => {
+            let got: Vec<Access> = p.cases.iter().map(|c| c.access.clone()).collect();
+            let want: Vec<Access> = fields
+                .iter()
+                .map(|&field| Access::OwnField { field })
+                .collect();
+            p.state == state && got == want
+        }
+        _ => false,
+    }
+}
+
+/// T3, two fused named loads with 2 slots in one function, in both feedback modes: after the
+/// first call (the first fill of each slot, on the cold path) each slot holds the record of its
+/// own name (`x` is field 0 of `oIn`, `length` field 1); after the hit and after a second shape
+/// the 2 forms still have the same records, and `two` gives `x + length`. A fused handler that
+/// reads or writes a fixed slot, or that skips the first record of its cold path, fails here
+/// (the tests above have one named site per function, all at the slot `Asm::named`, and export
+/// the facts only at the end of a run, after later calls filled the slot again).
+#[test]
+fn two_fused_named_loads_keep_their_own_slots() {
+    for &d in Dispatch::ALL {
+        for f in [Feedback::FULL, Feedback::ICS_ONLY] {
+            for stress in [false, true] {
+                let label = format!("{} {} stress={stress}", d.name(), f.name());
+                let pair = two_run(d, f, stress, Form::Pair);
+                let fused = two_run(d, f, stress, Form::Fused);
+                for (form, steps) in [("pair", &pair), ("fused", &fused)] {
+                    let values: Vec<u64> = steps.iter().map(|s| s.0).collect();
+                    assert_eq!(
+                        values,
+                        [int(12), int(12), int(14)],
+                        "{label} {form}: values"
+                    );
+                    let first = &steps[0];
+                    assert!(
+                        named_site(first, 0, IcState::Monomorphic, &[0])
+                            && named_site(first, 1, IcState::Monomorphic, &[1]),
+                        "{label} {form}: the facts after the first call: {:#?}",
+                        first.1
+                    );
+                    let last = &steps[2];
+                    assert!(
+                        named_site(last, 0, IcState::Polymorphic, &[0, 1])
+                            && named_site(last, 1, IcState::Polymorphic, &[1, 2]),
+                        "{label} {form}: the facts after the second shape: {:#?}",
+                        last.1
+                    );
+                }
+                for (i, (p, q)) in pair.iter().zip(&fused).enumerate() {
+                    assert_eq!(
+                        p.1, q.1,
+                        "{label}: call {i}: the facts of the 2 forms differ"
+                    );
+                }
+            }
+        }
     }
 }
 
