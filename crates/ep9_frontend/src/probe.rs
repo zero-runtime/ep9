@@ -937,3 +937,106 @@ fn p4_lone_surrogate_eval_count() {
         "{review}"
     );
 }
+
+/// T-D: the oxc parse of every form at the pre-scan cap (the largest n with estimate <=
+/// `PRESCAN_CAP`, the fit of `depth_tests::check_prescan_cap_form`) fits the worker stack with
+/// the 1.5x margin of `stack.rs`. The pre-scan lets such an input reach oxc, so this is the
+/// deepest parse the worker can run for the form. Forms whose estimate does not grow have no
+/// pre-scan cap and are only listed.
+#[test]
+#[ignore = "measurement; run on demand with --ignored --nocapture"]
+fn parse_stack_at_the_cap() {
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let paint = crate::stack::WORKER_STACK_BYTES;
+    let limit = paint / 3 * 2;
+    let (out, rows, flat) = std::thread::Builder::new()
+        .stack_size(2 << 30)
+        .spawn(move || {
+            let mut out = String::new();
+            let mut rows = Vec::new();
+            let mut flat = Vec::new();
+            writeln!(
+                out,
+                "| form | n | estimate | parse B | full |\n|---|---|---|---|---|"
+            )
+            .unwrap();
+            for form in FORMS {
+                let estimate =
+                    |n: usize| prescan::estimate((form.build)(n).as_bytes(), form.module).depth;
+                let (e10, e11, e17) = (estimate(10), estimate(11), estimate(17));
+                let ea = e11 - e10;
+                let eb = e10 - 10 * ea;
+                assert_eq!(
+                    e17,
+                    17 * ea + eb,
+                    "{}: the estimate is not linear",
+                    form.name
+                );
+                if ea == 0 {
+                    flat.push(form.name);
+                    continue;
+                }
+                let n = usize::try_from((crate::PRESCAN_CAP - eb) / ea).unwrap();
+                let src = (form.build)(n);
+                let e = prescan::estimate(src.as_bytes(), form.module).depth;
+                assert!(e <= crate::PRESCAN_CAP, "{} n {n}: estimate {e}", form.name);
+                let allocator = Allocator::default();
+                let source_type = if form.module {
+                    oxc_span::SourceType::mjs()
+                } else {
+                    oxc_span::SourceType::script()
+                };
+                let options = oxc_parser::ParseOptions {
+                    parse_regular_expression: true,
+                    ..oxc_parser::ParseOptions::default()
+                };
+                let (bytes, parsed, full) = measure_or_full(paint, || {
+                    oxc_parser::Parser::new(&allocator, &src, source_type)
+                        .with_options(options)
+                        .parse()
+                });
+                assert!(
+                    !parsed.diagnostics.has_errors(),
+                    "form {} n {n}: {:?}",
+                    form.name,
+                    parsed.diagnostics.errors().next()
+                );
+                writeln!(out, "| {} | {n} | {e} | {bytes} | {full} |", form.name).unwrap();
+                rows.push((form.name, n, e, bytes, full));
+            }
+            (out, rows, flat)
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    println!("{out}");
+    println!("no pre-scan cap (estimate does not grow): {flat:?}");
+    let &(name, _, _, worst, _) = rows
+        .iter()
+        .max_by_key(|row| row.3)
+        .expect("a form with a growing estimate");
+    println!(
+        "T-D worst {}-{} {profile}: {worst} B at the cap (form {name}); limit {limit} B",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    let over: Vec<String> = rows
+        .iter()
+        .filter(|row| row.4 || row.3 > limit)
+        .map(|&(name, n, e, bytes, full)| {
+            format!("{name} n {n} estimate {e}: {bytes} B (full {full}) > limit {limit} B")
+        })
+        .collect();
+    for line in &over {
+        println!("T-D over: {line}");
+    }
+    assert!(
+        over.is_empty(),
+        "parse stack at the pre-scan cap above WORKER_STACK_BYTES / 1.5:\n{}",
+        over.join("\n")
+    );
+}

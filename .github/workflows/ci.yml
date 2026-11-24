@@ -351,15 +351,15 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG_ASSERTIONS: "true"
           CARGO_TARGET_DIR: ${{ runner.temp }}/opt2
         run: cargo test -p ep9_vm --locked --lib tests::calls
-      # T-A (plan v17 §5.2 step 2; H01 B2): the parse stack per pre-scan unit of every FORMS row,
-      # debug and release, on this target. The "T-A worst" lines give PARSE_PER_UNIT (stack.rs).
+      # T-A and T-D (H01 B2), debug and release, on this target: the parse stack per pre-scan unit
+      # of every FORMS row ("T-A worst" gives PARSE_PER_UNIT, stack.rs), and at the pre-scan cap.
       - name: T-A measure_forms (debug and release)
         if: ${{ !cancelled() }}
         run: |
           rc1=0; rc2=0
-          cargo test --locked -p ep9_frontend --lib probe::measure_forms -- --ignored --exact --nocapture 2>&1 | tee t-a.log || rc1=$?
-          CARGO_TARGET_DIR="$RUNNER_TEMP/t-a-release" cargo test --locked -p ep9_frontend --release --lib probe::measure_forms -- --ignored --exact --nocapture 2>&1 | tee -a t-a.log || rc2=$?
-          grep '^T-A ' t-a.log | tee -a "$GITHUB_STEP_SUMMARY"
+          cargo test --locked -p ep9_frontend --lib probe::measure_forms -- --ignored --exact --nocapture probe::parse_stack_at_the_cap 2>&1 | tee t-a.log || rc1=$?
+          CARGO_TARGET_DIR="$RUNNER_TEMP/t-a-release" cargo test --locked -p ep9_frontend --release --lib probe::measure_forms -- --ignored --exact --nocapture probe::parse_stack_at_the_cap 2>&1 | tee -a t-a.log || rc2=$?
+          grep '^T-[AD] ' t-a.log | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$rc1" = 0 ] && [ "$rc2" = 0 ]
 
   # H27: the default (jit), jitless and aot feature sets, one package at a time (a --workspace
