@@ -165,6 +165,10 @@ fn over_budget(delta_bytes: usize, delta_units: u32, budget: usize) -> Option<St
     }
 }
 
+/// T-A: the final assert of `measure_forms` runs only when this is true.
+/// push 1 of plan v17 §5.2: print only; step 3 sets it true
+const T_A_ASSERT: bool = false;
+
 /// Measures every form, and fails when a slope does not fit its share of the worker stack:
 /// parse per pre-scan unit, the depth pass, oxc_semantic and the scope pass per AST level.
 #[test]
@@ -176,10 +180,12 @@ fn measure_forms() {
     } else {
         "release"
     };
-    let (out, over) = std::thread::Builder::new()
+    let (out, over, worst) = std::thread::Builder::new()
         .stack_size(2 << 30)
         .spawn(move || {
             let mut over = Vec::new();
+            // T-A: the worst parse slope per pre-scan unit, rounded up to a whole byte.
+            let mut worst: Option<(usize, &'static str)> = None;
             let mut out = String::new();
             writeln!(
                 out,
@@ -200,6 +206,12 @@ fn measure_forms() {
                 let de = b.estimate - a.estimate;
                 let dast = b.ast_depth - a.ast_depth;
                 let dn = u32::try_from(n2 - n1).unwrap();
+                if de > 0 {
+                    let slope = b.parse.saturating_sub(a.parse).div_ceil(de as usize);
+                    if worst.is_none_or(|(w, _)| slope > w) {
+                        worst = Some((slope, form.name));
+                    }
+                }
                 // Base = the stack at n2 minus the slope times the units at n2.
                 let base = |at_b: usize, at_a: usize, units_b: u32, units_a: u32| -> i64 {
                     let du = i64::from(units_b) - i64::from(units_a);
@@ -247,17 +259,28 @@ fn measure_forms() {
                     }
                 }
             }
-            (out, over)
+            (out, over, worst)
         })
         .unwrap()
         .join()
         .unwrap();
     println!("{out}");
-    assert!(
-        over.is_empty(),
-        "stack slopes above the worker stack share:\n{}",
-        over.join("\n")
+    let (w, name) = worst.expect("a form with a growing estimate");
+    println!(
+        "T-A worst {}-{} {profile}: {w} B per pre-scan unit (form {name}); budget {PARSE_UNIT_BUDGET} B",
+        std::env::consts::OS,
+        std::env::consts::ARCH
     );
+    for line in &over {
+        println!("T-A over: {line}");
+    }
+    if T_A_ASSERT {
+        assert!(
+            over.is_empty(),
+            "stack slopes above the worker stack share:\n{}",
+            over.join("\n")
+        );
+    }
 }
 
 /// Literal starts (regex, string, template) in oxc's AST.
