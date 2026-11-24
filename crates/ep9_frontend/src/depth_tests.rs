@@ -1000,3 +1000,575 @@ fn passes_stop_on_a_small_stack() {
     assert_eq!(kinds.1, "Range(TooDeep(Pass))", "scope pass");
     assert_eq!(kinds.2, STACK_LIMIT, "BytecodeGen");
 }
+
+// The visitor-graph proof of the layer-2 walk (review R2 A2-1). `DepthPass` (depth.rs) stops
+// only at its gated visit functions. The walk is bounded only if every cycle of the oxc visitor
+// call graph passes through a gated node. This test reads the visitor source of the pinned oxc
+// checkout, so a new oxc pin with a new cycle fails here, before an input can abort the process.
+//
+// Why the graph is complete for `DepthPass`:
+// - The walk of `DepthPass` calls only the `Visit` trait methods. The trait default of each
+//   `visit_X` calls `walk_X` and nothing else (checked below: no alias visit function).
+// - A `walk_X` body calls `visitor.visit_Y` (an edge X -> Y), `visitor.enter_node` /
+//   `leave_node` / `enter_scope` / `leave_scope` / `alloc` (no recursion in `DepthPass`: its
+//   `enter_node` and `leave_node` call no visit function, and the scope hooks are the empty
+//   defaults), and no `walk_Y` directly (checked below). Any other `visitor.` call fails the test.
+// - `Vec` fields have their own walk function (`walk_statements` loops on `visit_statement`): a
+//   node of the graph, a loop and not a recursion. `Option` is an `if let` around one call and
+//   `Box` is a deref: one edge each, no extra node.
+// - The overrides of `DepthPass` are read from depth.rs: each `fn visit_X` there must be the gate
+//   form (`if self.may_descend() { walk::walk_X(self, it) }`), else the test fails.
+// - A gate stops a cycle only if the depth grows on it: every cycle of the full graph must have
+//   a node whose walk calls `enter_node` (checked below).
+
+/// The oxc visitor source: `oxc_ast_visit` 0.158.0 of the crates.io package is byte-equal to
+/// the pinned checkout (the oxc_parser path dependency needs the checkout, so it is present).
+fn oxc_visit_source() -> String {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../third_party/oxc/crates/oxc_ast_visit/src/generated/visit.rs"
+    );
+    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+/// The identifiers that follow `prefix` in `body` (for example `visitor.visit_`).
+fn names_after<'s>(body: &'s str, prefix: &str) -> Vec<&'s str> {
+    body.match_indices(prefix)
+        .map(|(at, _)| {
+            let rest = &body[at + prefix.len()..];
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len());
+            &rest[..end]
+        })
+        .collect()
+}
+
+/// The functions of `text` whose head line starts with `head` (at 4 spaces), each with the
+/// name after `head` and the body up to the first line `    }`.
+fn fn_bodies<'s>(text: &'s str, head: &str) -> Vec<(&'s str, String)> {
+    let mut out = Vec::new();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        let Some(rest) = line.strip_prefix(head) else {
+            continue;
+        };
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let mut body = String::new();
+        for l in lines.by_ref() {
+            if l == "    }" {
+                break;
+            }
+            body.push_str(l);
+            body.push('\n');
+        }
+        out.push((&rest[..end], body));
+    }
+    out
+}
+
+/// The visitor graph: node X -> the nodes Y whose `visit_Y` the walk of X calls; and the
+/// nodes whose walk calls `enter_node` (the depth grows there).
+struct VisitGraph {
+    edges: std::collections::BTreeMap<String, Vec<String>>,
+    counted: std::collections::BTreeSet<String>,
+}
+
+fn visit_graph(text: &str) -> VisitGraph {
+    let (head, walks) = text
+        .split_once("\npub mod walk {\n")
+        .expect("the walk module");
+    // The trait defaults: `visit_X` calls `walk_X` only.
+    let visits = fn_bodies(head, "    fn visit_");
+    for (name, body) in &visits {
+        let calls = names_after(body, "walk_");
+        assert_eq!(
+            calls,
+            [*name],
+            "visit_{name} is not the plain walk_{name} call"
+        );
+        assert!(
+            !body.contains("visit_"),
+            "visit_{name} calls a visit function"
+        );
+    }
+    let walk_lines = text.lines().filter(|l| l.contains("pub fn walk_")).count();
+    let bodies = fn_bodies(walks, "    pub fn walk_");
+    assert_eq!(
+        bodies.len(),
+        walk_lines,
+        "a walk function that the scan missed"
+    );
+    assert_eq!(bodies.len(), visits.len(), "a walk with no visit function");
+    assert!(bodies.len() > 200, "{} walk functions", bodies.len());
+    let mut graph = VisitGraph {
+        edges: std::collections::BTreeMap::new(),
+        counted: std::collections::BTreeSet::new(),
+    };
+    for (name, body) in &bodies {
+        assert!(
+            names_after(body, "walk_").is_empty(),
+            "walk_{name} calls a walk directly"
+        );
+        assert_eq!(
+            body.matches("visit_").count(),
+            body.matches("visitor.visit_").count(),
+            "walk_{name} calls a visit function not through the visitor"
+        );
+        let mut to = Vec::new();
+        for call in names_after(body, "visitor.") {
+            match call {
+                "enter_node" => {
+                    graph.counted.insert((*name).to_owned());
+                }
+                "leave_node" | "enter_scope" | "leave_scope" | "alloc" => {}
+                _ => {
+                    let y = call
+                        .strip_prefix("visit_")
+                        .unwrap_or_else(|| panic!("walk_{name}: visitor.{call}"));
+                    to.push(y.to_owned());
+                }
+            }
+        }
+        graph.edges.insert((*name).to_owned(), to);
+    }
+    for (x, to) in &graph.edges {
+        for y in to {
+            assert!(
+                graph.edges.contains_key(y),
+                "walk_{x} -> visit_{y}: no walk_{y}"
+            );
+        }
+    }
+    graph
+}
+
+/// The gated visit functions of `DepthPass`, read from depth.rs (not a second list).
+fn depth_pass_gates() -> std::collections::BTreeSet<String> {
+    let src = include_str!("depth.rs");
+    let code = src.split_once("#[cfg(test)]").expect("the test module").0;
+    let mut gates = std::collections::BTreeSet::new();
+    for (name, body) in fn_bodies(code, "    fn visit_") {
+        assert!(
+            body.contains("if self.may_descend() {")
+                && body.contains(&format!("walk::walk_{name}(self, it);")),
+            "DepthPass::visit_{name} is not the gate form:\n{body}"
+        );
+        gates.insert(name.to_owned());
+    }
+    assert!(!gates.is_empty(), "no gate found in depth.rs");
+    gates
+}
+
+/// The cycles of `edges` restricted to `keep`: one cycle per strongly connected component
+/// (Tarjan), each as `a -> b -> a`.
+fn open_cycles(
+    edges: &std::collections::BTreeMap<String, Vec<String>>,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let nodes: Vec<&String> = edges.keys().filter(|n| keep(n)).collect();
+    let index_of: std::collections::BTreeMap<&str, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
+    let succ: Vec<Vec<usize>> = nodes
+        .iter()
+        .map(|n| {
+            edges[*n]
+                .iter()
+                .filter_map(|y| index_of.get(y.as_str()).copied())
+                .collect()
+        })
+        .collect();
+    // Iterative Tarjan.
+    let count = nodes.len();
+    let (mut index, mut low, mut on) =
+        (vec![usize::MAX; count], vec![0; count], vec![false; count]);
+    let (mut stack, mut comps, mut next) = (Vec::new(), Vec::new(), 0);
+    for root in 0..count {
+        if index[root] != usize::MAX {
+            continue;
+        }
+        let mut work = vec![(root, 0usize)];
+        while let Some(&mut (v, ref mut at)) = work.last_mut() {
+            if *at == 0 && index[v] == usize::MAX {
+                index[v] = next;
+                low[v] = next;
+                next += 1;
+                stack.push(v);
+                on[v] = true;
+            }
+            if let Some(&w) = succ[v].get(*at) {
+                *at += 1;
+                if index[w] == usize::MAX {
+                    work.push((w, 0));
+                } else if on[w] {
+                    low[v] = low[v].min(index[w]);
+                }
+                continue;
+            }
+            work.pop();
+            if let Some(&(parent, _)) = work.last() {
+                low[parent] = low[parent].min(low[v]);
+            }
+            if low[v] == index[v] {
+                let mut comp = Vec::new();
+                while let Some(w) = stack.pop() {
+                    on[w] = false;
+                    comp.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                if comp.len() > 1 || succ[v].contains(&v) {
+                    comps.push(comp);
+                }
+            }
+        }
+    }
+    // One cycle per component: a shortest path in the component from its first node back to it.
+    let mut cycles = Vec::new();
+    for comp in comps {
+        let inside: std::collections::BTreeSet<usize> = comp.iter().copied().collect();
+        let start = *inside.iter().next().expect("a node");
+        let mut from = vec![usize::MAX; count];
+        let mut queue = std::collections::VecDeque::from([start]);
+        let mut end = None;
+        'bfs: while let Some(v) = queue.pop_front() {
+            for &w in &succ[v] {
+                if !inside.contains(&w) {
+                    continue;
+                }
+                if w == start {
+                    end = Some(v);
+                    break 'bfs;
+                }
+                if from[w] == usize::MAX {
+                    from[w] = v;
+                    queue.push_back(w);
+                }
+            }
+        }
+        let mut path = vec![start];
+        let mut v = end.expect("a cycle in a component");
+        while v != start {
+            path.push(v);
+            v = from[v];
+        }
+        path[1..].reverse();
+        path.push(start);
+        let names: Vec<&str> = path.iter().map(|&i| nodes[i].as_str()).collect();
+        let mut members: Vec<&str> = comp.iter().map(|&i| nodes[i].as_str()).collect();
+        members.sort_unstable();
+        cycles.push(format!(
+            "{} (component: {})",
+            names.join(" -> "),
+            members.join(", ")
+        ));
+    }
+    cycles
+}
+
+/// A2-1: every cycle of the oxc visitor graph passes a gate of `DepthPass`, so the layer-2 walk
+/// is a bounded recursion on every AST (also the TS nodes that eval's JS-mode parse keeps).
+#[test]
+fn the_depth_walk_gates_every_visitor_cycle() {
+    let graph = visit_graph(&oxc_visit_source());
+    let gates = depth_pass_gates();
+    assert_eq!(gates.len(), 11, "the depth.rs texts say 11 gated points");
+    for gate in &gates {
+        assert!(
+            graph.edges.contains_key(gate),
+            "depth.rs gates visit_{gate}: no such walk"
+        );
+    }
+    // A gate stops a cycle only if the depth grows on it.
+    let flat = open_cycles(&graph.edges, |n| !graph.counted.contains(n));
+    assert!(
+        flat.is_empty(),
+        "cycles with no enter_node:\n{}",
+        flat.join("\n")
+    );
+    let open = open_cycles(&graph.edges, |n| !gates.contains(n));
+    for cycle in &open {
+        println!("OPEN CYCLE {cycle}");
+    }
+    assert!(
+        open.is_empty(),
+        "{} open cycles of the visitor graph (gates {gates:?}):\n{}",
+        open.len(),
+        open.join("\n")
+    );
+    // How far past the cap the walk can go: a gate lets the walk on at depth <= cap, and the
+    // depth then grows by at most the counted nodes of a gate-free path to the next gate.
+    let mut memo = std::collections::BTreeMap::new();
+    let past = gates
+        .iter()
+        .map(|g| levels_to_a_gate(&graph, &gates, g, &mut memo))
+        .max()
+        .unwrap_or(0);
+    println!(
+        "VISIT GRAPH {} nodes, {} counted, gates {gates:?}: no open cycle; at most {past} \
+         levels past the cap",
+        graph.edges.len(),
+        graph.counted.len()
+    );
+    // depth.rs says "at most 8 levels past the cap": a larger value needs that text changed.
+    assert!(
+        past <= 8,
+        "{past} levels past the cap (the depth.rs texts say 8)"
+    );
+}
+
+/// The most counted nodes on a path from `node` that enters no gate after `node` (the graph
+/// without the gates is acyclic: checked before this call).
+fn levels_to_a_gate(
+    graph: &VisitGraph,
+    gates: &std::collections::BTreeSet<String>,
+    node: &str,
+    memo: &mut std::collections::BTreeMap<String, u32>,
+) -> u32 {
+    if let Some(&v) = memo.get(node) {
+        return v;
+    }
+    let below = graph.edges[node]
+        .iter()
+        .filter(|y| !gates.contains(*y))
+        .map(|y| levels_to_a_gate(graph, gates, y, memo))
+        .max()
+        .unwrap_or(0);
+    let v = u32::from(graph.counted.contains(node)) + below;
+    memo.insert(node.to_owned(), v);
+    v
+}
+
+// The run tests of A2-1. The parser builds the first 4 chains in a loop, so a text of n levels
+// parses on a small stack and only the walk can recurse n levels. The parser builds the last 2
+// (a namespace path, nested JSX elements) by recursion: no text reaches a depth where the walk
+// overflows before the parse does, so the test builds their AST in a loop.
+
+/// The chains of A2-1 and of the other open cycles of the visitor-graph proof.
+const CHAINS: [&str; 6] = [
+    "ts-as-type-name",
+    "ts-satisfies-type-name",
+    "ts-import-type-qualifier",
+    "jsx-member-name",
+    "ts-namespace-path (built)",
+    "jsx-nested-elements (built)",
+];
+
+/// The text of the type-name chains at `n` levels (eval parses it as JS: a SyntaxError).
+fn type_name_chain(case: usize, n: usize) -> String {
+    let head = match case {
+        0 => "x as a",
+        1 => "x satisfies a",
+        2 => "x as import(\"m\").a",
+        _ => unreachable!("case {case}"),
+    };
+    let mut s = String::with_capacity(head.len() + 2 * n);
+    s.push_str(head);
+    for _ in 0..n {
+        s.push_str(".a");
+    }
+    s
+}
+
+/// Build chain `case` of [`CHAINS`] at `n` levels and run the layer-2 walk with `cap`.
+fn chain_depth(case: usize, n: usize, cap: u32) -> Result<u32, depth::TooDeep> {
+    with_chain(case, n, |program| depth::check_ast_depth(program, cap))
+}
+
+/// Build chain `case` of [`CHAINS`] at `n` levels and give its program to `f`.
+fn with_chain<R>(case: usize, n: usize, f: impl FnOnce(&oxc_ast::ast::Program<'_>) -> R) -> R {
+    use oxc_allocator::{CloneIn, Vec as ArenaVec};
+    use oxc_ast::ast::{
+        Expression, JSXChild, JSXElement, Statement, TSNamespaceDeclaration,
+        TSNamespaceDeclarationBody,
+    };
+    use oxc_ast::builder::AstBuilder;
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+
+    let allocator = Allocator::default();
+    let (src, source_type) = match case {
+        0..=2 => (type_name_chain(case, n), SourceType::ts()),
+        3 => (format!("<a{} />", ".a".repeat(n)), SourceType::jsx()),
+        4 => ("namespace a {}".to_owned(), SourceType::ts()),
+        5 => ("<a></a>".to_owned(), SourceType::jsx()),
+        _ => unreachable!("case {case}"),
+    };
+    let mut parsed = Parser::new(&allocator, &src, source_type).parse();
+    assert!(!parsed.diagnostics.has_errors(), "{}", CHAINS[case]);
+    let ast = AstBuilder::new(&allocator);
+    match &mut parsed.program.body[0] {
+        Statement::TSNamespaceDeclaration(decl) if case == 4 => {
+            // `namespace a.a.a... {}`: each level is the body of the one above.
+            let mut body = decl.body.clone_in(&allocator);
+            for _ in 0..n {
+                body = TSNamespaceDeclarationBody::TSNamespaceDeclaration(
+                    TSNamespaceDeclaration::boxed(
+                        decl.span,
+                        decl.id.clone_in(&allocator),
+                        body,
+                        decl.kind,
+                        false,
+                        &ast,
+                    ),
+                );
+            }
+            decl.body = body;
+        }
+        Statement::ExpressionStatement(stmt) if case == 5 => {
+            // `<a><a>...</a></a>`: each level is the one child of the one above.
+            let Expression::JSXElement(el) = &mut stmt.expression else {
+                panic!("a JSX element");
+            };
+            let mut inner = el.clone_in(&allocator);
+            for _ in 0..n {
+                inner = JSXElement::boxed(
+                    el.span,
+                    el.opening_element.clone_in(&allocator),
+                    ArenaVec::from_iter_in([JSXChild::Element(inner)], &ast),
+                    el.closing_element.clone_in(&allocator),
+                    &ast,
+                );
+            }
+            el.children = ArenaVec::from_iter_in([JSXChild::Element(inner)], &ast);
+        }
+        _ => assert!(case < 4, "{}: the parsed head", CHAINS[case]),
+    }
+    f(&parsed.program)
+}
+
+/// A2-1 (unit): on a 16 MiB thread, each chain of 1,000,000 levels stops at the cap of 1,000
+/// (layer 2 gives `TooDeep`, no backstop: the thread has no limit). Before the gates the walk
+/// recursed once per level and the process aborted. One child process per chain.
+#[test]
+fn the_depth_walk_stops_on_every_chain() {
+    const TEST: &str = "the_depth_walk_stops_on_every_chain";
+    if let Some(i) = l1_child(TEST) {
+        let result = std::thread::Builder::new()
+            .stack_size(16 << 20)
+            .spawn(move || chain_depth(i, 1_000_000, 1_000))
+            .unwrap()
+            .join()
+            .unwrap();
+        let w = match result {
+            Ok(depth) => format!("Ok({depth})"),
+            Err(deep) if deep.stack_limit => "StackLimit".to_owned(),
+            Err(_) => "TooDeep".to_owned(),
+        };
+        l1_line(TEST, i, &w);
+        return;
+    }
+    // A short chain of each form is inside the cap (the builders give the AST they say).
+    for (i, name) in CHAINS.iter().enumerate() {
+        let small = chain_depth(i, 10, 1_000).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let deep = chain_depth(i, 100, 1_000).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert!(
+            deep >= small + 90,
+            "{name}: depth {small} at 10, {deep} at 100"
+        );
+    }
+    let names: Vec<String> = CHAINS.iter().map(|&n| n.to_owned()).collect();
+    for (name, w) in names.iter().zip(run_children(TEST, &names)) {
+        assert_eq!(w, "TooDeep", "{name}");
+    }
+}
+
+/// A2-1 (public path): `eval` of the 3 type-name chains at 4,000,000 levels (8 MB of text) gives
+/// a SyntaxError (oxc parses them in JS mode with a non-fatal error; layer 2 stops the walk and
+/// eval prefers the parse error). Before the gates each one aborted the process in debug and
+/// release. One child process per chain.
+#[test]
+fn eval_of_a_type_name_chain_is_a_syntax_error() {
+    const TEST: &str = "eval_of_a_type_name_chain_is_a_syntax_error";
+    if let Some(i) = l1_child(TEST) {
+        let src = type_name_chain(i, 4_000_000);
+        let w = codegen_word(&crate::compile_eval(
+            &src,
+            &ep9_bytecode::EvalContext::default(),
+            crate::CompileOptions::default(),
+        ));
+        l1_line(TEST, i, &w);
+        return;
+    }
+    let names: Vec<String> = CHAINS[..3].iter().map(|&n| n.to_owned()).collect();
+    for (name, w) in names.iter().zip(run_children(TEST, &names)) {
+        assert_eq!(w, "Syntax", "{name}");
+    }
+}
+
+/// A2-1: a valid deep type-name chain (TS source type, no parse error) gives the layer-2 result
+/// on the real worker: within the cap `Ok`, at 4,000,000 levels RangeError `TooDeep(Ast)`, not
+/// `StackLimit` (the walk stops at the cap, inside the budget). No public entry parses TS: this
+/// is the result that a TS caller of `check_depth` gets. In a child process.
+#[test]
+fn a_deep_type_name_chain_is_too_deep() {
+    const TEST: &str = "a_deep_type_name_chain_is_too_deep";
+    let sizes = [1_000, 4_000_000];
+    if let Some(i) = l1_child(TEST) {
+        let w = crate::worker::run(crate::stack::WORKER_STACK_BYTES, move || {
+            let src = format!("let x: {};", &type_name_chain(0, sizes[i])[5..]);
+            let allocator = Allocator::default();
+            let parsed =
+                oxc_parser::Parser::new(&allocator, &src, oxc_span::SourceType::ts()).parse();
+            assert!(!parsed.diagnostics.has_errors());
+            word(&crate::check_depth(&parsed.program, &src).map_err(CompileError::Range))
+        })
+        .unwrap();
+        l1_line(TEST, i, &w);
+        return;
+    }
+    let names: Vec<String> = sizes.iter().map(|n| format!("n {n}")).collect();
+    let words = run_children(TEST, &names);
+    assert_eq!(words, ["Ok", "Range(TooDeep(Ast))"]);
+}
+
+/// A2-1 (e), a probe like `probe::measure_forms` (run it on demand, debug and release): the
+/// stack bytes per AST level of the layer-2 walk on each chain of [`CHAINS`], at 500 and 1,500
+/// levels with the cap `AST_CAP` (no stop), and the JS member chain `a.a.a` of the same size for
+/// comparison. The depth-pass row of stack.rs is the unit that these must stay under.
+#[test]
+#[ignore = "a probe: run on demand with --nocapture"]
+fn chain_walk_cost() {
+    let per_level = |measure: &dyn Fn(usize) -> (usize, u32)| {
+        // `deepest_point` gives the lowest address touched: it falls as the walk goes deeper.
+        let ((low1, d1), (low2, d2)) = (measure(500), measure(1_500));
+        low1.saturating_sub(low2) / usize::try_from(d2 - d1).unwrap()
+    };
+    std::thread::Builder::new()
+        .stack_size(2 << 30)
+        .spawn(move || {
+            let paint = 64 << 20;
+            for (i, name) in CHAINS.iter().enumerate() {
+                let bytes = per_level(&|n| {
+                    with_chain(i, n, |program| {
+                        let (low, depth) = crate::probe::deepest_point(paint, || {
+                            depth::check_ast_depth(program, AST_CAP)
+                        });
+                        (low, depth.expect("within the cap"))
+                    })
+                });
+                println!("CHAIN-COST {name}: {bytes} B per AST level");
+            }
+            let bytes = per_level(&|n| {
+                let src = format!("a{}", ".a".repeat(n));
+                let allocator = Allocator::default();
+                let parsed =
+                    oxc_parser::Parser::new(&allocator, &src, oxc_span::SourceType::script())
+                        .parse();
+                let (low, depth) = crate::probe::deepest_point(paint, || {
+                    depth::check_ast_depth(&parsed.program, AST_CAP)
+                });
+                (low, depth.expect("within the cap"))
+            });
+            println!("CHAIN-COST js-member-chain a.a.a: {bytes} B per AST level");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

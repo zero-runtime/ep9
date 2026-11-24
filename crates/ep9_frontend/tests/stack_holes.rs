@@ -1,9 +1,9 @@
-//! T-HOLES (H01 layer 1): every class of the pre-scan hole hunt (297) and of the pre-scan
-//! design check (21) gives its expected result kind, each in its own child process.
+//! T-HOLES (H01 layer 1): every class of the pre-scan hole hunt (297), of the pre-scan design
+//! check (21) and of review R2 A2-1 (3) gives its expected result kind, each in a child process.
 //!
 //! Before layer 1, 117 of these classes aborted the process: the pre-scan (layer 0) counted
 //! them low, and oxc recursed past the end of the worker stack. Layer 1 (the stack check of
-//! the oxc_parser patch, l1.rs) must turn each one into a RangeError. The other 201 classes are
+//! the oxc_parser patch, l1.rs) must turn each one into a RangeError. The other 204 classes are
 //! controls: the caps decide them, so their result is the hunt result on every host, and a
 //! StackLimit there is a Claim D failure (the check fired within the budget).
 //!
@@ -12,7 +12,7 @@
 //! | Set | Rows | Sizes | Profiles |
 //! |---|---|---|---|
 //! | `every_abort_class_stops` | 117 | `n_abort` and 2,000,000 | debug, release |
-//! | `every_control_class_is_clean` | 198 | 2,000,000; a cap-size row at its hunt sizes | debug, release |
+//! | `every_control_class_is_clean` | 201 | 2,000,000; a cap-size row at its hunt sizes | debug, release |
 //! | `slow_classes_print_their_time` | 3 | the hunt sizes up to 5,000 (`SLOW_MAX_N`) | release (it prints the time; it asserts the kind) |
 //!
 //! Debug runs the controls at 2,000,000 too: on the Mac the debug set took less than 4 min
@@ -553,7 +553,7 @@ fn every_abort_class_stops() {
     run_set(Set::Abort);
 }
 
-/// The 198 control classes (191 hunt + 7 design check): exactly the hunt kind of each row.
+/// The 201 control classes (191 hunt + 7 design check + 3 A2-1): exactly the kind of each row.
 /// A StackLimit here is a Claim D failure.
 #[test]
 fn every_control_class_is_clean() {
@@ -575,7 +575,7 @@ fn slow_classes_print_their_time() {
     run_set(Set::Slow);
 }
 
-/// The table itself: 318 rows, unique names, the hunt.md family counts, and an `expect` that
+/// The table itself: 321 rows, unique names, the hunt.md family counts, and an `expect` that
 /// follows the row rules, so that no row can be made weaker by an edit.
 #[test]
 fn the_table_is_well_formed() {
@@ -591,15 +591,15 @@ fn the_table_is_well_formed() {
         "a raw control, format or non-ASCII byte in the table"
     );
     let rows = table();
-    assert_eq!(rows.len(), 318);
+    assert_eq!(rows.len(), 321);
     let mut names: Vec<&str> = rows.iter().map(|r| r.name).collect();
     names.sort_unstable();
     names.dedup();
-    assert_eq!(names.len(), 318, "row names are unique");
+    assert_eq!(names.len(), 321, "row names are unique");
     let count = |set| rows.iter().filter(|r| r.set() == set).count();
     assert_eq!(
         (count(Set::Abort), count(Set::Control), count(Set::Slow)),
-        (117, 198, 3)
+        (117, 201, 3)
     );
     let family = |f: &str| {
         rows.iter()

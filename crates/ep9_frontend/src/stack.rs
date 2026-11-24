@@ -21,7 +21,7 @@
 //! |---|---|---|---|
 //! | oxc_parser, per pre-scan unit | 6,480 | 1,600 | debug: `spread-args` (macOS arm64, Linux arm64); release: `bracket-function` and `function-body-list-first` (Windows x86-64); T-A of CI runs 45405314681 and 45432455679 (the worker parse call) |
 //! | oxc regex parser, per group | 16,864 | 784 | `regex-named-group` (debug: macOS arm64, Linux arm64; release: Windows x86-64); weighted 4 units, `prescan::REGEX_WEIGHT` |
-//! | layer-2 depth pass, per AST level | 992 | 112 | debug: `bracket-array`; release: `class-heritage` (Windows x86-64) |
+//! | layer-2 depth pass, per AST level | 992 | 112 | debug: `bracket-array`; release: `class-heritage` (Windows x86-64); these 2 values are of the walk with the backstop at the cap `u32::MAX` (CI runs 45405314681 and 45432455679, before a05476aa). T-A now measures the walk with no backstop at `AST_CAP` (macOS arm64: 800 / 80 B), so the row is high, which is safe. The chains of review R2 A2-1 cost less per level (`depth_tests::chain_walk_cost`, macOS arm64: 224-368 B debug, 31-80 B release) |
 //! | oxc_semantic, per AST level | 1,600 | 368 | debug: `bracket-array`; release: `class-heritage` (Windows x86-64) |
 //! | scope pass (`scope::analyze`), per AST level | 3,584 | 528 | `class-heritage` (debug: macOS arm64, Linux arm64; release: Windows x86-64) |
 //!

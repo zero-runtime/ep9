@@ -2,17 +2,17 @@
 //!
 //! ```text
 //! layer 0  pre-scan (prescan.rs)   tokens only, before oxc     -> estimate > PRESCAN_CAP: RangeError
-//! layer 1  oxc parser counter      not in oxc 0.158 (M1 patch)  -> the stack is sized for layer 0
+//! layer 1  oxc stack check         patch 0002, l1.rs            -> RangeError StackLimit
 //! layer 2  AST-depth pass (here)   after parse, before semantic -> depth > AST_CAP: RangeError
 //! layer 3  our passes              explicit depth checks        -> depth > AST_CAP: RangeError
 //! ```
 //!
 //! - Depth unit: AST nodes on the path from `Program` (depth 1) down. Every node that has an oxc
 //!   `AstKind` counts once: `[[0]]` has depth 5 (Program, ExpressionStatement, 2 arrays, literal).
-//! - The pass is a bounded recursion: it stops at every point where the AST type graph has a cycle
-//!   (expressions, statements, binding patterns, assignment targets, TS types) once the depth
-//!   passes the cap. So it never goes more than a few frames past the cap, even on a 10^6-deep
-//!   left-leaning chain (`1+1+...`, `a.b.c...`, `f()()...`) that the parser builds in a loop.
+//! - The pass is a bounded recursion: each cycle of the oxc visitor graph passes one of its 11
+//!   gated points (the `visit_` overrides below; `depth_tests` proves it on the pinned oxc source),
+//!   and a gated point stops once the depth passes the cap. So the walk goes at most 8 levels past
+//!   the cap, even on a 10^6-deep chain that the parser builds in a loop (`a.b.c...`, `x as a.a`).
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::{AssignmentTarget, BindingPattern, Expression, Program, Statement, TSType};
@@ -64,11 +64,11 @@ pub(crate) struct TooDeep {
 ///
 /// Returns [`TooDeep`] with the first node deeper than `cap`.
 pub(crate) fn check_ast_depth(program: &Program<'_>, cap: u32) -> Result<u32, TooDeep> {
-    // Layer 1: the walk goes at most a few levels past `cap` (the module head). When the stack
-    // above this thread's limit holds `cap + 1` levels at `PASS_PER_LEVEL` (which covers the
-    // depth-pass row of stack.rs) with the margin, the backstop can never fire: walk without it.
-    // That is the case on the worker at `AST_CAP` (stack.rs: the budget holds the pass bound).
-    // On a smaller stack, or with no cap, the walk keeps the backstop.
+    // Layer 1: every recursive path passes one of the 11 gated points, so the walk goes at most 8
+    // levels past `cap` (the module doc). When the stack above this thread's limit holds `cap + 1`
+    // levels at `PASS_PER_LEVEL` (which covers the depth-pass row of stack.rs) with the margin, the
+    // backstop can never fire: walk without it. That is the case on the worker at `AST_CAP`.
+    // On a smaller stack, or with no cap on a thread with a limit, the walk keeps the backstop.
     if crate::l1::passes_fit(cap.saturating_add(1)) {
         walk_depth::<false>(program, cap)
     } else {
@@ -147,7 +147,7 @@ impl<'a, const BACKSTOP: bool> Visit<'a> for DepthPass<BACKSTOP> {
         self.depth -= 1;
     }
 
-    // The cycle points of the AST type graph. Every recursive path passes through one of them.
+    // The 11 gated points. Every cycle of the oxc visitor graph passes through one of them.
 
     fn visit_expression(&mut self, it: &Expression<'a>) {
         if self.may_descend() {
@@ -176,6 +176,53 @@ impl<'a, const BACKSTOP: bool> Visit<'a> for DepthPass<BACKSTOP> {
     fn visit_ts_type(&mut self, it: &TSType<'a>) {
         if self.may_descend() {
             walk::walk_ts_type(self, it);
+        }
+    }
+
+    // Review R2 A2-1: the cycles of the visitor graph that pass none of the 5 points above
+    // (`depth_tests::the_depth_walk_gates_every_visitor_cycle` found them): `a.b.c` as a TS type
+    // name and as an import-type qualifier, `namespace a.b.c`, `<a.b.c>`, and nested JSX elements
+    // (as a child, or as an attribute value).
+
+    fn visit_ts_type_name(&mut self, it: &oxc_ast::ast::TSTypeName<'a>) {
+        if self.may_descend() {
+            walk::walk_ts_type_name(self, it);
+        }
+    }
+
+    fn visit_ts_import_type_qualifier(&mut self, it: &oxc_ast::ast::TSImportTypeQualifier<'a>) {
+        if self.may_descend() {
+            walk::walk_ts_import_type_qualifier(self, it);
+        }
+    }
+
+    fn visit_ts_namespace_declaration_body(
+        &mut self,
+        it: &oxc_ast::ast::TSNamespaceDeclarationBody<'a>,
+    ) {
+        if self.may_descend() {
+            walk::walk_ts_namespace_declaration_body(self, it);
+        }
+    }
+
+    fn visit_jsx_member_expression_object(
+        &mut self,
+        it: &oxc_ast::ast::JSXMemberExpressionObject<'a>,
+    ) {
+        if self.may_descend() {
+            walk::walk_jsx_member_expression_object(self, it);
+        }
+    }
+
+    fn visit_jsx_child(&mut self, it: &oxc_ast::ast::JSXChild<'a>) {
+        if self.may_descend() {
+            walk::walk_jsx_child(self, it);
+        }
+    }
+
+    fn visit_jsx_attribute_value(&mut self, it: &oxc_ast::ast::JSXAttributeValue<'a>) {
+        if self.may_descend() {
+            walk::walk_jsx_attribute_value(self, it);
         }
     }
 }

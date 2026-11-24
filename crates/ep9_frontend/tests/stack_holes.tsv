@@ -16,6 +16,10 @@
 #           Range(PreScan), Range(Ast), Range(Pass), Range(StackLimit).
 # The table is made by a script from the generators, and each expansion was compared with the
 # generator text byte for byte. Never change a row to make a test pass.
+# The last 3 rows (A21-*) are not hunt classes: review R2 A2-1, eval of a TS type-name chain
+# (oxc parses it in JS mode with a non-fatal error). Before the layer-2 walk gated these chains,
+# each one aborted at 4,000,000 levels (debug and release). They are controls: hunt clean is
+# the result with the gates, and they are written by hand (no generator).
 K0-control-if	control	script	compile		if(a)			;		clean	yes	Range(PreScan)
 K1a-await-top	1	script	compile		await 			x	419531	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
 K1b-yield-top	1	script	compile		yield 			x	281875	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
@@ -334,3 +338,6 @@ H6-zwnj-assign-carried	K6	script	compile	x={}\n{}\n/`/;x=	a\u{200C}b=			0;/`/		A
 H2-typeargs-bang-carried	K2	script	compile	x={}\n{}\n/`/;x as 	A<B!,	B	>,B	;/`/		ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
 H7-var-comma-pattern-carried	K5	script	compile	x={}\n{}\n/`/;var a,{b}\n/"/;	if(a)			;;/`/		ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
 C1-carrier-flat	control	script	compile	x={}\n{}\n/`/;	a;			;/`/		clean	yes	Ok
+A21-eval-as-chain	control	script	eval	x as a	.a					clean	no	Syntax;Syntax@4000000
+A21-eval-satisfies-chain	control	script	eval	x satisfies a	.a					clean	no	Syntax;Syntax@4000000
+A21-eval-import-qualifier-chain	control	script	eval	x as import("m").a	.a					clean	no	Syntax;Syntax@4000000
