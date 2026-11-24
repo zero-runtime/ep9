@@ -207,19 +207,25 @@ fn per(delta_bytes: usize, delta_units: u32) -> String {
 const FLAT: usize = 4 << 10;
 
 /// Parse stack one pre-scan unit may use: its share of the worker stack budget (`BUDGET_BYTES`,
-/// the red zone of layer 1 is not budget), keeping the 1.5x margin of `stack.rs` (7,463 B
+/// the red zone of layer 1 is not budget), keeping the 1.5x margin of `stack.rs` (7,559 B
 /// debug, 2,615 B release).
 const PARSE_UNIT_BUDGET: usize = crate::stack::BUDGET_BYTES / 3 * 2 / crate::PRESCAN_CAP as usize;
 
 /// Pass stack one AST level may use: its share of the worker stack budget, keeping the 1.5x
-/// margin of `stack.rs`, as `bytecodegen::stack_tests` does for codegen (9,329 B debug, 3,269 B
+/// margin of `stack.rs`, as `bytecodegen::stack_tests` does for codegen (9,449 B debug, 3,269 B
 /// release).
 const PASS_LEVEL_BUDGET: usize = crate::stack::BUDGET_BYTES / 3 * 2 / crate::AST_CAP as usize;
+
+/// Pass stack one AST level may use in a walk after layer 2: the unit of the run-time budget
+/// check of layer 1 (`stack::PASS_PER_LEVEL`, the worst pass row of the 4 targets). It is below
+/// the budget share, so a walk that fits it fits the budget too.
+const PASS_UNIT: usize = crate::stack::PASS_PER_LEVEL;
 
 // T-BUDGET: each share is a share of `BUDGET_BYTES`, never of the red zone.
 const _: () = {
     assert!(PARSE_UNIT_BUDGET * crate::PRESCAN_CAP as usize <= crate::stack::BUDGET_BYTES);
     assert!(PASS_LEVEL_BUDGET * crate::AST_CAP as usize <= crate::stack::BUDGET_BYTES);
+    assert!(PASS_UNIT <= PASS_LEVEL_BUDGET);
 };
 
 /// `None` if `delta_bytes` over `delta_units` fits `budget` per unit; else what is wrong. No
@@ -266,8 +272,9 @@ const COVER: [(&str, Build); 4] = [
 const T_A_ASSERT: bool = true;
 
 /// Measures every form, and fails when a slope does not fit its share of the worker stack:
-/// parse per pre-scan unit (the whole worker parse call, [`worker_parse`]), the depth pass,
-/// oxc_semantic and the scope pass per AST level.
+/// parse per pre-scan unit (the whole worker parse call, [`worker_parse`]); the depth pass,
+/// oxc_semantic, the scope pass and the 4 walks of the eval path per AST level, against the
+/// unit of the run-time budget check (`stack::PASS_PER_LEVEL`).
 #[test]
 #[ignore = "measurement; run on demand with --ignored --nocapture"]
 fn measure_forms() {
@@ -346,7 +353,7 @@ fn measure_forms() {
                 )
                 .unwrap();
                 let pass = |at_b: usize, at_a: usize| {
-                    over_budget(at_b.saturating_sub(at_a), dast, PASS_LEVEL_BUDGET)
+                    over_budget(at_b.saturating_sub(at_a), dast, PASS_UNIT)
                 };
                 for (phase, problem) in [
                     (
@@ -362,7 +369,7 @@ fn measure_forms() {
                         over.push(format!("{} {phase}: {problem}", form.name));
                     }
                 }
-                // T-PASS columns: the 4 walks of the eval path per AST level (print only).
+                // T-PASS columns: the 4 walks of the eval path per AST level.
                 if !form.module {
                     let walks = |n: usize| {
                         // A lone surrogate (shim text), so that `Shim::patch` walks.
@@ -379,7 +386,7 @@ fn measure_forms() {
                                 .unwrap();
                             for k in 0..4 {
                                 if let Some(problem) =
-                                    over_budget(wb[k].saturating_sub(wa[k]), dast, PASS_LEVEL_BUDGET)
+                                    over_budget(wb[k].saturating_sub(wa[k]), dast, PASS_UNIT)
                                 {
                                     eval_over.push(format!("{} {}: {problem}", form.name, WALKS[k]));
                                 }
@@ -423,13 +430,13 @@ fn measure_forms() {
     for line in &over {
         println!("T-A over: {line}");
     }
-    // T-PASS (push 1 prints; the run-time budget check of layer 1 takes PASS_PER_LEVEL as the
-    // worst of these columns and the pass columns above, part 2).
+    // T-PASS: the run-time budget check of layer 1 takes PASS_PER_LEVEL as the worst of these
+    // columns and the pass columns above.
     println!("T-PASS eval walks per AST level:\n{eval_out}");
     for (k, worst) in eval_worst.iter().enumerate() {
         if let Some((w, name)) = worst {
             println!(
-                "T-PASS worst {}-{} {profile}: {} {w} B per AST level (form {name}); budget {PASS_LEVEL_BUDGET} B",
+                "T-PASS worst {}-{} {profile}: {} {w} B per AST level (form {name}); unit {PASS_UNIT} B",
                 std::env::consts::OS,
                 std::env::consts::ARCH,
                 WALKS[k]
@@ -442,9 +449,13 @@ fn measure_forms() {
     print!("{cover_out}");
     if T_A_ASSERT {
         assert!(
-            over.is_empty(),
-            "stack slopes above the worker stack share:\n{}",
-            over.join("\n")
+            over.is_empty() && eval_over.is_empty(),
+            "stack slopes above the worker stack share or the unit:\n{}",
+            over.iter()
+                .chain(&eval_over)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
         );
     }
 }

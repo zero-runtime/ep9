@@ -433,10 +433,35 @@ mod tests {
         });
     }
 
-    /// T-RED (push 1 prints; the asserts come with the units of part 2): (1) the limit lies in
-    /// the real stack with room: `limit - low` on the worker and on the inline path, against
-    /// RED / 2. (2) The deepest point that a stopped parse touches below the limit (the leaf
-    /// calls after the last check that passed, and the unwind), against RED / 2.
+    /// The T-RED inputs: forms that stop on a small worker within the caps (the pre-scan lets
+    /// them reach oxc), each with its level count. The T-A worst forms of the 4 targets
+    /// (`spread-args` debug; `bracket-function` and `function-body-list-first` release), an
+    /// array nest, and a class method nest (a class body, a method and a function body per
+    /// level: the largest step between 2 checks).
+    fn red_forms() -> Vec<(&'static str, String)> {
+        let form = |name: &str, n: usize| {
+            let f = FORMS.iter().find(|f| f.name == name).expect("a form");
+            (f.name, (f.build)(n))
+        };
+        vec![
+            (
+                "bracket-array",
+                format!("{}0{}", "[".repeat(20_000), "]".repeat(20_000)),
+            ),
+            form("spread-args", 20_000),
+            form("bracket-function", 20_000),
+            form("function-body-list-first", 20_000),
+            (
+                "class-method",
+                format!("{}{}", "class A{m(){".repeat(5_000), "}}".repeat(5_000)),
+            ),
+        ]
+    }
+
+    /// T-RED: (1) the limit lies in the real stack with room: `limit - low` on the worker and
+    /// on the inline path is at least RED / 2. (2) The deepest point that a stopped parse
+    /// touches below the limit (the leaf calls after the last check that passed, and the
+    /// unwind) is at most RED / 2, for each form of [`red_forms`].
     #[test]
     fn the_red_zone_holds() {
         let profile = if cfg!(debug_assertions) {
@@ -451,6 +476,10 @@ mod tests {
             "T-RED {target} {profile}: worker limit - low = {} B (RED / 2 = {} B)",
             limit as isize - low_w as isize,
             RED / 2
+        );
+        assert!(
+            limit >= low_w + RED / 2,
+            "worker: the limit is not RED / 2 above low"
         );
         // (1) The inline path on a thread of W + 2 RED.
         let (inline_limit, low_i, ran_inline) = on_big_thread(|| {
@@ -468,32 +497,48 @@ mod tests {
             inline_limit as isize - low_i as isize,
             RED / 2
         );
-        // (2) A small worker (a new caller thread, so the worker is new and has this size); a
-        // parse that stops (an array nest below the pre-scan cap).
-        let small = 4 << 20;
-        let deep = format!("{}0{}", "[".repeat(20_000), "]".repeat(20_000));
-        let job = move || {
-            let limit = thread_limit();
-            let low = low();
-            // Paint from here down to 256 KiB above the end (the guard pages lie below).
-            let bytes = stack_address() - (low + (256 << 10));
-            let (deepest, result) = crate::probe::deepest_point(bytes, || {
-                let allocator = oxc_allocator::Allocator::default();
-                crate::parse(&allocator, &deep, SourceOpts::script(Strictness::Sloppy)).map(|_| ())
-            });
-            let kind = result.err().and_then(|e| e.as_range().map(|r| r.kind));
-            (limit as isize - deepest as isize, kind)
-        };
-        let (below, kind) = thread::spawn(move || worker::run(small, job).unwrap())
-            .join()
-            .unwrap();
-        assert_eq!(
-            kind,
-            Some(RangeErrorKind::StackLimit),
-            "the parse did not stop"
+        assert!(
+            inline_limit >= low_i + RED / 2,
+            "inline: the limit is not RED / 2 above low"
         );
+        // (2) A small worker (a new caller thread, so the worker is new and has this size); a
+        // parse of each form that stops (below the pre-scan cap).
+        let small = 4 << 20;
+        let mut deepest_below = isize::MIN;
+        for (name, deep) in red_forms() {
+            let job = move || {
+                let limit = thread_limit();
+                let low = low();
+                // Paint from here down to 256 KiB above the end (the guard pages lie below).
+                let bytes = stack_address() - (low + (256 << 10));
+                let (deepest, result) = crate::probe::deepest_point(bytes, || {
+                    let allocator = oxc_allocator::Allocator::default();
+                    crate::parse(&allocator, &deep, SourceOpts::script(Strictness::Sloppy))
+                        .map(|_| ())
+                });
+                let kind = result.err().and_then(|e| e.as_range().map(|r| r.kind));
+                (limit as isize - deepest as isize, kind)
+            };
+            let (below, kind) = thread::spawn(move || worker::run(small, job).unwrap())
+                .join()
+                .unwrap();
+            assert_eq!(
+                kind,
+                Some(RangeErrorKind::StackLimit),
+                "{name}: the parse did not stop"
+            );
+            println!(
+                "T-RED {target} {profile}: {name}: deepest point below the limit = {below} B (RED / 2 = {} B)",
+                RED / 2
+            );
+            deepest_below = deepest_below.max(below);
+        }
         println!(
-            "T-RED {target} {profile}: deepest point below the limit = {below} B (RED / 2 = {} B)",
+            "T-RED {target} {profile}: deepest point below the limit, all forms = {deepest_below} B"
+        );
+        assert!(
+            deepest_below <= (RED / 2) as isize,
+            "a stopped parse went {deepest_below} B below the limit (RED / 2 = {} B)",
             RED / 2
         );
         // The budget is a share of the reservation without RED (T-BUDGET).
