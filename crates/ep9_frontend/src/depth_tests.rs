@@ -229,11 +229,11 @@ regex_gate! {
 fn every_form_is_gated() {
     for form in FORMS {
         let gated = if form.name.starts_with("regex-") {
-            REGEX_GATED
+            REGEX_GATED.contains(&form.name)
         } else {
-            GATED
+            GATED.contains(&form.name) || STACK_GATED.contains(&form.name)
         };
-        assert!(gated.contains(&form.name), "{} has no gate test", form.name);
+        assert!(gated, "{} has no gate test", form.name);
     }
     let m0 = FORMS.iter().filter(|f| f.gate == Gate::M0).count();
     let m1 = FORMS.iter().filter(|f| f.gate == Gate::M1).count();
@@ -339,4 +339,81 @@ fn random_mixes_near_the_caps_never_abort() {
     }
     // Some rounds compile, some hit a cap.
     assert!(outcomes[0] > 0 && outcomes[1] > 0, "{outcomes:?}");
+}
+
+// The pre-scan counts 2 units per new-expression level (`new` + `(`) while the AST has 1, so these forms reach PRESCAN_CAP (about 12,500 levels) before AST_CAP; route PRESCAN-NEW-COUNT.
+fn check_prescan_new_form(name: &str) {
+    let form = form(name);
+    let (a, _) = linear(|n| ast_depth(form, n));
+    assert_eq!(a, 1, "{name}: AST depth per level");
+    // A fix of the count gives 1 here: then the form moves to check_ast_form.
+    let (ea, eb) = linear(|n| estimate(form, n));
+    assert_eq!(ea, 2, "{name}: estimate per level");
+    let n_cap = usize::try_from((PRESCAN_CAP - eb) / ea).unwrap();
+    let at = run(form, n_cap);
+    assert!(at.is_ok(), "{name} n={n_cap}: {at:?}");
+    // The scope pass (layer 3) also handles the deepest accepted tree on the worker stack.
+    let scopes = crate::analyze(&(form.build)(n_cap), opts(form));
+    assert!(
+        scopes.is_ok(),
+        "{name} n={n_cap}: scope pass {:?}",
+        scopes.err()
+    );
+    let above = run(form, n_cap + 1);
+    assert_eq!(
+        layer_of(&above),
+        Some(DepthLayer::PreScan),
+        "{name} n={}: {above:?}",
+        n_cap + 1
+    );
+    let far = run(form, 10 * n_cap);
+    assert_eq!(
+        layer_of(&far),
+        Some(DepthLayer::PreScan),
+        "{name} n={}: {far:?}",
+        10 * n_cap
+    );
+}
+
+macro_rules! stack_gate {
+    ($($test:ident => $check:ident($form:literal),)*) => {
+        $(
+            #[test]
+            fn $test() {
+                $check($form);
+            }
+        )*
+        /// The stack forms of `forms.rs` (plan v17 §5.2 step 1) have a test here.
+        const STACK_GATED: &[&str] = &[$($form),*];
+    };
+}
+
+stack_gate! {
+    // stack forms: the nested item after 6 list items, and first
+    s_call_args => check_ast_form("call-args"),
+    s_call_args_first => check_ast_form("call-args-first"),
+    s_method_args => check_ast_form("method-args"),
+    s_method_args_first => check_ast_form("method-args-first"),
+    s_optional_call_args => check_ast_form("optional-call-args"),
+    s_optional_call_args_first => check_ast_form("optional-call-args-first"),
+    s_new_args => check_prescan_new_form("new-args"),
+    s_new_args_first => check_prescan_new_form("new-args-first"),
+    s_async_call_args => check_ast_form("async-call-args"),
+    s_async_call_args_first => check_ast_form("async-call-args-first"),
+    s_spread_args => check_ast_form("spread-args"),
+    s_spread_args_first => check_ast_form("spread-args-first"),
+    s_tagged_subst => check_ast_form("tagged-subst"),
+    s_tagged_subst_first => check_ast_form("tagged-subst-first"),
+    s_sequence_list => check_ast_form("sequence-list"),
+    s_sequence_list_first => check_ast_form("sequence-list-first"),
+    s_template_list => check_ast_form("template-list"),
+    s_template_list_first => check_ast_form("template-list-first"),
+    s_array_list => check_ast_form("array-list"),
+    s_array_list_first => check_ast_form("array-list-first"),
+    s_switch_clause_list => check_ast_form("switch-clause-list"),
+    s_switch_clause_list_first => check_ast_form("switch-clause-list-first"),
+    s_function_body_list => check_ast_form("function-body-list"),
+    s_function_body_list_first => check_ast_form("function-body-list-first"),
+    s_arrow_body_call => check_ast_form("arrow-body-call"),
+    s_arrow_body_call_first => check_ast_form("arrow-body-call-first"),
 }
