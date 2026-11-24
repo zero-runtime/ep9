@@ -1118,6 +1118,32 @@ fn js_prefixed_unit(form: Form) -> VerifiedUnit {
     js_unit_of(form, PREFIXED)
 }
 
+/// The cold hits (`ic::COLD_HITS`: each answer of `ic::cold_load`, so each call of a cached
+/// GETTER case) of one run of `make(form)` after [`js_receivers`], in a new isolate of the
+/// [`run_form`] form (dispatch `d`, feedback mode `f`, GC stress `stress`, eager feedback). The
+/// count starts after the setup.
+fn js_cold_hits(
+    d: Dispatch,
+    f: Feedback,
+    stress: bool,
+    make: fn(Form) -> VerifiedUnit,
+    form: Form,
+) -> u32 {
+    on_big_stack(move || {
+        let mut c = config(d, stress);
+        c.feedback_threshold = 0;
+        let mut iso = Isolate::new_with(c, ExecOptions::default().feedback(f)).unwrap();
+        iso.register_host_function("print", 1, print);
+        iso.with_cx_checkpoint(js_receivers).unwrap();
+        ic::COLD_HITS.with(|c| c.set(0));
+        let unit = make(form);
+        iso.with_cx_checkpoint(|cx| cx.run_script(unit, "star.js").map(|_| ()))
+            .unwrap();
+        take_output();
+        ic::COLD_HITS.with(|c| c.get())
+    })
+}
+
 /// T3, a bytecode getter on the fused named load: the cold body runs JS (the getter makes a
 /// frame of 300 registers and a new object, then runs the fused `x_dst` nested) and then writes
 /// `dst` (`interp/ops.rs`, the cold arm of `GetNamedPropertyStar`: `st.set_reg(dst, v)` writes
@@ -1155,6 +1181,25 @@ fn get_named_property_star_runs_a_js_getter_as_its_pair() {
         generic >= 8,
         "{generic} LoadNamed records with a Generic case: {facts:#?}"
     );
+    // The second `oJs` call of each test function is a cold hit of the GETTER case (the export
+    // above cannot tell it from the generic path): each form, one-byte and prefixed, has at least
+    // 8 cold hits, and the fused form has as many as the pair.
+    for make in [js_unit as fn(Form) -> VerifiedUnit, js_prefixed_unit] {
+        for &d in Dispatch::ALL {
+            for f in [Feedback::FULL, Feedback::ICS_ONLY] {
+                for stress in [false, true] {
+                    let label = format!("{} {} stress={stress}", d.name(), f.name());
+                    let pair = js_cold_hits(d, f, stress, make, Form::Pair);
+                    let fused = js_cold_hits(d, f, stress, make, Form::Fused);
+                    assert_eq!(
+                        pair, fused,
+                        "{label}: cold hits of the pair and the fused form"
+                    );
+                    assert!(fused >= 8, "{label}: {fused} cold hits of the getter case");
+                }
+            }
+        }
+    }
     // The prefixed forms print what the one-byte forms print: wide, xwide and wobj as dst,
     // wtry as try.
     let wide = same(js_receivers, js_prefixed_unit, false).out;
