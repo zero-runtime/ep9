@@ -13,7 +13,7 @@
 //! |---|---|---|---|
 //! | `every_abort_class_stops` | 117 | `n_abort` and 2,000,000 | debug, release |
 //! | `every_control_class_is_clean` | 198 | 2,000,000; a cap-size row at its hunt sizes | debug, release |
-//! | `slow_classes_print_their_time` | 3 | the hunt sizes up to 5,000 (`SLOW_MAX_N`) | release (it prints the time; it asserts only "no signal") |
+//! | `slow_classes_print_their_time` | 3 | the hunt sizes up to 5,000 (`SLOW_MAX_N`) | release (it prints the time; it asserts the kind) |
 //!
 //! Debug runs the controls at 2,000,000 too: on the Mac the debug set took less than 4 min
 //! (the switch rule of the plan; the measured times are in the role log).
@@ -423,6 +423,15 @@ fn tail(text: &str, count: usize) -> String {
     lines[lines.len().saturating_sub(count)..].join("\n")
 }
 
+/// The judge of every set: the child printed a kind, and the row allows it. A slow row too:
+/// its cases are valid programs (Ok) or a cap, so a StackLimit there is a lost program.
+fn allowed(kind: &Result<String, String>, kinds: &[&str]) -> bool {
+    match kind {
+        Ok(k) => kinds.contains(&k.as_str()),
+        Err(_) => false,
+    }
+}
+
 /// One child run: the row, the level count and the allowed kinds.
 type Job<'a> = (&'a Row, usize, &'a [&'static str]);
 
@@ -479,12 +488,7 @@ fn run_set(set: Set) {
                         kinds_seen.lock().unwrap().push(k.clone());
                         println!("HOLES {} n {n} -> {k}", row.name);
                     }
-                    let allowed = match (&kind, set) {
-                        (Ok(_), Set::Slow) => true,
-                        (Ok(k), _) => kinds.contains(&k.as_str()),
-                        (Err(_), _) => false,
-                    };
-                    if !ok || !allowed {
+                    if !ok || !allowed(&kind, kinds) {
                         failures.lock().unwrap().push(format!(
                             "{} n {n}: status {}, kind {}, allowed {}\nstderr tail:\n{}",
                             row.name,
@@ -560,8 +564,8 @@ fn every_control_class_is_clean() {
 }
 
 /// The 3 slow classes of the hunt (X9, X18, X19: clean, but quadratic in oxc), at their hunt
-/// sizes up to `SLOW_MAX_N`, one child at a time. Release only; it prints the time and
-/// asserts only that no child dies or hangs.
+/// sizes up to `SLOW_MAX_N`, one child at a time. Release only; it prints the time, and fails
+/// when a child dies or hangs or gives a kind that the row does not allow.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "release only: slow in debug")]
 fn slow_classes_print_their_time() {
@@ -669,4 +673,30 @@ fn the_table_is_well_formed() {
             }
         }
     }
+}
+
+/// Review V5: the slow set judges the kind as the other sets do. Each case of a slow row at a
+/// size that the set runs allows its own kinds only: a StackLimit is not allowed (each one is a
+/// valid program or a cap), and a missing line never passes.
+#[test]
+fn every_set_judges_the_kind() {
+    let rows = table();
+    let mut cases = 0;
+    for row in rows.iter().filter(|r| r.set() == Set::Slow) {
+        for (n, kinds) in row.jobs().into_iter().filter(|&(n, _)| n <= SLOW_MAX_N) {
+            cases += 1;
+            assert!(
+                !allowed(&Ok("Range(StackLimit)".to_owned()), kinds),
+                "{} n {n}",
+                row.name
+            );
+            assert!(
+                allowed(&Ok(kinds[0].to_owned()), kinds),
+                "{} n {n}",
+                row.name
+            );
+            assert!(!allowed(&Err("no HOLES line".to_owned()), kinds));
+        }
+    }
+    assert_eq!(cases, 7, "the slow cases up to SLOW_MAX_N");
 }
