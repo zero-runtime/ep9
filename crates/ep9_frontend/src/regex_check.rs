@@ -27,6 +27,9 @@
 //!   SyntaxError.
 //! - The regex parser recurses (`prescan::REGEX_WEIGHT`). Here it runs near the base of the
 //!   worker stack, not at the parser's depth, so the stack budget of `stack.rs` still holds.
+//!   It has no stack check of its own (layer 1 patches only oxc_parser): before each literal,
+//!   its group and class nesting at `stack::REGEX_PER_GROUP` with the margin must fit the stack
+//!   above the limit, else the parse gives RangeError(StackLimit) (l1.rs).
 //!
 //! Limits (the result is a SyntaxError in each case, as before):
 //! - After a fatal parse error, oxc gives an empty token list (and an empty AST). Then only
@@ -149,7 +152,8 @@ pub(crate) fn parse<'a>(
     if let Some(stop) = stack_stop(&parsed) {
         return Err(stop);
     }
-    check(source, &parsed.tokens, &mut parsed.diagnostics);
+    check(source, &parsed.tokens, &mut parsed.diagnostics)
+        .map_err(|at| Stopped::StackLimit(Some(at)))?;
     Ok(parsed)
 }
 
@@ -168,16 +172,71 @@ pub(crate) fn literal_parses() -> usize {
 /// Parse the pattern and flags of each RegExp token in `tokens` once, and push each error
 /// into `diagnostics`.
 ///
-/// `tokens` must be the final token list of an oxc parse of `source` (`TokensParserConfig`).
-pub(crate) fn check(source: &str, tokens: &[Token], diagnostics: &mut Vec<OxcDiagnostic>) {
+/// `tokens` must be the final token list of an oxc parse of `source` (a tokens-on config).
+///
+/// # Errors
+///
+/// Layer 1: the start of the first literal whose nesting does not fit the stack above this
+/// thread's limit (`l1::regex_fits`); the literals after it are not checked.
+pub(crate) fn check(
+    source: &str,
+    tokens: &[Token],
+    diagnostics: &mut Vec<OxcDiagnostic>,
+) -> Result<(), u32> {
     // One scratch arena for all literals: the parsed patterns are not kept.
     let mut scratch: Option<Allocator> = None;
     for token in tokens.iter().filter(|t| t.kind() == Kind::RegExp) {
+        let literal = &source[token.start() as usize..token.end() as usize];
+        if !crate::l1::regex_fits(nesting(literal)) {
+            return Err(token.start());
+        }
         let allocator = scratch.get_or_insert_with(Allocator::default);
         if let Some(error) = check_literal(allocator, source, token.start(), token.end()) {
             diagnostics.push(error);
         }
         allocator.reset();
+    }
+    Ok(())
+}
+
+/// The deepest group and class nesting of the regex literal `/pattern/flags`: the levels that
+/// oxc_regular_expression recurses (the count of the pre-scan's regex scan, `prescan.rs`).
+/// Without the `v` flag a class is 1 level; with it every unescaped `[` opens a class.
+fn nesting(literal: &str) -> u32 {
+    let Some(close) = literal.rfind('/').filter(|&i| i > 0) else {
+        return 0;
+    };
+    let pattern = &literal.as_bytes()[1..close];
+    let (mut groups, mut sets, mut in_class) = (0u32, 0u32, false);
+    let (mut deepest, mut deepest_v) = (0u32, 0u32);
+    let mut i = 0;
+    while i < pattern.len() {
+        match pattern[i] {
+            b'\\' => i += 1,
+            b'[' => {
+                in_class = true;
+                sets += 1;
+                deepest = deepest.max(groups + 1);
+                deepest_v = deepest_v.max(groups + sets);
+            }
+            b']' => {
+                in_class = false;
+                sets = sets.saturating_sub(1);
+            }
+            b'(' if !in_class => {
+                groups += 1;
+                deepest = deepest.max(groups);
+                deepest_v = deepest_v.max(groups + sets);
+            }
+            b')' if !in_class => groups = groups.saturating_sub(1),
+            _ => {}
+        }
+        i += 1;
+    }
+    if literal[close + 1..].contains('v') {
+        deepest_v
+    } else {
+        deepest
     }
 }
 
@@ -479,6 +538,22 @@ mod tests {
         assert!(matches!(r, Err(CompileError::Syntax(_))), "{r:?}");
     }
 
+    #[test]
+    fn nesting_counts_the_levels_of_the_regex_parser() {
+        for (literal, levels) in [
+            ("/a/", 0),
+            ("/(a)(b)(c)/", 1),
+            ("/((a))/g", 2),
+            ("/[[[a]/", 1),
+            ("/[[a]&&[b]]/v", 2),
+            ("/([a(b)])/", 2),
+            ("/\\(\\[(a)/u", 1),
+            ("/(?<n>(?=(?:x)))/", 3),
+        ] {
+            assert_eq!(nesting(literal), levels, "{literal}");
+        }
+    }
+
     /// The RegExpLiteral spans of the AST.
     #[derive(Default)]
     struct Literals(Vec<Span>);
@@ -554,7 +629,7 @@ mod tests {
                 .with_config(TokensParserConfig)
                 .parse();
             let mut new: Vec<OxcDiagnostic> = parsed.diagnostics.errors().cloned().collect();
-            check(src, &parsed.tokens, &mut new);
+            check(src, &parsed.tokens, &mut new).expect("this test thread has no stack limit");
             let render = |d: &OxcDiagnostic| {
                 let labels: Vec<(u32, u32)> =
                     d.labels.iter().map(|l| (l.offset(), l.len())).collect();

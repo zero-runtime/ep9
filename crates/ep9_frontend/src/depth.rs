@@ -52,6 +52,8 @@ pub enum DepthLayer {
 pub(crate) struct TooDeep {
     /// The first node found below the cap.
     pub(crate) span: ByteSpan,
+    /// Layer 1: the backstop stopped the walk (the stack, not the cap; the node where it stopped).
+    pub(crate) stack_limit: bool,
 }
 
 /// Layer 2: measure the AST depth of `program`.
@@ -67,11 +69,15 @@ pub(crate) fn check_ast_depth(program: &Program<'_>, cap: u32) -> Result<u32, To
         max: 0,
         cap,
         too_deep: None,
+        stack_limit: false,
     };
     pass.visit_program(program);
     match pass.too_deep {
         None => Ok(pass.max),
-        Some(span) => Err(TooDeep { span }),
+        Some(span) => Err(TooDeep {
+            span,
+            stack_limit: pass.stack_limit,
+        }),
     }
 }
 
@@ -80,6 +86,8 @@ struct DepthPass {
     max: u32,
     cap: u32,
     too_deep: Option<ByteSpan>,
+    /// Layer 1: the backstop set `too_deep` (before any node passed the cap).
+    stack_limit: bool,
 }
 
 impl DepthPass {
@@ -102,6 +110,19 @@ impl<'a> Visit<'a> for DepthPass {
                     start: span.start,
                     end: span.end,
                 });
+            }
+        }
+        // Layer 1 backstop (l1.rs): on a thread smaller than the budget. With cap 0, no node
+        // descends from here, so the walk unwinds.
+        if self.cap > 0 && crate::l1::backstop(self.depth) {
+            self.cap = 0;
+            if self.too_deep.is_none() {
+                let span = kind.span();
+                self.too_deep = Some(ByteSpan {
+                    start: span.start,
+                    end: span.end,
+                });
+                self.stack_limit = true;
             }
         }
     }

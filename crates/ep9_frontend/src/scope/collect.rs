@@ -310,7 +310,9 @@ impl<'a> Builder<'a> {
         if self.too_deep.is_some() {
             return false;
         }
-        if self.depth > self.cap {
+        // Layer 1 backstop (l1.rs): on a thread smaller than the budget the walk stops here too;
+        // the result is the layer-3 RangeError (scope/mod.rs).
+        if self.depth > self.cap || crate::l1::backstop(self.depth) {
             self.too_deep = Some(span.start);
             return false;
         }

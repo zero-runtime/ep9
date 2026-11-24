@@ -9,6 +9,10 @@
 //!                                  oxc_parser (third_party/patches/oxc/0002), sp >= limit, else a
 //!                                  sticky stop --> ParserReturn::stack_limit_hit
 //!                                  --> RangeError(StackLimit)
+//! each regex literal (regex_check) groups x REGEX_PER_GROUP x M > sp - limit --> StackLimit
+//! after layer 2 (lib.rs check_depth) depth x PASS_PER_LEVEL x M > sp - limit --> StackLimit
+//! ep9 walks (backstop)             layer 2, rewrite_completion, scope pass, BytecodeGen:
+//!                                  sp < limit at a depth step --> RangeError
 //! ```
 //!
 //! - W is the requested stack size of the thread (`stack::WORKER_STACK_BYTES` for every
@@ -20,6 +24,12 @@
 //!   rewind every later site stops at once.
 //! - Fail closed: a thread with no limit (not a front-end worker and not in a limit scope) parses
 //!   with `limit = usize::MAX`, so its first site stops. That is a StackLimit, never an abort.
+//!   The budget checks and the backstops act only where a limit is set: a pass runs on a parse
+//!   result, and a thread with no limit has none.
+//! - The budget checks (M = the margin of `stack.rs`, 1.5) guard the recursion that has no check
+//!   of its own: the regex parser, oxc_semantic and the oxc `Visit` walks of the eval path. On the
+//!   full worker they never fire (the budget holds the caps with M); on a smaller thread they stop
+//!   before such a walk starts.
 //! - [`stack_address`] reads the stack pointer with asm on aarch64 and x86-64 (the 4 tier-1
 //!   targets): the fuzz build uses ASan, and there a local can live off the real stack. Other
 //!   targets use the address of a local.
@@ -30,7 +40,9 @@ use std::cell::Cell;
 use oxc_parser::config::NoTokensLexerConfig;
 use oxc_parser::config::{ParserConfig, TokensLexerConfig};
 
-use crate::stack::{RED, WORKER_STACK_BYTES};
+use crate::stack::{
+    PASS_PER_LEVEL, RED, REGEX_PER_GROUP, SAFETY_DEN, SAFETY_NUM, WORKER_STACK_BYTES,
+};
 use crate::worker::{self, SpawnError};
 
 thread_local! {
@@ -107,6 +119,50 @@ impl Drop for LimitScope {
     fn drop(&mut self) {
         LIMIT.with(|l| l.set(self.0));
     }
+}
+
+/// The stack is below this thread's limit (never when it has none).
+#[inline]
+pub(crate) fn below_limit() -> bool {
+    stack_address() < thread_limit()
+}
+
+/// AST levels between 2 stack reads of a pass backstop. The frames of that many levels lie in
+/// RED (BytecodeGen, the largest pass, is below 16 KiB per level in debug).
+pub(crate) const BACKSTOP_STEP: u32 = 16;
+
+/// The backstop of an ep9 walk at its depth step (layer 2, the scope pass, BytecodeGen): true
+/// when the walk must stop, because the stack is below this thread's limit. It reads the stack
+/// at every [`BACKSTOP_STEP`]-th level only. On the full worker within the caps it never fires;
+/// it matters on a thread smaller than the budget.
+#[inline]
+pub(crate) fn backstop(depth: u32) -> bool {
+    depth.is_multiple_of(BACKSTOP_STEP) && below_limit()
+}
+
+/// `levels` x `per_level` with the margin fits the stack above this thread's limit (always,
+/// when it has none).
+fn fits(levels: usize, per_level: usize) -> bool {
+    let limit = thread_limit();
+    if limit == 0 {
+        return true;
+    }
+    let need = levels.saturating_mul(per_level).saturating_mul(SAFETY_NUM) / SAFETY_DEN;
+    stack_address().saturating_sub(limit) >= need
+}
+
+/// The run-time budget check, once after layer 2 (DES section 3.3): the walks that follow
+/// (oxc_semantic, the oxc `Visit` walks of the eval path, the scope pass) fit `depth` AST levels
+/// at `PASS_PER_LEVEL` with the margin. oxc_semantic and the oxc walks have no backstop of their
+/// own, so on a thread smaller than the budget this is their stop.
+pub(crate) fn passes_fit(depth: u32) -> bool {
+    fits(depth as usize, PASS_PER_LEVEL)
+}
+
+/// The per-literal regex budget check (`regex_check`): the regex parser recurses `groups` levels
+/// at `REGEX_PER_GROUP`, and it has no check of its own (the regex crate is not patched).
+pub(crate) fn regex_fits(groups: u32) -> bool {
+    fits(groups as usize, REGEX_PER_GROUP)
 }
 
 /// Run `f` with the limit of [`LimitScope::of`]`(stack_bytes)`.

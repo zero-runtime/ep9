@@ -171,6 +171,12 @@ impl<'a, 's> FnGen<'a, 's> {
                 RangeError::too_deep(DepthLayer::Pass, self.cx.source, Some(span.start)),
             ))));
         }
+        // Layer 1 backstop (l1.rs): on a thread smaller than the budget.
+        if crate::l1::backstop(self.depth) {
+            return Err(Box::new(CodegenError::Compile(CompileError::Range(
+                RangeError::stack_limit(self.cx.source, Some(span.start)),
+            ))));
+        }
         Ok(())
     }
 

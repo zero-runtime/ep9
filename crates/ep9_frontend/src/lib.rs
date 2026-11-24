@@ -11,6 +11,7 @@
 //!   | layer 1 (l1.rs): a stack check at each recursion entry --> stop? --> Err(Range)
 //!   v strict script? insert a "use strict" directive into the AST
 //! layer 2: depth::check_ast_depth ------------------ depth > AST_CAP? --> Err(Range)
+//!   | layer 1: the run-time budget check (l1.rs) ------ no room? --------> Err(Range)
 //!   v
 //! oxc_semantic syntax checks ------------------------ errors? --> Err(Syntax)
 //!   v
@@ -431,12 +432,32 @@ pub(crate) fn parse<'a>(
     if opts.goal == Goal::Script && opts.strictness == Strictness::Strict {
         force_strict(allocator, &mut parsed.program);
     }
-    if let Err(too_deep) = depth::check_ast_depth(&parsed.program, AST_CAP) {
-        return Err(
-            RangeError::too_deep(DepthLayer::Ast, source, Some(too_deep.span.start)).into(),
-        );
-    }
+    check_depth(&parsed.program, source)?;
     Ok(parsed.program)
+}
+
+/// Layer 2, then the run-time budget check of layer 1 (l1.rs, DES section 3.3), before the
+/// recursive walks after the parse (oxc_semantic, the eval-path walks, the scope pass). The one
+/// helper of every layer-2 call site (here, eval.rs, function_ctor.rs).
+///
+/// # Errors
+///
+/// TooDeep(Ast) above `AST_CAP`. StackLimit when the layer-2 backstop stopped the walk, or when
+/// the AST depth at `PASS_PER_LEVEL` with the margin does not fit the stack above the limit
+/// (only on a thread smaller than the budget).
+pub(crate) fn check_depth(program: &Program<'_>, source: &str) -> Result<(), RangeError> {
+    match depth::check_ast_depth(program, AST_CAP) {
+        Ok(depth) if l1::passes_fit(depth) => Ok(()),
+        Ok(_) => Err(RangeError::stack_limit(source, None)),
+        Err(deep) if deep.stack_limit => {
+            Err(RangeError::stack_limit(source, Some(deep.span.start)))
+        }
+        Err(deep) => Err(RangeError::too_deep(
+            DepthLayer::Ast,
+            source,
+            Some(deep.span.start),
+        )),
+    }
 }
 
 /// oxc_semantic with syntax checks. Call only on a program that passed [`parse`] (layer 2), so

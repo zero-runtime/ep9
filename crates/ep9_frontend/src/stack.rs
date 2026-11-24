@@ -45,6 +45,13 @@ pub(crate) const SAFETY_DEN: usize = 2;
 /// is not budget (`BUDGET_BYTES`).
 pub(crate) const RED: usize = 1 << 20;
 
+/// oxc_regular_expression stack per group or class level (the table above): the per-literal
+/// budget check of layer 1 (`regex_check`). The regex parse has no check of its own.
+#[cfg(debug_assertions)]
+pub(crate) const REGEX_PER_GROUP: usize = 16_864;
+#[cfg(not(debug_assertions))]
+pub(crate) const REGEX_PER_GROUP: usize = 720;
+
 #[cfg(debug_assertions)]
 const PARSE_PER_UNIT: usize = 7_408;
 #[cfg(not(debug_assertions))]

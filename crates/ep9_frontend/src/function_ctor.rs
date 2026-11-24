@@ -206,9 +206,8 @@ fn parse_part<'a>(
     if parsed.diagnostics.has_errors() {
         return Err(crate::early_errors(text, parsed.diagnostics.errors()).into());
     }
-    if let Err(deep) = crate::depth::check_ast_depth(&parsed.program, crate::AST_CAP) {
-        return Err(RangeError::too_deep(DepthLayer::Ast, text, Some(deep.span.start)).into());
-    }
+    // Layer 2 and the run-time budget check of layer 1.
+    crate::check_depth(&parsed.program, text)?;
     Ok(parsed.program)
 }
 
