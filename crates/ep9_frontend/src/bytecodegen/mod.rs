@@ -375,7 +375,11 @@ pub(crate) fn wide_forms_from(v: Option<&str>) -> u8 {
 /// `EP9_WIDE_FORMS`, read once per process (the only read of this crate).
 fn wide_forms() -> u8 {
     static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| wide_forms_from(std::env::var("EP9_WIDE_FORMS").ok().as_deref()))
+    // bench-only: never merged (an unset switch gives 3; an explicit 0 still gives 0).
+    *V.get_or_init(|| match std::env::var("EP9_WIDE_FORMS") {
+        Err(std::env::VarError::NotPresent) => 3,
+        v => wide_forms_from(v.ok().as_deref()),
+    })
 }
 
 #[cfg(test)]
