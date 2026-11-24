@@ -1278,7 +1278,6 @@ fn open_cycles(
 fn the_depth_walk_gates_every_visitor_cycle() {
     let graph = visit_graph(&oxc_visit_source());
     let gates = depth_pass_gates();
-    assert_eq!(gates.len(), 11, "the depth.rs texts say 11 gated points");
     for gate in &gates {
         assert!(
             graph.edges.contains_key(gate),
@@ -1302,6 +1301,8 @@ fn the_depth_walk_gates_every_visitor_cycle() {
         open.len(),
         open.join("\n")
     );
+    // The count comes after the cycle check, so that a removed gate names its open cycle first.
+    assert_eq!(gates.len(), 11, "the depth.rs texts say 11 gated points");
     // How far past the cap the walk can go: a gate lets the walk on at depth <= cap, and the
     // depth then grows by at most the counted nodes of a gate-free path to the next gate.
     let mut memo = std::collections::BTreeMap::new();
