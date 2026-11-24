@@ -616,3 +616,262 @@ fn aarch64_wide_fast_set_runs_once() {
         assert_eq!(arms[0], arms[1], "{}", d.name());
     }
 }
+
+// ---- W-2: the loop and the exception pc (T11, T12) ----------------------------------------
+
+/// The `_w2` handler of `op` (one of the wide list) of the `full` table of the threaded
+/// expansion `d` (`None` for the match loop, which runs `Wide` itself).
+fn w2_of(d: Dispatch, op: Opcode) -> Option<Handler> {
+    macro_rules! pick {
+        ($m:ident) => {{
+            use crate::interp::$m::w2;
+            match op {
+                Opcode::GetNamedProperty => w2::GetNamedProperty as Handler,
+                Opcode::SetNamedProperty => w2::SetNamedProperty as Handler,
+                Opcode::JumpLoop => w2::JumpLoop as Handler,
+                other => unreachable!("{other}"),
+            }
+        }};
+    }
+    match d {
+        Dispatch::Match => None,
+        Dispatch::Sibling => Some(pick!(sibling)),
+        #[cfg(feature = "become")]
+        Dispatch::Become => Some(pick!(tail)),
+    }
+}
+
+/// The arms of the W-2 tests: bit 1 off, bit 1 on, and (threaded expansions) `Wide` -> the
+/// `_w2` handler of `op` directly in `Cx.table` (bit 1 off), so the `_w2` handler of an opcode
+/// whose wide table entry is the `Wide` cold handler on this target runs too. The program of
+/// such an arm has no other prefixed opcode.
+#[derive(Clone, Copy, Debug)]
+enum Arm {
+    Off,
+    On,
+    Direct(Opcode),
+}
+
+fn arms(d: Dispatch, op: Opcode) -> Vec<Arm> {
+    let mut a = vec![Arm::Off, Arm::On];
+    if w2_of(d, op).is_some() {
+        a.push(Arm::Direct(op));
+    }
+    a
+}
+
+/// A new isolate of dispatch `d` (eager feedback) for `arm`, with `print`; runs `u`.
+fn arm_isolate(d: Dispatch, arm: Arm, u: VerifiedUnit) -> Isolate {
+    let mut c = config(d, false);
+    c.feedback_threshold = 0;
+    let mut iso = with_wide_table(matches!(arm, Arm::On), || {
+        Isolate::new_with(c, ExecOptions::default()).unwrap()
+    });
+    if let Arm::Direct(op) = arm {
+        iso.cx.table[Opcode::Wide as usize] = w2_of(d, op).unwrap();
+    }
+    iso.register_host_function("print", 1, print);
+    iso.with_cx_checkpoint(|cx| cx.run_script(u, "w2.js").map(|_| ()))
+        .unwrap();
+    iso
+}
+
+/// The script defines the global `f0(n)`: `i = 0; while (i < n) i++; return i`. The loop slot
+/// is past 255 (slots 2-301 are not used), so the back edge is the only prefixed instruction:
+/// `JumpLoop.Wide`.
+fn wide_loop_program() -> VerifiedUnit {
+    let mut s = Asm::script(0);
+    let k = s.b.function_constant(FunctionId(1));
+    s.b.create_closure(k, s.closure, 0);
+    s.sta_global("f0");
+    s.b.lda_undefined().return_();
+    let mut b = FunctionBuilder::new(meta("f0", 1, 0, 0, 0));
+    let n = b.parameter(0);
+    let cmp = b.feedback_slot(FeedbackSlotKind::CompareOp);
+    let bin = b.feedback_slot(FeedbackSlotKind::BinaryOp);
+    for _ in 0..300 {
+        b.feedback_slot(FeedbackSlotKind::BinaryOp);
+    }
+    let loop_ = b.feedback_slot(FeedbackSlotKind::JumpLoop);
+    let i = b.new_register();
+    b.lda_zero().star(i);
+    let header = b.bound_label();
+    let exit = b.new_label();
+    b.ldar(n).test_less_than(i, cmp).jump_if_false(exit);
+    b.ldar(i).inc(bin).star(i);
+    b.jump_loop(header, 0, loop_);
+    b.bind(exit);
+    b.ldar(i).return_();
+    unit("", vec![s.finish(), b.finish().unwrap()])
+}
+
+/// One arm of T11: (the budget units of 100 and of 200 more turns, the result and the cold
+/// body runs (the polls) of 20 turns from budget 5, the loop record, a termination at the
+/// poll: (terminated, cold body runs)).
+type LoopArm = ([i64; 2], u64, u64, u64, (bool, u64));
+
+fn loop_arm(d: Dispatch, arm: Arm) -> LoopArm {
+    use super::ic::int;
+    on_big_stack(move || {
+        let mut iso = arm_isolate(d, arm, wide_loop_program());
+        let f = iso.global_raw("f0").unwrap();
+        let call = |iso: &mut Isolate, n: i32| iso.call_raw(f, Value::UNDEFINED, &[val(int(n))]);
+        let mut units = [0; 2];
+        for (j, n) in [100, 300].into_iter().enumerate() {
+            iso.cx.budget = 10_000;
+            assert_eq!(call(&mut iso, n).unwrap().to_bits(), int(n));
+            units[j] = 10_000 - iso.cx.budget;
+        }
+        iso.cx.budget = 5;
+        let cold0 = scaled_runs()[1] + w2_runs()[1];
+        let r = call(&mut iso, 20).unwrap().to_bits();
+        let polls = scaled_runs()[1] + w2_runs()[1] - cold0;
+        let record = {
+            let units = iso.rt.units.borrow();
+            let v = feedback::vector(&units.last().unwrap().infos[1]).unwrap();
+            feedback::value(v, 302)
+        };
+        // A termination request: the next poll (the budget runs out at a back edge) stops it.
+        iso.terminate_handle().terminate();
+        iso.cx.budget = 5;
+        let cold0 = scaled_runs()[1] + w2_runs()[1];
+        let e = call(&mut iso, 20).unwrap_err();
+        let stop = (e.terminated, scaled_runs()[1] + w2_runs()[1] - cold0);
+        ([units[0], units[1] - units[0]], r, polls, record, stop)
+    })
+}
+
+/// T11 (INV-8): a `JumpLoop.Wide` takes 1 budget unit per back edge (200 more turns take 200
+/// more units), polls when the budget runs out (an interrupt at the poll: a termination stops
+/// the run there), and writes one loop record, the same in every arm: bit 1 off, bit 1 on, and
+/// `JumpLoop_w2` run directly (aarch64 has no wide table entry for it).
+#[test]
+fn wide_jump_loop_budget_and_record() {
+    use super::ic::int;
+    for &d in Dispatch::ALL {
+        let mut first: Option<LoopArm> = None;
+        for arm in arms(d, Opcode::JumpLoop) {
+            let label = format!("{} {arm:?}", d.name());
+            let r = loop_arm(d, arm);
+            assert_eq!(r.0[1], 200, "{label}: 1 unit per back edge");
+            assert_eq!(r.1, int(20), "{label}");
+            assert!(r.2 >= 1, "{label}: the polls {}", r.2);
+            assert_ne!(r.3, 0, "{label}: the loop record");
+            assert_eq!(r.4, (true, 1), "{label}: the termination at the poll");
+            match &first {
+                None => first = Some(r),
+                Some(r0) => assert_eq!(&r, r0, "{label}"),
+            }
+        }
+    }
+}
+
+thread_local! {
+    /// The bytecode offset of the top frame (the caller) that the accessor of T12 saw.
+    static SEEN_OFFSET: core::cell::Cell<i32> = const { core::cell::Cell::new(-1) };
+}
+
+/// The getter and setter of T12: saves the bytecode offset of the top frame, then throws.
+fn throwing_accessor<'s>(
+    cx: &mut crate::Cx<'s>,
+    _this: crate::Local<'s>,
+    _args: crate::Args<'s>,
+    _nt: crate::Local<'s>,
+) -> crate::JsResult<crate::Local<'s>> {
+    let fp = cx.inner().rt().stack().fp();
+    // SAFETY: the top frame is the live JS frame of the load or store (the host call pushed no
+    // frame); its bytecode offset slot holds an int32.
+    let off = unsafe { *fp.offset(crate::frame::slot::BYTECODE_OFFSET) };
+    SEEN_OFFSET.with(|c| c.set(crate::frame::int32_of(off)));
+    Err(cx.throw_type_error("boom"))
+}
+
+/// The script `f0(a)` of T12 (source `src`): `return a.x` (`store` false) or `a.x = 1` at the
+/// position of `a.x`, with the slot past 255, so the access is the only prefixed instruction.
+fn throw_program(store: bool, src: &str) -> VerifiedUnit {
+    let mut s = Asm::script(src.len());
+    let k = s.b.function_constant(FunctionId(1));
+    s.b.create_closure(k, s.closure, 0);
+    s.sta_global("f0");
+    s.b.lda_undefined().return_();
+    let mut b = FunctionBuilder::new(meta("f0", 1, 0, 0, src.len() as u32));
+    let a = b.parameter(0);
+    for _ in 0..300 {
+        b.feedback_slot(FeedbackSlotKind::BinaryOp);
+    }
+    let kx = b.string_constant("x");
+    let at = super::pos(src, "a.x");
+    if store {
+        let slot = b.feedback_slot(FeedbackSlotKind::StoreNamed);
+        b.lda_smi(1);
+        b.set_expression_position(at);
+        b.set_named_property(a, kx, slot);
+        b.lda_zero().return_();
+    } else {
+        let slot = b.feedback_slot(FeedbackSlotKind::LoadNamed);
+        b.set_expression_position(at);
+        b.get_named_property(a, kx, slot).return_();
+    }
+    unit(src, vec![s.finish(), b.finish().unwrap()])
+}
+
+/// T12 (INV-11): a throw from the cold body of a `_w2` handler (a getter behind
+/// `GetNamedProperty.Wide`, a setter behind `SetNamedProperty.Wide`): the getter sees the
+/// offset of the prefix byte as the current instruction, and the exception (message, location,
+/// stack) is the same in every arm (bit 1 off, bit 1 on, the `_w2` handler directly).
+#[test]
+fn w2_cold_exception_pc_is_the_prefix() {
+    let src = "function f0(a) { return a.x; }";
+    for store in [false, true] {
+        let u = throw_program(store, src);
+        let op = if store {
+            Opcode::SetNamedProperty
+        } else {
+            Opcode::GetNamedProperty
+        };
+        let prefix = Instructions::new(&u.functions[1].bytecode)
+            .map(|i| i.unwrap())
+            .find(|i| i.scale == OperandScale::Wide)
+            .map(|i| (i.opcode, i.offset))
+            .unwrap();
+        assert_eq!(prefix.0, op);
+        for &d in Dispatch::ALL {
+            let mut first = None;
+            for arm in arms(d, op) {
+                let label = format!("{} {arm:?} {op}", d.name());
+                let (seen, e) = on_big_stack(move || {
+                    use super::ic::object_prototype;
+                    let mut iso = arm_isolate(d, arm, throw_program(store, src));
+                    let f = iso.global_raw("f0").unwrap();
+                    let rt = &iso.rt;
+                    let acc =
+                        crate::realm::new_host_function(rt, throwing_accessor, "acc", 0, false);
+                    let o = crate::object::new_object(rt, object_prototype(rt));
+                    let pair = crate::accessor::new_pair(rt, acc, acc);
+                    let at = crate::object::attr::ACCESSOR | crate::object::attr::CONFIGURABLE;
+                    crate::props::own_define(rt, o, super::ic::key(rt, "x"), pair, at);
+                    SEEN_OFFSET.with(|c| c.set(-1));
+                    let e = iso.call_raw(f, Value::UNDEFINED, &[val(o)]).unwrap_err();
+                    (
+                        SEEN_OFFSET.with(|c| c.get()),
+                        (e.message, e.location, e.stack),
+                    )
+                });
+                // The load saves the offset of its instruction before the getter call; the
+                // store path saves none before the setter call (the offset of an earlier save
+                // stays), so for it only the arms are compared.
+                if !store {
+                    assert_eq!(
+                        seen, prefix.1 as i32,
+                        "{label}: the offset of the prefix byte"
+                    );
+                }
+                assert_eq!(e.0, "TypeError: boom", "{label}");
+                match &first {
+                    None => first = Some((seen, e)),
+                    Some(e0) => assert_eq!(&(seen, e), e0, "{label}"),
+                }
+            }
+        }
+    }
+}

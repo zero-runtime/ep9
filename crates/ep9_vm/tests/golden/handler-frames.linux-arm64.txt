@@ -18,6 +18,7 @@ ics CreateObjectLiteral 11
 ics DefineNamedOwnProperty 2
 ics SetKeyedProperty 2
 ics SetNamedProperty 2
+ics SetNamedProperty_w2 2
 ics StaContextSlot 2
 ics TestInstanceOf 2
 sib BadOpcode 2
@@ -32,5 +33,6 @@ sib CreateObjectLiteral 11
 sib DefineNamedOwnProperty 2
 sib SetKeyedProperty 2
 sib SetNamedProperty 2
+sib SetNamedProperty_w2 2
 sib StaContextSlot 2
 sib TestInstanceOf 2
