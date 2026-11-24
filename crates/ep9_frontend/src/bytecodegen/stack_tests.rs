@@ -23,11 +23,13 @@ fn opts(form: &Form) -> SourceOpts {
     }
 }
 
-/// AST depth of a small instance (on the test thread; small n only).
+/// AST depth of a small instance (on the test thread; small n only). The parse needs a layer-1
+/// limit on this thread (l1.rs); a test thread has at least 2 MiB.
 fn ast_depth(form: &Form, n: usize) -> u32 {
     let src = (form.build)(n);
     let allocator = Allocator::default();
-    let program = crate::parse(&allocator, &src, opts(form)).expect("small instances parse");
+    let program = crate::l1::with_limit(2 << 20, || crate::parse(&allocator, &src, opts(form)))
+        .expect("small instances parse");
     depth::check_ast_depth(&program, u32::MAX).expect("no cap")
 }
 
@@ -119,7 +121,9 @@ fn codegen_bytes(form: &Form, n: usize) -> (u32, usize) {
     let src = (form.build)(n);
     let opts = opts(form);
     let allocator = Allocator::default();
-    let program = crate::parse(&allocator, &src, opts).expect("parses");
+    // On the 2 GiB probe thread: its layer-1 limit (l1.rs).
+    let program =
+        crate::l1::with_limit(2 << 30, || crate::parse(&allocator, &src, opts)).expect("parses");
     let ast = depth::check_ast_depth(&program, u32::MAX).expect("no cap");
     let semantic = oxc_semantic::SemanticBuilder::new_compiler()
         .build(&program)
@@ -166,8 +170,9 @@ fn measure_codegen_stack() {
                 }
                 writeln!(out, "| {} | {per:.0} | {a2} |", form.name).unwrap();
             }
-            // Budget: the worker stack (stack.rs) for AST_CAP levels, with the 1.5x margin.
-            let budget = crate::stack::WORKER_STACK_BYTES as f64 / f64::from(AST_CAP) / 1.5;
+            // Budget: the worker stack budget (stack.rs; the red zone of layer 1 is not budget)
+            // for AST_CAP levels, with the 1.5x margin.
+            let budget = crate::stack::BUDGET_BYTES as f64 / f64::from(AST_CAP) / 1.5;
             writeln!(
                 out,
                 "worst: {} at {:.0} B/level; budget {budget:.0} B/level",

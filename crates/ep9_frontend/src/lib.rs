@@ -8,6 +8,7 @@
 //!   | copy the source; hop to the front-end worker (stack sized for the caps, stack.rs)
 //!   v
 //! oxc_parser (+ regex validation) ------------------- errors? --> Err(Syntax)
+//!   | layer 1 (l1.rs): a stack check at each recursion entry --> stop? --> Err(Range)
 //!   v strict script? insert a "use strict" directive into the AST
 //! layer 2: depth::check_ast_depth ------------------ depth > AST_CAP? --> Err(Range)
 //!   v
@@ -35,6 +36,7 @@ mod bytecodegen;
 mod depth;
 mod eval;
 mod function_ctor;
+mod l1;
 mod position;
 mod prescan;
 mod regex_check;
@@ -208,6 +210,10 @@ pub enum RangeErrorKind {
     TooDeep(DepthLayer),
     /// The OS refused the front-end worker stack.
     StackUnavailable,
+    /// Layer 1 (H01): the stack check of the parse or of a pass stopped it before the end of
+    /// the thread stack. Within the caps and the stack budget this does not happen; it is the
+    /// result where the pre-scan misses the depth, or on a thread smaller than the budget.
+    StackLimit,
 }
 
 /// A limit was hit while compiling. The engine throws a JS `RangeError`, as V8 does for deep
@@ -234,6 +240,17 @@ impl RangeError {
         Self {
             kind: RangeErrorKind::TooDeep(layer),
             message: format!("Maximum call stack size exceeded (nesting depth limit {cap})"),
+            span,
+            position: span.map(|s| LineMap::new(source.as_bytes()).position(s.start)),
+        }
+    }
+
+    /// Layer 1: [`RangeErrorKind::StackLimit`], with the V8 text, at the byte offset `at`.
+    pub(crate) fn stack_limit(source: &str, at: Option<u32>) -> Self {
+        let span = at.map(|start| ByteSpan { start, end: start });
+        Self {
+            kind: RangeErrorKind::StackLimit,
+            message: "Maximum call stack size exceeded".to_owned(),
             span,
             position: span.map(|s| LineMap::new(source.as_bytes()).position(s.start)),
         }
@@ -349,6 +366,22 @@ where
     R: Send + 'static,
     F: for<'a> FnOnce(&FrontEnd<'a>) -> Result<R, CompileError> + Send + 'static,
 {
+    with_front_end_at(source, opts, l1::WORKER, consumer)
+}
+
+/// [`with_front_end`] with the job on `stack` (l1.rs): a worker of another size (the
+/// small-stack tests) or the inline entry of the design (DES section 7). No public entry gives
+/// a stack (H01 B1).
+pub(crate) fn with_front_end_at<R, F>(
+    source: &str,
+    opts: SourceOpts,
+    stack: l1::Stack,
+    consumer: F,
+) -> Result<R, CompileError>
+where
+    R: Send + 'static,
+    F: for<'a> FnOnce(&FrontEnd<'a>) -> Result<R, CompileError> + Send + 'static,
+{
     let estimate = prescan::estimate(source.as_bytes(), opts.goal == Goal::Module);
     if estimate.depth > PRESCAN_CAP {
         return Err(RangeError::too_deep(DepthLayer::PreScan, source, Some(estimate.at)).into());
@@ -365,7 +398,7 @@ where
             semantic: &semantic,
         })
     };
-    match worker::run(stack::WORKER_STACK_BYTES, job) {
+    match l1::run(stack, job) {
         Ok(result) => result,
         Err(spawn) => Err(CompileError::Range(RangeError {
             kind: RangeErrorKind::StackUnavailable,
@@ -386,10 +419,11 @@ pub(crate) fn parse<'a>(
         Goal::Script => SourceType::script(),
         Goal::Module => SourceType::mjs(),
     };
-    // oxc_parser, then the regex literal check (regex_check::parse).
+    // oxc_parser, then the regex literal check (regex_check::parse). A layer-1 stop is read
+    // before the diagnostics.
     let mut parsed = match regex_check::parse(allocator, source, source_type) {
         Ok(parsed) => parsed,
-        Err(fatal) => return Err(early_errors(source, fatal.errors()).into()),
+        Err(stopped) => return Err(stopped.into_error(source)),
     };
     if parsed.diagnostics.has_errors() {
         return Err(early_errors(source, parsed.diagnostics.errors()).into());

@@ -199,7 +199,8 @@ fn parse_part<'a>(
 ) -> Result<Program<'a>, CompileError> {
     let mut parsed = match crate::regex_check::parse(allocator, text, SourceType::script()) {
         Ok(parsed) => parsed,
-        Err(fatal) => return Err(crate::early_errors(text, fatal.errors()).into()),
+        // A layer-1 stop is read before the diagnostics.
+        Err(stopped) => return Err(stopped.into_error(text)),
     };
     shim.check_regex_literals(text, &parsed.tokens, &mut parsed.diagnostics);
     if parsed.diagnostics.has_errors() {

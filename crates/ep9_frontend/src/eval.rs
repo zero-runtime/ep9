@@ -78,6 +78,16 @@ pub fn compile_eval(
     ctx: &EvalContext,
     options: CompileOptions,
 ) -> Result<VerifiedUnit, CodegenError> {
+    compile_eval_at(source, ctx, options, crate::l1::WORKER)
+}
+
+/// [`compile_eval`] with the job on `stack` (a small worker in the small-stack tests).
+pub(crate) fn compile_eval_at(
+    source: &str,
+    ctx: &EvalContext,
+    options: CompileOptions,
+    stack: crate::l1::Stack,
+) -> Result<VerifiedUnit, CodegenError> {
     // E8: the shim text of a JS string (lone surrogates, U+FDD0) -> the parse text.
     let (source, mut shim) = crate::surrogate::decode(source);
     let estimate = crate::prescan::estimate(source.as_bytes(), false);
@@ -92,7 +102,7 @@ pub fn compile_eval(
         })?;
         shim.finish(unit)
     };
-    match crate::worker::run(crate::stack::WORKER_STACK_BYTES, job) {
+    match crate::l1::run(stack, job) {
         Ok(result) => result,
         Err(spawn) => Err(CompileError::Range(RangeError {
             kind: RangeErrorKind::StackUnavailable,
@@ -182,10 +192,11 @@ fn on_worker<R>(
     codegen: impl FnOnce(&FrontEnd<'_>, &scope::ScopeAnalysis) -> Result<R, CodegenError>,
 ) -> Result<R, CodegenError> {
     let allocator = Allocator::default();
-    // As crate::parse: oxc_parser, then the regex literal check (regex_check::parse).
+    // As crate::parse: oxc_parser, then the regex literal check (regex_check::parse). A
+    // layer-1 stop is read before the diagnostics.
     let mut parsed = match crate::regex_check::parse(&allocator, source, SourceType::script()) {
         Ok(parsed) => parsed,
-        Err(fatal) => return Err(syntax(source, fatal.errors())),
+        Err(stopped) => return Err(stopped.into_error(source).into()),
     };
     // E8, 07 §7 step 5: a regex literal with a lone surrogate is checked again.
     shim.check_regex_literals(source, &parsed.tokens, &mut parsed.diagnostics);
@@ -624,6 +635,20 @@ where
     R: Send + 'static,
     F: for<'f> FnOnce(&FrontEnd<'f>) -> Result<R, CodegenError> + Send + 'static,
 {
+    with_script_completion_at(source, strictness, crate::l1::WORKER, consumer)
+}
+
+/// [`with_script_completion`] with the job on `stack` (a small worker in the small-stack tests).
+pub(crate) fn with_script_completion_at<R, F>(
+    source: &str,
+    strictness: Strictness,
+    stack: crate::l1::Stack,
+    consumer: F,
+) -> Result<R, CodegenError>
+where
+    R: Send + 'static,
+    F: for<'f> FnOnce(&FrontEnd<'f>) -> Result<R, CodegenError> + Send + 'static,
+{
     let estimate = crate::prescan::estimate(source.as_bytes(), false);
     if estimate.depth > PRESCAN_CAP {
         return Err(too_deep(DepthLayer::PreScan, source, estimate.at));
@@ -648,7 +673,7 @@ where
             semantic: &semantic,
         })
     };
-    match crate::worker::run(crate::stack::WORKER_STACK_BYTES, job) {
+    match crate::l1::run(stack, job) {
         Ok(result) => result,
         Err(spawn) => Err(CompileError::Range(RangeError {
             kind: RangeErrorKind::StackUnavailable,

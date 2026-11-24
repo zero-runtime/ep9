@@ -1,10 +1,16 @@
 //! Worker stack size, from measured stack use per depth unit (`probe.rs`, H23).
 //!
 //! ```text
-//! WORKER_STACK_BYTES = BASE + SAFETY x max( PRESCAN_CAP x PARSE_PER_UNIT,     oxc_parser (layer 0 bound)
-//!                                           AST_CAP     x PASS_PER_LEVEL )    depth pass, oxc_semantic,
-//!                                                                             scope pass (layer 2 bound)
+//! BUDGET_BYTES = BASE + SAFETY x max( PRESCAN_CAP x PARSE_PER_UNIT,     oxc_parser (layer 0 bound)
+//!                                     AST_CAP     x PASS_PER_LEVEL )    depth pass, oxc_semantic,
+//!                                                                       scope pass (layer 2 bound)
+//! WORKER_STACK_BYTES = BUDGET_BYTES + RED                               layer 1 (l1.rs): the stack
+//!                                                                       limit is RED above the end
 //! ```
+//!
+//! Every share that a test or a check takes as its budget is a share of `BUDGET_BYTES`, never of
+//! `WORKER_STACK_BYTES`: RED is never budget. The ceiling asserts stay on `WORKER_STACK_BYTES`,
+//! the real reservation.
 //!
 //! Parse row: `probe::measure_forms` (T-A, n = 500 -> 1500) on the 4 CI targets (macOS and Linux
 //! arm64, Linux and Windows x86-64), 2026-11-24, oxc 0.158, worst target and form. The debug
@@ -29,8 +35,15 @@ use crate::depth::{AST_CAP, PRESCAN_CAP};
 const BASE: usize = 2 << 20;
 
 /// Margin for targets that were not measured (Windows x64: shadow space and larger frames).
-const SAFETY_NUM: usize = 3;
-const SAFETY_DEN: usize = 2;
+/// The run-time budget checks of layer 1 (l1.rs) use the same margin.
+pub(crate) const SAFETY_NUM: usize = 3;
+pub(crate) const SAFETY_DEN: usize = 2;
+
+/// Layer 1 (l1.rs, H01): the stack limit of a worker is `RED` above the end of its stack. The
+/// red zone holds the thread start frames above the first job, the frames between 2 checks, the
+/// leaf calls below the last check (lexer, arena growth, a diagnostic) and the unwind path. It
+/// is not budget (`BUDGET_BYTES`).
+pub(crate) const RED: usize = 1 << 20;
 
 #[cfg(debug_assertions)]
 const PARSE_PER_UNIT: usize = 7_408;
@@ -40,30 +53,38 @@ const PARSE_PER_UNIT: usize = 2_560;
 /// The largest per-AST-level cost of the passes that recurse over the AST after layer 2:
 /// the depth pass, oxc_semantic and the scope pass (debug worst: scope pass, 2,016 B).
 /// In both profiles the parse bound is larger, so this constant does not set the stack size.
+/// The run-time budget check of layer 1 (l1.rs) uses it as the stack per AST level of the walks
+/// after layer 2.
 #[cfg(debug_assertions)]
-const PASS_PER_LEVEL: usize = 2_560;
+pub(crate) const PASS_PER_LEVEL: usize = 2_560;
 #[cfg(not(debug_assertions))]
-const PASS_PER_LEVEL: usize = 512;
+pub(crate) const PASS_PER_LEVEL: usize = 512;
 
 const fn max(a: usize, b: usize) -> usize {
     if a > b { a } else { b }
 }
 
-/// Stack of the front-end worker thread.
-pub(crate) const WORKER_STACK_BYTES: usize = BASE
+/// The stack that the parse and the passes may use on the worker: the base and both bounds with
+/// the margin. Every budget share comes from this value (RED is not in it).
+pub(crate) const BUDGET_BYTES: usize = BASE
     + max(
         PRESCAN_CAP as usize * PARSE_PER_UNIT,
         AST_CAP as usize * PASS_PER_LEVEL,
     ) / SAFETY_DEN
         * SAFETY_NUM;
 
-// Checked in every build: the stack fits both bounds with the margin, and stays a sane
-// reservation (under `CEILING`: 512 MiB in debug, 256 MiB in release).
+/// Stack of the front-end worker thread: the budget and the red zone of layer 1 on top.
+pub(crate) const WORKER_STACK_BYTES: usize = BUDGET_BYTES + RED;
+
+// Checked in every build: the budget fits both bounds with the margin, and the reservation stays
+// a sane size (under `CEILING`: 512 MiB in debug, 256 MiB in release). T-BUDGET: RED is on top
+// of the budget, never inside it.
 const _: () = {
     let parse = PRESCAN_CAP as usize * PARSE_PER_UNIT;
     let passes = AST_CAP as usize * PASS_PER_LEVEL;
-    assert!(WORKER_STACK_BYTES >= BASE + parse + parse / 2);
-    assert!(WORKER_STACK_BYTES >= BASE + passes + passes / 2);
+    assert!(BUDGET_BYTES >= BASE + parse + parse / 2);
+    assert!(BUDGET_BYTES >= BASE + passes + passes / 2);
+    assert!(BUDGET_BYTES + RED == WORKER_STACK_BYTES);
     assert!(WORKER_STACK_BYTES < CEILING);
 };
 

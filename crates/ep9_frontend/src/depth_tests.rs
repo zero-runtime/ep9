@@ -25,11 +25,13 @@ fn opts(form: &Form) -> SourceOpts {
     }
 }
 
-/// AST depth of a small instance (on the test thread; small n only).
+/// AST depth of a small instance (on the test thread; small n only). The parse needs a layer-1
+/// limit on this thread (l1.rs); a test thread has at least 2 MiB.
 fn ast_depth(form: &Form, n: usize) -> u32 {
     let src = (form.build)(n);
     let allocator = Allocator::default();
-    let program = parse(&allocator, &src, opts(form)).expect("small instances parse");
+    let program = crate::l1::with_limit(2 << 20, || parse(&allocator, &src, opts(form)))
+        .expect("small instances parse");
     depth::check_ast_depth(&program, u32::MAX).expect("no cap")
 }
 
@@ -51,6 +53,8 @@ fn layer_of(result: &Result<(), CompileError>) -> Option<DepthLayer> {
         Err(CompileError::Range(e)) => match e.kind {
             RangeErrorKind::TooDeep(layer) => Some(layer),
             RangeErrorKind::StackUnavailable => panic!("stack unavailable: {e}"),
+            // On the full worker within the budget (Claim D of layer 1).
+            RangeErrorKind::StackLimit => panic!("stack limit on the full worker: {e}"),
         },
         _ => None,
     }
@@ -482,6 +486,8 @@ fn check_prescan_cap_form() {
             Err(CompileError::Range(e)) => match e.kind {
                 RangeErrorKind::TooDeep(layer) => format!("TooDeep({layer:?})"),
                 RangeErrorKind::StackUnavailable => panic!("{}: stack unavailable: {e}", form.name),
+                // T-SAME: printed, and the parent fails on it (Claim D of layer 1).
+                RangeErrorKind::StackLimit => "StackLimit".to_string(),
             },
             Err(e) => panic!("{} n={n}: {e}", form.name),
         };

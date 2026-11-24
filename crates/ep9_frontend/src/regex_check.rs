@@ -39,20 +39,63 @@
 //!   regex error and not the Flow error.
 
 use oxc_allocator::Allocator;
-use oxc_diagnostics::{Diagnostics, OxcDiagnostic};
-use oxc_parser::config::TokensParserConfig;
+#[cfg(debug_assertions)]
+use oxc_diagnostics::Diagnostics;
+use oxc_diagnostics::OxcDiagnostic;
 use oxc_parser::{Kind, ParseOptions, Parser, ParserReturn, Token};
 use oxc_regular_expression::{LiteralParser, Options};
 use oxc_span::{SourceType, Span};
 
+use crate::l1::L1Config;
+use crate::{CompileError, RangeError};
+
+/// Why [`parse`] gave no parse result.
+#[derive(Debug)]
+pub(crate) enum Stopped {
+    /// Debug pass 1 had a fatal error: its diagnostics.
+    #[cfg(debug_assertions)]
+    Fatal(Diagnostics),
+    /// Layer 1 (l1.rs): the stack check stopped the parse (`ParserReturn::stack_limit_hit`).
+    /// The byte offset of the stop, if oxc gave one.
+    StackLimit(Option<u32>),
+}
+
+impl Stopped {
+    /// The error of the front end: a SyntaxError (pass 1) or RangeError(StackLimit).
+    pub(crate) fn into_error(self, source: &str) -> CompileError {
+        match self {
+            #[cfg(debug_assertions)]
+            Self::Fatal(diagnostics) => crate::early_errors(source, diagnostics.errors()).into(),
+            Self::StackLimit(at) => RangeError::stack_limit(source, at).into(),
+        }
+    }
+}
+
+/// Layer 1: the stop of a parse, read from the flag (never from the message, and never from
+/// `fatal_error` alone: oxc keeps `fatal_error` and drops the message when the lexer has an
+/// error at the end of the text).
+fn stack_stop(parsed: &ParserReturn<'_>) -> Option<Stopped> {
+    parsed.stack_limit_hit.then(|| {
+        let at = parsed
+            .diagnostics
+            .errors()
+            .next()
+            .and_then(|d| d.labels.first().map(|l| l.offset()));
+        Stopped::StackLimit(at)
+    })
+}
+
 /// The oxc parse of the front end (lib.rs `parse`, eval.rs `on_worker`): regex parsing off,
-/// tokens on, then [`check`] on the final token list.
+/// tokens on, then [`check`] on the final token list. The parser config is [`L1Config`] (layer
+/// 1: a stack check at each recursion entry, with this thread's limit).
 ///
 /// ```text
 /// debug assertions on (tests, fuzz builds, a debug CLI):
-///   pass 1: oxc_parser, tokens off, own arena --fatal error--> Err(its diagnostics)
+///   pass 1: oxc_parser, tokens off, own arena --stack stop--> Err(StackLimit)
+///                                             --fatal error--> Err(Fatal(its diagnostics))
 ///     v no fatal error
-///   pass 2: oxc_parser, tokens on --> check(tokens) --> Ok(parsed)
+///   pass 2: oxc_parser, tokens on --stack stop--> Err(StackLimit)
+///     --> check(tokens) --> Ok(parsed)
 /// release: pass 2 only --> Ok(parsed) (the caller reads `fatal_error`)
 /// ```
 ///
@@ -66,35 +109,46 @@ use oxc_span::{SourceType, Span};
 /// so pass 2 takes the path of pass 1: no fatal error, and the lexer never jumps ahead.
 ///
 /// The assert exists only with debug assertions, so release keeps one parse (pass 1 costs
-/// about +11% parse time). Remove pass 1 when an oxc release has the fix.
+/// about +11% parse time). Remove pass 1 when an oxc release has the fix. Pass 1 is a
+/// `#[cfg(debug_assertions)]` block (not `if cfg!`), so a release build has no
+/// `L1Config<false>` parse: one parser copy.
 ///
 /// # Errors
 ///
-/// Debug assertions on: the diagnostics of a parse with a fatal error.
+/// [`Stopped::StackLimit`] when the stack check of layer 1 stopped a pass. Debug assertions on:
+/// [`Stopped::Fatal`] with the diagnostics of a pass 1 with a fatal error.
 pub(crate) fn parse<'a>(
     allocator: &'a Allocator,
     source: &'a str,
     source_type: SourceType,
-) -> Result<ParserReturn<'a>, Diagnostics> {
+) -> Result<ParserReturn<'a>, Stopped> {
     // Regex literals: oxc_parser keeps the pattern text; `check` parses each one once (with
     // this option on, oxc parses a pattern again on each rescan of its text).
     let options = ParseOptions {
         parse_regular_expression: false,
         ..ParseOptions::default()
     };
-    if cfg!(debug_assertions) {
+    #[cfg(debug_assertions)]
+    {
         let scratch = Allocator::default();
         let first = Parser::new(&scratch, source, source_type)
             .with_options(options)
+            .with_config(L1Config::<false>::for_this_thread())
             .parse();
+        if let Some(stop) = stack_stop(&first) {
+            return Err(stop);
+        }
         if first.fatal_error {
-            return Err(first.diagnostics);
+            return Err(Stopped::Fatal(first.diagnostics));
         }
     }
     let mut parsed = Parser::new(allocator, source, source_type)
         .with_options(options)
-        .with_config(TokensParserConfig)
+        .with_config(L1Config::<true>::for_this_thread())
         .parse();
+    if let Some(stop) = stack_stop(&parsed) {
+        return Err(stop);
+    }
     check(source, &parsed.tokens, &mut parsed.diagnostics);
     Ok(parsed)
 }

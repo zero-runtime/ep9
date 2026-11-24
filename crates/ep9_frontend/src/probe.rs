@@ -83,12 +83,14 @@ struct Sample {
 /// source type of the goal. The whole call runs on the worker stack, so the probe measures the
 /// whole call: in debug builds pass 1 (tokens off, own arena) and pass 2 (tokens on), in
 /// release pass 2 only, then the regex literal check over the tokens (regex parsing is off in
-/// oxc, so a regex pattern is parsed in that check, not in the parser).
+/// oxc, so a regex pattern is parsed in that check, not in the parser). The parser config is
+/// the production one, `L1Config` (layer 1), so the probe measures its frames; the probe thread
+/// has the limit of its own stack (`l1::LimitScope::of`).
 fn worker_parse<'a>(
     allocator: &'a Allocator,
     src: &'a str,
     module: bool,
-) -> Result<oxc_parser::ParserReturn<'a>, oxc_diagnostics::Diagnostics> {
+) -> Result<oxc_parser::ParserReturn<'a>, crate::regex_check::Stopped> {
     let source_type = if module {
         oxc_span::SourceType::mjs()
     } else {
@@ -101,15 +103,9 @@ fn worker_parse<'a>(
 fn assert_parsed<'a>(
     form: &Form,
     n: usize,
-    parsed: Result<oxc_parser::ParserReturn<'a>, oxc_diagnostics::Diagnostics>,
+    parsed: Result<oxc_parser::ParserReturn<'a>, crate::regex_check::Stopped>,
 ) -> oxc_parser::ParserReturn<'a> {
-    let parsed = parsed.unwrap_or_else(|fatal| {
-        panic!(
-            "form {} n {n}: fatal {:?}",
-            form.name,
-            fatal.errors().next()
-        )
-    });
+    let parsed = parsed.unwrap_or_else(|stopped| panic!("form {} n {n}: {stopped:?}", form.name));
     assert!(
         !parsed.diagnostics.has_errors(),
         "form {} n {n}: {:?}",
@@ -178,14 +174,21 @@ fn per(delta_bytes: usize, delta_units: u32) -> String {
 /// Stack growth from n1 to n2 that is noise, not a slope (one page).
 const FLAT: usize = 4 << 10;
 
-/// Parse stack one pre-scan unit may use: its share of the worker stack, keeping the 1.5x
-/// margin of `stack.rs` (7,463 B debug, 2,615 B release).
-const PARSE_UNIT_BUDGET: usize =
-    crate::stack::WORKER_STACK_BYTES / 3 * 2 / crate::PRESCAN_CAP as usize;
+/// Parse stack one pre-scan unit may use: its share of the worker stack budget (`BUDGET_BYTES`,
+/// the red zone of layer 1 is not budget), keeping the 1.5x margin of `stack.rs` (7,463 B
+/// debug, 2,615 B release).
+const PARSE_UNIT_BUDGET: usize = crate::stack::BUDGET_BYTES / 3 * 2 / crate::PRESCAN_CAP as usize;
 
-/// Pass stack one AST level may use: its share of the worker stack, keeping the 1.5x margin of
-/// `stack.rs`, as `bytecodegen::stack_tests` does for codegen (9,329 B debug, 3,269 B release).
-const PASS_LEVEL_BUDGET: usize = crate::stack::WORKER_STACK_BYTES / 3 * 2 / crate::AST_CAP as usize;
+/// Pass stack one AST level may use: its share of the worker stack budget, keeping the 1.5x
+/// margin of `stack.rs`, as `bytecodegen::stack_tests` does for codegen (9,329 B debug, 3,269 B
+/// release).
+const PASS_LEVEL_BUDGET: usize = crate::stack::BUDGET_BYTES / 3 * 2 / crate::AST_CAP as usize;
+
+// T-BUDGET: each share is a share of `BUDGET_BYTES`, never of the red zone.
+const _: () = {
+    assert!(PARSE_UNIT_BUDGET * crate::PRESCAN_CAP as usize <= crate::stack::BUDGET_BYTES);
+    assert!(PASS_LEVEL_BUDGET * crate::AST_CAP as usize <= crate::stack::BUDGET_BYTES);
+};
 
 /// `None` if `delta_bytes` over `delta_units` fits `budget` per unit; else what is wrong. No
 /// units means the stack must stay flat (the cap counts nothing for this form).
@@ -217,6 +220,8 @@ fn measure_forms() {
     let (out, over, worst) = std::thread::Builder::new()
         .stack_size(2 << 30)
         .spawn(move || {
+            // Layer 1: this thread's limit, as a worker has one (l1.rs).
+            let _limit = crate::l1::LimitScope::of(2 << 30);
             let mut over = Vec::new();
             // T-A: the worst parse slope per pre-scan unit, rounded up to a whole byte.
             let mut worst: Option<(usize, &'static str)> = None;
@@ -962,8 +967,8 @@ fn p4_lone_surrogate_eval_count() {
 }
 
 /// T-D: the worker parse call of every form at the pre-scan cap (the largest n with estimate <=
-/// `PRESCAN_CAP`, the fit of `depth_tests::check_prescan_cap_form`) fits the worker stack with
-/// the 1.5x margin of `stack.rs`. The pre-scan lets such an input reach oxc, so this is the
+/// `PRESCAN_CAP`, the fit of `depth_tests::check_prescan_cap_form`) fits the worker stack
+/// budget (`BUDGET_BYTES`) with the 1.5x margin of `stack.rs`. The pre-scan lets such an input reach oxc, so this is the
 /// deepest parse the worker can run for the form. The measure is of the whole call of
 /// [`worker_parse`] (`regex_check::parse`: in debug both passes, then the regex literal check),
 /// as on the worker stack. Forms whose estimate does not grow have no pre-scan cap and are only
@@ -977,10 +982,13 @@ fn parse_stack_at_the_cap() {
         "release"
     };
     let paint = crate::stack::WORKER_STACK_BYTES;
-    let limit = paint / 3 * 2;
+    // T-BUDGET: the share of the budget, not of the reservation (RED is not budget).
+    let limit = crate::stack::BUDGET_BYTES / 3 * 2;
     let (out, rows, flat) = std::thread::Builder::new()
         .stack_size(2 << 30)
         .spawn(move || {
+            // Layer 1: this thread's limit, as a worker has one (l1.rs).
+            let _limit = crate::l1::LimitScope::of(2 << 30);
             let mut out = String::new();
             let mut rows = Vec::new();
             let mut flat = Vec::new();
@@ -1046,7 +1054,7 @@ fn parse_stack_at_the_cap() {
     }
     assert!(
         over.is_empty(),
-        "parse stack at the pre-scan cap above WORKER_STACK_BYTES / 1.5:\n{}",
+        "parse stack at the pre-scan cap above BUDGET_BYTES / 1.5:\n{}",
         over.join("\n")
     );
 }

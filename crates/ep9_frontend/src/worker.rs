@@ -169,6 +169,9 @@ impl Worker {
             .stack_size(stack_bytes)
             .spawn(move || {
                 ON_WORKER.with(|on| on.set(true));
+                // Layer 1: the stack limit of this thread, from its own size (l1.rs). A nested
+                // job (run on this thread) keeps it.
+                crate::l1::start_thread(stack_bytes);
                 let mailbox = &inbox.0;
                 loop {
                     // The flag first, then the slot: a job put before the close (the store
@@ -274,6 +277,36 @@ mod tests {
         assert_ne!(first, bigger);
         // A smaller request reuses the bigger worker.
         assert_eq!(run(SMALL, || thread::current().id()).unwrap(), bigger);
+    }
+
+    #[test]
+    fn a_worker_sets_its_stack_limit_and_a_nested_job_keeps_it() {
+        let bytes = 4 * SMALL;
+        // A new caller thread, so the worker is new and has this size (a test thread can hold
+        // a bigger one from an earlier test).
+        let (limit, nested, here) = thread::spawn(move || {
+            run(bytes, move || {
+                let here = crate::l1::stack_address();
+                let limit = crate::l1::thread_limit();
+                let nested = run(bytes, crate::l1::thread_limit).unwrap();
+                (limit, nested, here)
+            })
+            .unwrap()
+        })
+        .join()
+        .unwrap();
+        assert_ne!(limit, 0, "the worker has no limit");
+        assert_eq!(nested, limit, "a nested job got a new limit");
+        // The room above the limit is the requested size minus RED, less the frames above the
+        // first job.
+        let room = here - limit;
+        assert!(room <= bytes - crate::stack::RED, "room {room}");
+        assert!(
+            room + (64 << 10) >= bytes - crate::stack::RED,
+            "room {room}"
+        );
+        // The caller thread has no limit of its own.
+        assert_eq!(crate::l1::thread_limit(), 0);
     }
 
     /// Sends one message when dropped. Kept in a thread local, it signals the end of a thread.
