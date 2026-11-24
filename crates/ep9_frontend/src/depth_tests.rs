@@ -229,11 +229,11 @@ regex_gate! {
 fn every_form_is_gated() {
     for form in FORMS {
         let gated = if form.name.starts_with("regex-") {
-            REGEX_GATED
+            REGEX_GATED.contains(&form.name)
         } else {
-            GATED
+            GATED.contains(&form.name) || STACK_GATED.contains(&form.name)
         };
-        assert!(gated.contains(&form.name), "{} has no gate test", form.name);
+        assert!(gated, "{} has no gate test", form.name);
     }
     let m0 = FORMS.iter().filter(|f| f.gate == Gate::M0).count();
     let m1 = FORMS.iter().filter(|f| f.gate == Gate::M1).count();
@@ -299,6 +299,36 @@ fn random_mixes_near_the_caps_never_abort() {
         ("(typeof ", ")"),
         ("(async x=>", ")"),
         ("f(", ")"),
+        // The call, spread and list forms of FORMS (the stack forms): the nested item after 6
+        // list items, and before them. The switch pairs are in a function with `return`, so each
+        // pair is one expression.
+        ("f(0,0,0,0,0,0,", ")"),
+        ("f(", ",0,0,0,0,0,0)"),
+        ("a.m(0,0,0,0,0,0,", ")"),
+        ("a.m(", ",0,0,0,0,0,0)"),
+        // Parenthesized: `new f?.()` is a SyntaxError, and `new ` is a wrapper.
+        ("(f?.(0,0,0,0,0,0,", "))"),
+        ("(f?.(", ",0,0,0,0,0,0))"),
+        ("new C(0,0,0,0,0,0,", ")"),
+        ("new C(", ",0,0,0,0,0,0)"),
+        ("async(0,0,0,0,0,0,", ")"),
+        ("async(", ",0,0,0,0,0,0)"),
+        ("f(...a,...a,...a,...a,...a,...a,...", ")"),
+        ("f(...", ",...a,...a,...a,...a,...a,...a)"),
+        ("f`${0}${0}${0}${0}${0}${0}${", "}`"),
+        ("f`${", "}${0}${0}${0}${0}${0}${0}`"),
+        ("(0,0,0,0,0,0,", ")"),
+        ("(", ",0,0,0,0,0,0)"),
+        ("`${0}${0}${0}${0}${0}${0}${", "}`"),
+        ("`${", "}${0}${0}${0}${0}${0}${0}`"),
+        ("[0,0,0,0,0,0,", "]"),
+        ("[", ",0,0,0,0,0,0]"),
+        ("function(){switch(a){case 0:0;0;0;0;0;0;return ", "}}"),
+        ("function(){switch(a){case 0:return ", ";0;0;0;0;0;0;}}"),
+        ("function(){0;0;0;0;0;0;return ", "}"),
+        ("function(){return ", ";0;0;0;0;0;0;}"),
+        ("(()=>f(0,0,0,0,0,0,", "))"),
+        ("(()=>f(", ",0,0,0,0,0,0))"),
     ];
     let mut seed = 0x2545_F491_4F6C_DD1Du64;
     let mut next = move || {
@@ -339,4 +369,177 @@ fn random_mixes_near_the_caps_never_abort() {
     }
     // Some rounds compile, some hit a cap.
     assert!(outcomes[0] > 0 && outcomes[1] > 0, "{outcomes:?}");
+}
+
+// The pre-scan counts 2 units per new-expression level (`new` + `(`) while the AST has 1, so these forms reach PRESCAN_CAP (about 12,500 levels) before AST_CAP; route PRESCAN-NEW-COUNT.
+fn check_prescan_new_form(name: &str) {
+    let form = form(name);
+    let (a, _) = linear(|n| ast_depth(form, n));
+    assert_eq!(a, 1, "{name}: AST depth per level");
+    // A fix of the count gives 1 here: then the form moves to check_ast_form.
+    let (ea, eb) = linear(|n| estimate(form, n));
+    assert_eq!(ea, 2, "{name}: estimate per level");
+    let n_cap = usize::try_from((PRESCAN_CAP - eb) / ea).unwrap();
+    let at = run(form, n_cap);
+    assert!(at.is_ok(), "{name} n={n_cap}: {at:?}");
+    // The scope pass (layer 3) also handles the deepest accepted tree on the worker stack.
+    let scopes = crate::analyze(&(form.build)(n_cap), opts(form));
+    assert!(
+        scopes.is_ok(),
+        "{name} n={n_cap}: scope pass {:?}",
+        scopes.err()
+    );
+    let above = run(form, n_cap + 1);
+    assert_eq!(
+        layer_of(&above),
+        Some(DepthLayer::PreScan),
+        "{name} n={}: {above:?}",
+        n_cap + 1
+    );
+    let far = run(form, 10 * n_cap);
+    assert_eq!(
+        layer_of(&far),
+        Some(DepthLayer::PreScan),
+        "{name} n={}: {far:?}",
+        10 * n_cap
+    );
+}
+
+macro_rules! stack_gate {
+    ($($test:ident => $check:ident($form:literal),)*) => {
+        $(
+            #[test]
+            fn $test() {
+                $check($form);
+            }
+        )*
+        /// The stack forms of `forms.rs` (plan v17 §5.2 step 1) have a test here.
+        const STACK_GATED: &[&str] = &[$($form),*];
+    };
+}
+
+stack_gate! {
+    // stack forms: the nested item after 6 list items, and first
+    s_call_args => check_ast_form("call-args"),
+    s_call_args_first => check_ast_form("call-args-first"),
+    s_method_args => check_ast_form("method-args"),
+    s_method_args_first => check_ast_form("method-args-first"),
+    s_optional_call_args => check_ast_form("optional-call-args"),
+    s_optional_call_args_first => check_ast_form("optional-call-args-first"),
+    s_new_args => check_prescan_new_form("new-args"),
+    s_new_args_first => check_prescan_new_form("new-args-first"),
+    s_async_call_args => check_ast_form("async-call-args"),
+    s_async_call_args_first => check_ast_form("async-call-args-first"),
+    s_spread_args => check_ast_form("spread-args"),
+    s_spread_args_first => check_ast_form("spread-args-first"),
+    s_tagged_subst => check_ast_form("tagged-subst"),
+    s_tagged_subst_first => check_ast_form("tagged-subst-first"),
+    s_sequence_list => check_ast_form("sequence-list"),
+    s_sequence_list_first => check_ast_form("sequence-list-first"),
+    s_template_list => check_ast_form("template-list"),
+    s_template_list_first => check_ast_form("template-list-first"),
+    s_array_list => check_ast_form("array-list"),
+    s_array_list_first => check_ast_form("array-list-first"),
+    s_switch_clause_list => check_ast_form("switch-clause-list"),
+    s_switch_clause_list_first => check_ast_form("switch-clause-list-first"),
+    s_function_body_list => check_ast_form("function-body-list"),
+    s_function_body_list_first => check_ast_form("function-body-list-first"),
+    s_arrow_body_call => check_ast_form("arrow-body-call"),
+    s_arrow_body_call_first => check_ast_form("arrow-body-call-first"),
+}
+
+/// T-B (plan v17 §5.2 step 4): every form with a growing estimate, at the largest n with
+/// estimate <= PRESCAN_CAP, compiles or is a TooDeep(Ast) RangeError, never an abort. An abort
+/// kills the process, so each form runs in a child process (this test with the env var set).
+/// The child asserts the fit (estimate <= PRESCAN_CAP at n, > PRESCAN_CAP at n + 1).
+#[test]
+fn check_prescan_cap_form() {
+    const CHILD: &str = "EP9_PRESCAN_CAP_FORM";
+    let n_cap = |form: &Form| -> Option<usize> {
+        let (ea, eb) = linear(|n| estimate(form, n));
+        (ea > 0).then(|| usize::try_from((PRESCAN_CAP - eb) / ea).unwrap())
+    };
+    if let Some(name) = std::env::var_os(CHILD) {
+        let form = form(name.to_str().unwrap());
+        let n = n_cap(form).expect("a growing estimate");
+        let e = estimate(form, n);
+        // The fit: n is the largest n with estimate <= PRESCAN_CAP (read at n and n + 1, not
+        // from the line), so the run below is a parse at the cap, not a layer-0 reject.
+        assert!(
+            e <= PRESCAN_CAP,
+            "{} n {n}: estimate {e} > PRESCAN_CAP",
+            form.name
+        );
+        let e_next = estimate(form, n + 1);
+        assert!(
+            e_next > PRESCAN_CAP,
+            "{} n {}: estimate {e_next} <= PRESCAN_CAP (n is not the largest fit)",
+            form.name,
+            n + 1
+        );
+        let result = match run(form, n) {
+            Ok(()) => "Ok".to_string(),
+            Err(CompileError::Range(e)) => match e.kind {
+                RangeErrorKind::TooDeep(layer) => format!("TooDeep({layer:?})"),
+                RangeErrorKind::StackUnavailable => panic!("{}: stack unavailable: {e}", form.name),
+            },
+            Err(e) => panic!("{} n={n}: {e}", form.name),
+        };
+        println!(
+            "PRESCAN_CAP_FORM {} n {n} estimate {e} -> {result}",
+            form.name
+        );
+        return;
+    }
+    let mut flat = Vec::new();
+    let mut runs = Vec::new();
+    for form in FORMS {
+        if n_cap(form).is_some() {
+            runs.push(form);
+        } else {
+            flat.push(form.name);
+        }
+    }
+    // A few children at a time: each one parses at the pre-scan cap on its own worker stack.
+    let width = std::thread::available_parallelism().map_or(1, |n| n.get().min(4));
+    for chunk in runs.chunks(width) {
+        let children: Vec<_> = chunk
+            .iter()
+            .map(|form| {
+                let child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "depth_tests::check_prescan_cap_form",
+                        "--nocapture",
+                        "--test-threads=1",
+                    ])
+                    .env(CHILD, form.name)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                (form.name, child)
+            })
+            .collect();
+        for (name, child) in children {
+            let out = child.wait_with_output().unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // The harness prints "test ... " on the same line before the child's line.
+            let mark = format!("PRESCAN_CAP_FORM {name} ");
+            let line = stdout
+                .lines()
+                .find_map(|l| l.find(&mark).map(|at| &l[at..]));
+            // At the cap layer 0 passes, so only a parse result is right: Ok, or TooDeep from
+            // layer 2 (the AST cap). TooDeep(PreScan) means a wrong fit.
+            assert!(
+                out.status.success()
+                    && line.is_some_and(|l| l.ends_with("-> Ok") || l.ends_with("-> TooDeep(Ast)")),
+                "{name}: {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            println!("{}", line.unwrap());
+        }
+    }
+    println!("PRESCAN_CAP_FORM no pre-scan cap (estimate does not grow): {flat:?}");
 }

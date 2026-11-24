@@ -6,14 +6,14 @@
 //!                                                                             scope pass (layer 2 bound)
 //! ```
 //!
-//! Measured on aarch64-apple-darwin, 2026-10-21, `probe::measure_forms` (n = 500 -> 1500), worst
-//! form per column. The other targets are covered by `SAFETY` and checked by the depth tests,
-//! which run every form at the caps. CI runs them in debug on all 4 CI targets (`cargo test
-//! --workspace`); the release run is local only.
+//! Parse row: `probe::measure_forms` (T-A, n = 500 -> 1500) on the 4 CI targets (macOS and Linux
+//! arm64, Linux and Windows x86-64), 2026-11-24, oxc 0.158, worst target and form. The debug
+//! `PARSE_PER_UNIT` is that worst + 1,024 B. The other rows: aarch64-apple-darwin, 2026-10-21. CI
+//! runs the depth tests (every form at the caps) on the 4 targets in debug and in release.
 //!
 //! | Bytes per unit | debug | release | worst form |
 //! |---|---|---|---|
-//! | oxc_parser, per pre-scan unit | 5,824 | 2,288 | debug: async arrows (oxc 0.158, 2026-11-11); release: nested objects |
+//! | oxc_parser, per pre-scan unit | 6,384 | 1,600 | debug: `spread-args` (macOS arm64, Linux arm64); release: `bracket-function` (Windows x86-64); T-A of CI run 45378215526 (the worker parse call) |
 //! | oxc regex parser, per group | 16,864 | 720 | regex groups (weighted 4 units, `prescan::REGEX_WEIGHT`) |
 //! | layer-2 depth pass, per AST level | 800 | 80 | debug: arrays; release: class heritage, assignment |
 //! | oxc_semantic, per AST level | 1,440 | 256 | arrays / class heritage |
@@ -33,7 +33,7 @@ const SAFETY_NUM: usize = 3;
 const SAFETY_DEN: usize = 2;
 
 #[cfg(debug_assertions)]
-const PARSE_PER_UNIT: usize = 6_144;
+const PARSE_PER_UNIT: usize = 7_408;
 #[cfg(not(debug_assertions))]
 const PARSE_PER_UNIT: usize = 2_560;
 
@@ -58,11 +58,18 @@ pub(crate) const WORKER_STACK_BYTES: usize = BASE
         * SAFETY_NUM;
 
 // Checked in every build: the stack fits both bounds with the margin, and stays a sane
-// reservation (under 256 MiB even in debug).
+// reservation (under `CEILING`: 512 MiB in debug, 256 MiB in release).
 const _: () = {
     let parse = PRESCAN_CAP as usize * PARSE_PER_UNIT;
     let passes = AST_CAP as usize * PASS_PER_LEVEL;
     assert!(WORKER_STACK_BYTES >= BASE + parse + parse / 2);
     assert!(WORKER_STACK_BYTES >= BASE + passes + passes / 2);
-    assert!(WORKER_STACK_BYTES < 256 << 20);
+    assert!(WORKER_STACK_BYTES < CEILING);
 };
+
+/// The largest worker stack reservation: 512 MiB in debug (oxc debug frames are large, H01 B2),
+/// 256 MiB in release.
+#[cfg(debug_assertions)]
+const CEILING: usize = 512 << 20;
+#[cfg(not(debug_assertions))]
+const CEILING: usize = 256 << 20;
