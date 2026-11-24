@@ -25,6 +25,16 @@ Not run as a standalone program for this draft. The earlier draft [oxc-depth-lim
 
 Not run (no network). Before "ready": port the patch to upstream main (0.160.0 has 25 sites: `cover_binding_as_expression` is gone, and 4 new sites are in `js/grammar.rs`) and run its test there.
 
+## Open items for the owner (before sending)
+
+The oxc contributor guide (`AGENTS.md` and `CONTRIBUTING.md` of oxc main, read at 3464a0d18 of 2026-11-16; read them again before sending) asks these of an issue or a PR. None is done in this draft; each is a call of the owner:
+
+1. AI disclosure: the PR says that AI tools were used and names the model name and version of each (if the exact model is not known, it says so).
+2. A human contributor who takes full responsibility for the PR, and who reviewed, tested and understood the code before sending it. Which account sends it is an owner call.
+3. A scoped Conventional Commits title, for example `feat(parser): opt-in recursion check in ParserConfig` (the oxc PR workflow checks it; the title in "Text to post" is not in that form).
+4. Their checks for an oxc_parser change: `just allocs` (the allocation snapshots), `just test`, and `cargo coverage parser` (the parser conformance). ep9 has no oxc workspace build, so none of them ran.
+5. The guide says: no new unit tests in the lexer or the parser unless the maintainers ask. The patch adds `crates/oxc_parser/tests/recursion_check.rs`: keep it, move it, or drop it.
+
 ## Text to post
 
 > **parser: an opt-in recursion check in `ParserConfig`**
@@ -44,7 +54,7 @@ Not run (no network). Before "ready": port the patch to upstream main (0.160.0 h
 >
 > **Why the config, not a depth option.** V8, JavaScriptCore, SpiderMonkey and QuickJS all stop their parsers by a compare of the stack position with a limit, not by a fixed depth. A `ParserConfig` method lets an embedder do the same, or count levels, with no new field in `ParseOptions` and no cost for other users.
 >
-> **Cost.** About 4 instructions per check when it is on (an estimate; aarch64: read the stack pointer, load the limit, compare, branch). In an engine that turns the check on, its whole parse step of the Octane sources took +0.45% instructions against the same engine on the unpatched 0.158.0 crate (release, aarch64), and the outputs were byte-equal.
+> **Cost.** About 4 instructions per check when it is on (an estimate; aarch64: read the stack pointer, load the limit, compare, branch). In an engine that turns the check on, its whole parse step of the Octane sources took +0.45% instructions against the same engine without layer 1 (the unpatched crate and none of the engine's own stack checks; release, aarch64), and the outputs were byte-equal.
 >
 > **Not covered.** The check does not bound the regular expression parser when `ParseOptions::parse_regular_expression` is on: the regex parser runs inside the parse and recurses in `parse_disjunction` and `parse_nested_class`. A follow-up PR can add the same 2 checks there. Until then, a caller that needs a bound keeps that option off (the default) and checks its regex literals on its own.
 >
