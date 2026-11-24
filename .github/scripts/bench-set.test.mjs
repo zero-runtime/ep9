@@ -584,7 +584,7 @@ test("ci.yml bench-set: each side builds jit and jitless in its own target dirs;
   // BENCH-TREE-NEST: the checkouts bench/base and bench/head move to $RUNNER_TEMP/bench before
   // the first build, and each build runs there, so no parent dir of a tree is this checkout.
   assert.match(job, /\n {10}path: bench\/base\n[\s\S]*\n {10}path: bench\/head\n/);
-  const move = build.indexOf('\nmkdir -p "$RUNNER_TEMP/bench" && mv bench/base bench/head "$RUNNER_TEMP/bench/" && cd "$RUNNER_TEMP"\n');
+  const move = build.indexOf('\nmkdir -p "$RUNNER_TEMP/bench"; mv bench/base bench/head "$RUNNER_TEMP/bench/"; cd "$RUNNER_TEMP"\n');
   assert.ok(move > 0 && move < build.indexOf("\nfor side in base head; do\n") && move < build.indexOf("cargo build"), build);
   assert.match(build, /\nfor side in base head; do\n(?: .*\n)*? {2}pushd "bench\/\$side" > \/dev\/null\n/);
   assert.equal(build.split(/\bcd /).length, 2, "one cd: the one to $RUNNER_TEMP");
@@ -624,6 +624,47 @@ test("ci.yml bench-set: each side builds jit and jitless in its own target dirs;
   // The head rebuild guard: both builds; the trees are relative to $RUNNER_TEMP (the cwd after the
   // loop), the JSON is in $BENCH_DIR, and the script comes from the dispatched checkout.
   assert.match(build, /\n *for b in build build-jitless; do\n *node "\$GITHUB_WORKSPACE\/\.github\/scripts\/bench-set\.mjs" --rebuild-guard --base-tree bench\/base --head-tree bench\/head --cargo-json "\$BENCH_DIR\/\$b-head\.jsonl"\n *done$/);
+  // The step as GitHub runs it (shell: bash = bash --noprofile --norc -eo pipefail), with a fake
+  // cargo and rustup: a failed set-up command (mkdir, mv, cd) or a cargo that exits 101 after its
+  // output stops the step before a build in the checkout, before cp and before the guard.
+  const sim = mkdtempSync(path.join(os.tmpdir(), "ep9-bench-set-build-"));
+  t.after(() => rmSync(sim, { recursive: true, force: true }));
+  const fake = (p, body) => { mkdirSync(path.dirname(p), { recursive: true }); writeFileSync(p, body); chmodSync(p, 0o755); };
+  fake(path.join(sim, "bin/rustup"), "#!/bin/sh\n");
+  fake(path.join(sim, "bin/cargo"), `#!/bin/sh\necho "cargo $PWD" >> "${sim}/log"\nfor a; do [ "$p" = --target-dir ] && d=$a; p=$a; done\nmkdir -p "$d/release" && : > "$d/release/ep9" && chmod +x "$d/release/ep9"\necho '{"reason":"compiler-artifact"}'\nexit "\${FAKE_RC:-0}"\n`);
+  const runBuild = (name, env, setup) => {
+    const c = path.join(sim, name), ws = path.join(c, "ws");
+    for (const s of ["base", "head"]) {
+      fake(path.join(ws, `bench/${s}/rust-toolchain.toml`), '[toolchain]\nchannel = "1.0.0"\n');
+      fake(path.join(ws, `bench/${s}/scripts/sync-regress.sh`), "");
+    }
+    fake(path.join(ws, ".github/scripts/bench-set.mjs"), `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(path.join(sim, "log"))}, "guard\\n");\n`);
+    mkdirSync(path.join(c, "rt"), { recursive: true });
+    setup?.(c);
+    writeFileSync(path.join(sim, "log"), "");
+    const r = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", build], {
+      cwd: ws,
+      encoding: "utf8",
+      env: { PATH: [path.join(sim, "bin"), path.dirname(process.execPath), process.env.PATH].join(path.delimiter), GITHUB_WORKSPACE: ws, RUNNER_TEMP: path.join(c, "rt"), BENCH_DIR: path.join(ws, "bench"), GITHUB_STEP_SUMMARY: path.join(c, "summary"), ...env },
+    });
+    const log = readFileSync(path.join(sim, "log"), "utf8").split("\n").filter(Boolean);
+    return { ...r, cargo: log.filter((l) => l.startsWith("cargo ")), guard: log.filter((l) => l === "guard").length, copied: existsSync(path.join(ws, "bench/ep9-base")) };
+  };
+  let b = runBuild("ok", {});
+  assert.equal(b.status, 0, b.stderr);
+  assert.equal(b.cargo.length, 4, b.cargo.join("\n"));
+  for (const l of b.cargo) assert.ok(l.includes(`${path.sep}rt${path.sep}bench${path.sep}`), l);
+  assert.equal(b.copied, true);
+  assert.equal(b.guard, 2);
+  b = runBuild("file", {}, (c) => writeFileSync(path.join(c, "rt/bench"), ""));
+  assert.notEqual(b.status, 0, "a failed mkdir stops the step");
+  assert.deepEqual(b.cargo, [], "no cargo build inside the checkout");
+  assert.equal(b.guard, 0);
+  b = runBuild("rc", { FAKE_RC: "101" });
+  assert.equal(b.status, 101, b.stderr);
+  assert.equal(b.cargo.length, 1, "the step stops at the first failed cargo");
+  assert.equal(b.copied, false, "no cp after a failed cargo");
+  assert.equal(b.guard, 0);
   assert.doesNotMatch(job.slice(0, job.indexOf("\n      - name: count")), /CARGO_TARGET_DIR/);
   assert.match(job, /\n {10}BENCH_DIR: \$\{\{ github\.workspace \}\}\/bench\n/);
   assert.match(job, /\n {12}bench-set-\$\{\{ matrix\.name \}\}-jitless\.json\n/);
