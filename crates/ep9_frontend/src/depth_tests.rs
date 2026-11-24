@@ -449,8 +449,9 @@ stack_gate! {
 }
 
 /// T-B (plan v17 §5.2 step 4): every form with a growing estimate, at the largest n with
-/// estimate <= PRESCAN_CAP, compiles or is a TooDeep RangeError, never an abort. An abort kills
-/// the process, so each form runs in a child process (this test with the env var set).
+/// estimate <= PRESCAN_CAP, compiles or is a TooDeep(Ast) RangeError, never an abort. An abort
+/// kills the process, so each form runs in a child process (this test with the env var set).
+/// The child asserts the fit (estimate <= PRESCAN_CAP at n, > PRESCAN_CAP at n + 1).
 #[test]
 fn check_prescan_cap_form() {
     const CHILD: &str = "EP9_PRESCAN_CAP_FORM";
@@ -462,6 +463,20 @@ fn check_prescan_cap_form() {
         let form = form(name.to_str().unwrap());
         let n = n_cap(form).expect("a growing estimate");
         let e = estimate(form, n);
+        // The fit: n is the largest n with estimate <= PRESCAN_CAP (read at n and n + 1, not
+        // from the line), so the run below is a parse at the cap, not a layer-0 reject.
+        assert!(
+            e <= PRESCAN_CAP,
+            "{} n {n}: estimate {e} > PRESCAN_CAP",
+            form.name
+        );
+        let e_next = estimate(form, n + 1);
+        assert!(
+            e_next > PRESCAN_CAP,
+            "{} n {}: estimate {e_next} <= PRESCAN_CAP (n is not the largest fit)",
+            form.name,
+            n + 1
+        );
         let result = match run(form, n) {
             Ok(()) => "Ok".to_string(),
             Err(CompileError::Range(e)) => match e.kind {
@@ -514,9 +529,11 @@ fn check_prescan_cap_form() {
             let line = stdout
                 .lines()
                 .find_map(|l| l.find(&mark).map(|at| &l[at..]));
+            // At the cap layer 0 passes, so only a parse result is right: Ok, or TooDeep from
+            // layer 2 (the AST cap). TooDeep(PreScan) means a wrong fit.
             assert!(
                 out.status.success()
-                    && line.is_some_and(|l| l.ends_with("-> Ok") || l.contains("-> TooDeep(")),
+                    && line.is_some_and(|l| l.ends_with("-> Ok") || l.ends_with("-> TooDeep(Ast)")),
                 "{name}: {:?}\nstdout:\n{stdout}\nstderr:\n{}",
                 out.status,
                 String::from_utf8_lossy(&out.stderr)
