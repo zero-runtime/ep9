@@ -1418,3 +1418,67 @@ fn fused_named_load_facts_after_the_first_call_of_each_receiver_kind() {
         }
     }
 }
+
+// ---- pair and fused facts after a full GC (M12-P0, route M11-P3-STAR-FACTS-GC) -------------
+
+/// The calls of the GC test: [`TWO_CALLS`] (a first fill, a hit, a second shape), then the
+/// receivers of [`first_cases`] (a getter, a prototype field, a missing name, a proxy, a JS
+/// getter): the 2 slots go from monomorphic to polymorphic to megamorphic.
+const GC_CALLS: [&str; 8] = [
+    "oIn", "oIn", "oPoly", "oGet", "oProto", "oMiss", "oProxy", "oJs",
+];
+
+/// T3, the facts of the 2 fused named loads of `two` across a forced full GC, in both feedback
+/// modes, with and without GC stress: after each call the export E1, a full GC
+/// (`Isolate::collect_garbage`, and the GC count grows), the export E2; E1 equals E2 in the
+/// same isolate, and the E2 of the pair form equals the E2 of the fused form (every record of
+/// function 1, the unit hash written as `UNIT`). Then the heap verifier runs. The compare
+/// holds because every receiver of the 2 slots is a global: the global object keeps it and
+/// its shape alive, so no GC clears a weak IC key of these slots, and a GC moves no value that
+/// a record names. A stale word on the native stack (the conservative scan) can only keep a
+/// dead cell alive, never kill a live one, so it cannot change these records. The script's own
+/// `message` site (function 0, whose Error receivers die) is not compared.
+#[test]
+fn pair_and_fused_facts_are_equal_after_a_full_gc() {
+    // oGet: 2 + 2; oProto: 14 + 4; oProxy: 42 + 42; oJs: 101 + 101 (oMiss: undefined + undefined,
+    // compared between the 2 forms only).
+    let ints = [
+        (0, 12),
+        (1, 12),
+        (2, 14),
+        (3, 4),
+        (4, 18),
+        (6, 84),
+        (7, 202),
+    ];
+    for &d in Dispatch::ALL {
+        for f in [Feedback::FULL, Feedback::ICS_ONLY] {
+            for stress in [false, true] {
+                let label = format!("{} {} stress={stress}", d.name(), f.name());
+                let run = |form| {
+                    calls_run(
+                        d,
+                        f,
+                        stress,
+                        form,
+                        two_unit_list,
+                        "two",
+                        GC_CALLS.to_vec(),
+                        true,
+                    )
+                };
+                let (pair, fused) = (run(Form::Pair), run(Form::Fused));
+                assert_eq!(pair.len(), GC_CALLS.len(), "{label}");
+                for (i, (p, q)) in pair.iter().zip(&fused).enumerate() {
+                    assert_eq!(p.0, q.0, "{label}: call {i}: the values of the 2 forms");
+                    assert_eq!(p.1, q.1, "{label}: call {i}: the slot facts of the 2 forms");
+                    assert_eq!(p.2, q.2, "{label}: call {i}: the facts of the 2 forms");
+                    assert!(!q.2.is_empty(), "{label}: call {i}: no facts");
+                }
+                for (i, v) in ints {
+                    assert_eq!(fused[i].0, int(v), "{label}: call {i}: value");
+                }
+            }
+        }
+    }
+}
