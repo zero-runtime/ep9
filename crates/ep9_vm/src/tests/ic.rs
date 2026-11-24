@@ -2196,3 +2196,39 @@ fn a_cold_view_store_makes_no_key() {
         t.collect();
     });
 }
+
+// ---- W-2: the prefixed named loads and stores in both arms (WIDE-SET probe, T10) ----------
+
+/// T10 (check fix B3): `GetNamedProperty.Wide` monomorphic, polymorphic, megamorphic (a stub
+/// cache hit of the cold path: no probe in a fast body) and a miss, `SetNamedProperty.Wide` hit,
+/// transition and miss: the same results, IC states, records, cold body runs (the misses) and
+/// probe hits with bit 1 of `EP9_WIDE_FORMS` off and on, in every expansion. With bit 1 on the
+/// threaded expansions run the `_w2` handlers.
+#[test]
+fn wide_named_load_store_ic_counts_equal() {
+    use super::wide_forms::run_wide_cases;
+    for &d in Dispatch::ALL {
+        let label = d.name();
+        let (off, on) = on_big_stack(move || {
+            let budget = crate::interp::BUDGET;
+            let off = run_wide_cases(config(d, false), crate::Feedback::FULL, false, budget);
+            let on = run_wide_cases(config(d, false), crate::Feedback::FULL, true, budget);
+            (off, on)
+        });
+        assert_eq!(off.w2, [0, 0], "{label}");
+        if d != Dispatch::Match {
+            assert!(on.w2[0] > 0 && on.w2[1] > 0, "{label}: {:?}", on.w2);
+        }
+        assert_eq!(
+            off.states,
+            [State::Megamorphic, State::Megamorphic],
+            "{label}"
+        );
+        // No fast-body probe at scale 2; the cold bodies hit the stub cache.
+        assert_eq!(off.probes[0], 0, "{label}");
+        assert!(off.probes[1] > 0, "{label}: {:?}", off.probes);
+        assert!(off.cold > 0, "{label}");
+        let strip = |r: super::wide_forms::WideRun| super::wide_forms::WideRun { w2: [0, 0], ..r };
+        assert_eq!(strip(off), strip(on), "{label}");
+    }
+}
