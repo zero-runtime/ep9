@@ -156,7 +156,7 @@ impl Default for HeapConfig {
             cage: CageConfig::default(),
             max_heap_bytes: usize::MAX,
             near_limit: None,
-            initial_budget: 8 << 20,
+            initial_budget: budget_initial(gc_budget_arm()),
             gc_stress: 0,
             verify_after_gc: false,
             verify: VerifyMode::EveryGc,
@@ -2576,7 +2576,7 @@ pub(crate) const MAX_S1_BUDGET: usize = 72 << 20;
 /// MAX_S1_BUDGET), old bytes / 2)`. A minor GC sweeps every page and traces the logged old
 /// hosts again, so a larger budget runs fewer of them (LEVER-7: about the old bytes).
 pub(crate) fn s1_budget(initial: usize, old_bytes: usize) -> usize {
-    old_bytes.min(MAX_S1_BUDGET).max(old_bytes / 2).max(initial)
+    s1_budget_in(gc_budget_arm(), initial, old_bytes)
 }
 
 /// Per-thread count of pages that an S1 sweep did not walk (no dead cell), for the tests only.
@@ -2929,5 +2929,71 @@ impl Heap {
             e.majors.set(majors);
         }
         e.limit.get()
+    }
+}
+
+/// The GC-BUDGET probe switch (M12-P1; decisions-log rows M12-PLAN-D2 and M12-PRE-TD3):
+/// `EP9_GC_BUDGET`, read once per process. Probe branch only; the merge removes it (plan v17
+/// section 4.2).
+///
+/// | `EP9_GC_BUDGET` | arm | first budget | S1 budget after a GC |
+/// |---|---|---|---|
+/// | not set, `0`, any other value | 0 | 8 MiB | `max(initial, min(old, 72 MiB), old / 2)` (the bytes of today) |
+/// | `1` | B1 | 32 MiB | the same formula as arm 0 |
+/// | `2` | B2 | 32 MiB | `max(initial, min(old * 3 / 2, 144 MiB), old / 2)` |
+///
+/// Only [`HeapConfig::default`] takes the first budget of the arm: a config with its own
+/// `initial_budget` keeps it. The S1 formula of the arm applies to every heap of the process.
+pub(crate) fn gc_budget_arm() -> u8 {
+    #[cfg(test)]
+    if let Some(arm) = gc_budget_override::ARM.get() {
+        return arm;
+    }
+    if cfg!(miri) {
+        return 0;
+    }
+    static ARM: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *ARM.get_or_init(|| budget_arm_from(std::env::var("EP9_GC_BUDGET").ok().as_deref()))
+}
+
+/// The arm of an `EP9_GC_BUDGET` value ([`gc_budget_arm`]): `"1"` = B1, `"2"` = B2, every
+/// other value (not set, `"0"`, empty, `" 1"`, ...) = arm 0.
+pub(crate) fn budget_arm_from(var: Option<&str>) -> u8 {
+    match var {
+        Some("1") => 1,
+        Some("2") => 2,
+        _ => 0,
+    }
+}
+
+/// The S1 cap of arm B2 ([`gc_budget_arm`]); arm 0 and B1 use [`MAX_S1_BUDGET`].
+pub(crate) const B2_S1_CAP: usize = 144 << 20;
+
+/// The first budget of an arm ([`gc_budget_arm`]): [`HeapConfig::default`] reads it.
+pub(crate) const fn budget_initial(arm: u8) -> usize {
+    match arm {
+        1 | 2 => 32 << 20,
+        _ => 8 << 20,
+    }
+}
+
+/// The S1 budget after a GC for an arm ([`gc_budget_arm`], [`s1_budget`]).
+pub(crate) fn s1_budget_in(arm: u8, initial: usize, old_bytes: usize) -> usize {
+    match arm {
+        2 => (old_bytes.saturating_mul(3) / 2)
+            .min(B2_S1_CAP)
+            .max(old_bytes / 2)
+            .max(initial),
+        _ => old_bytes.min(MAX_S1_BUDGET).max(old_bytes / 2).max(initial),
+    }
+}
+
+/// Tests only: the arm of [`gc_budget_arm`] for this thread, over the process value.
+#[cfg(test)]
+pub(crate) mod gc_budget_override {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        pub(crate) static ARM: Cell<Option<u8>> = const { Cell::new(None) };
     }
 }
