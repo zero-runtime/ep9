@@ -13,7 +13,7 @@
 //!
 //! | Bytes per unit | debug | release | worst form |
 //! |---|---|---|---|
-//! | oxc_parser, per pre-scan unit | 6,384 | 1,664 | debug: `spread-args` (macOS arm64, Linux arm64); release: `bracket-function` (Windows x86-64) |
+//! | oxc_parser, per pre-scan unit | 6,384 | 1,600 | debug: `spread-args` (macOS arm64, Linux arm64); release: `bracket-function` (Windows x86-64); T-A of CI run 45378215526 (the worker parse call) |
 //! | oxc regex parser, per group | 16,864 | 720 | regex groups (weighted 4 units, `prescan::REGEX_WEIGHT`) |
 //! | layer-2 depth pass, per AST level | 800 | 80 | debug: arrays; release: class heritage, assignment |
 //! | oxc_semantic, per AST level | 1,440 | 256 | arrays / class heritage |
