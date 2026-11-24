@@ -211,9 +211,9 @@ pub enum RangeErrorKind {
     TooDeep(DepthLayer),
     /// The OS refused the front-end worker stack.
     StackUnavailable,
-    /// Layer 1 (H01): the stack check of the parse or of a pass stopped it. By design it comes
-    /// only where an input needs more stack than its pre-scan estimate or AST depth allows for, or
-    /// on a thread smaller than the budget. Tested for the `FORMS` rows and T-HOLES controls only.
+    /// Layer 1 (H01): the stack check of the parse or of a pass stopped it before the end of
+    /// the thread stack. By design only where an input needs more stack than its pre-scan
+    /// estimate or AST depth allows for, or on a small thread; tested for FORMS and T-HOLES only.
     StackLimit,
 }
 
