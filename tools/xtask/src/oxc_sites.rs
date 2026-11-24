@@ -15,9 +15,13 @@
 //!           a method call (`self.f(..)`, `p.f(..)`), a path call (`AssignmentTarget::cover(..)`),
 //!           a function value (`self.parse_list(Self::parse_f)`), a static (`&NO_TOKENS`), and
 //!           every name of the expansion of a macro of the sources (`byte_search! {..}`)
-//!   a site = a top-level statement of a fn body that holds a call of `may_recurse`
-//!   (`if C::CHECKS_RECURSION && !self.config.may_recurse() { return .. }`): the statements
-//!   after it are behind the check, so the node keeps only the edges of the statements before it
+//!   a site = a top-level statement of a fn body in one of the 2 site forms of the patch:
+//!     `if C::CHECKS_RECURSION && !R.config.may_recurse() { return R.recursion_stopped(); }`
+//!     `if C::CHECKS_RECURSION && !R.config.may_recurse() { return Err(R.recursion_stopped_error()); }`
+//!   (R the parser: `self` or a parameter). The statements after it are behind the check, so the
+//!   node keeps only the edges of the statements before it. Any other statement that calls
+//!   `may_recurse` is a finding: a form that does not stop (no `return`), that calls more in its
+//!   condition, or that is not at the top level of the body would cut the graph falsely
 //!   -> the site table; a cycle (a strongly connected group, or a self call) that is left is a
 //!      finding, unless its edges are in ALLOW (name noise, each with its reason)
 //! ```
@@ -33,7 +37,7 @@
 //!
 //! | Use | Edge to |
 //! |---|---|
-//! | `recv.f(..)`, the type T of `recv` known (`self`, a typed parameter, a field of a struct of the sources, the return type of a call of a fn of the sources; through `&`, `Box`, `Rc`, `Pin` and the other [`DEREF`] wrappers) | T a trait of the sources: its default `T::f` and every fn `f` of its impls; T a type: `T::f` if the sources define it; else every method named `f` if T has an impl in the sources; else (a foreign type such as `str` or `Vec`) only the methods named `f` of a blanket impl (`impl<X> Tr for X`) |
+//! | `recv.f(..)`, the type T of `recv` known (`self`, a typed parameter that no pattern of the body binds again, a field of a struct of the sources, the return type of a call of a fn of the sources; through `&`, `Box`, `Rc`, `Pin` and the other [`DEREF`] wrappers) | T a trait of the sources: its default `T::f` and every fn `f` of its impls; T a type: `T::f` if the sources define it; else every method named `f` if T has an impl in the sources; else (a foreign type such as `str` or `Vec`) only the methods named `f` of a blanket impl (`impl<X> Tr for X`) |
 //! | `recv.f(..)`, the type not known, or a generic parameter (`config: C`) | every method named `f` |
 //! | `Self::f`, `T::f`, `<X as T>::f` (T a type or trait) | the same as a receiver of type T (`Self` = the impl type); T a generic parameter (`C::f`): every method named `f` |
 //! | `m::f` (m a module: a lower-case segment) | every free fn, static or const named `f` |
@@ -64,8 +68,9 @@
 //!   the patch is ported. `--explain` prints each edge of a cycle with the use that made it;
 //!   `--edges NAME` prints each edge out of one node.
 //!
-//! Exit codes: 0 no cycle; 1 a cycle, a loop that is missing or recursive, or a fn of an impl
-//! of a trait of another crate that reaches a site; 2 usage error, a file that does not parse,
+//! Exit codes: 0 no cycle; 1 a cycle, a loop that is missing or recursive, a fn of an impl of a
+//! trait of another crate that reaches a site, or a call of `may_recurse` that is not a site form;
+//! 2 usage error, a file that does not parse,
 //! a macro call that does not expand, or a form that the graph cannot see (the list above).
 //! Paths print relative to the source dir, with `/`.
 
@@ -198,6 +203,8 @@ struct Func {
     line: usize,
     /// The line of the check statement, if the fn holds a site.
     check_line: Option<usize>,
+    /// The statements that call [`CHECK`] and are not a site form: (line, why).
+    bad_checks: Vec<(usize, String)>,
     /// The uses before the check (all uses when there is no check).
     uses: BTreeSet<Use>,
     /// A static or const (its initializer), not a fn.
@@ -222,13 +229,18 @@ pub(crate) struct Report {
     pub(crate) why: BTreeMap<String, BTreeMap<String, String>>,
     /// (a fn of an impl of a trait of another crate, the path to the first site it reaches).
     pub(crate) implicit: Vec<(String, Vec<String>)>,
+    /// (label, file, line, why) of each statement that calls [`CHECK`] and is not a site form.
+    pub(crate) bad_checks: Vec<(String, String, usize, String)>,
     /// The graph after the cut: node -> the nodes it calls.
     pub(crate) edges: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl Report {
     pub(crate) fn ok(&self) -> bool {
-        self.cycles.is_empty() && self.loops.iter().all(|l| l.2) && self.implicit.is_empty()
+        self.cycles.is_empty()
+            && self.loops.iter().all(|l| l.2)
+            && self.implicit.is_empty()
+            && self.bad_checks.is_empty()
     }
 }
 
@@ -347,6 +359,13 @@ fn print_report(r: &Report, src: &Path, explain: bool) {
              a call that the code does not write) -> {}",
             label(f),
             path.join(" -> ")
+        );
+    }
+    for (label, file, line, why) in &r.bad_checks {
+        println!(
+            "oxc-sites: NOT A SITE FORM at {file}:{line} in `{label}`: {why} (the 2 forms: \
+             `if C::CHECKS_RECURSION && !R.config.may_recurse() {{ return R.recursion_stopped(); }}` \
+             or `{{ return Err(R.recursion_stopped_error()); }}`)"
         );
     }
     let loops_ok = r.loops.iter().filter(|l| l.2).count();
@@ -530,6 +549,20 @@ pub(crate) fn run(
             implicit.push((f.clone(), path));
         }
     }
+    let mut bad_checks: Vec<(String, String, usize, String)> = funcs
+        .iter()
+        .flat_map(|f| {
+            f.bad_checks.iter().map(|(line, why)| {
+                (
+                    label(&f.key).to_string(),
+                    f.file.clone(),
+                    *line,
+                    why.clone(),
+                )
+            })
+        })
+        .collect();
+    bad_checks.sort_by(|a, b| (&a.1, a.2).cmp(&(&b.1, b.2)));
     let data = funcs.iter().filter(|f| f.data).count();
     Ok(Report {
         files: sources.len(),
@@ -541,6 +574,7 @@ pub(crate) fn run(
         places,
         why,
         implicit,
+        bad_checks,
         edges,
     })
 }
@@ -925,6 +959,11 @@ impl Collector<'_> {
                 params.insert(pi.ident.to_string(), t);
             }
         }
+        // A name that a pattern of the body binds again (`let p = ..`, a closure or match arm)
+        // has another type there: its type is not known (every method of the name is an edge).
+        for name in bound_names(block) {
+            params.remove(&name);
+        }
         let mut f = Func {
             key,
             name,
@@ -935,9 +974,14 @@ impl Collector<'_> {
         let mut nested = Vec::new();
         let mut behind = BTreeSet::new();
         for stmt in &block.stmts {
-            if f.check_line.is_none() && stmt_has_check(stmt) {
-                f.check_line = Some(stmt.span().start().line);
-                continue;
+            match check_stmt(stmt) {
+                Some(Ok(())) if f.check_line.is_none() => {
+                    // The check is the cut: its own uses are the check and the stop.
+                    f.check_line = Some(stmt.span().start().line);
+                    continue;
+                }
+                Some(Err(why)) => f.bad_checks.push((stmt.span().start().line, why)),
+                _ => {}
             }
             // Behind the check only nested items count (they are their own nodes).
             let uses = if f.check_line.is_none() {
@@ -1086,20 +1130,131 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     }
 }
 
-/// Does this statement hold a call of [`CHECK`]?
-fn stmt_has_check(stmt: &Stmt) -> bool {
-    struct Find(bool);
+/// A statement that calls [`CHECK`]: `Ok` if it is a site form, else why not. `None` if it does
+/// not call it (a nested item is its own node and is not looked at here).
+fn check_stmt(stmt: &Stmt) -> Option<Result<(), String>> {
+    struct Find(usize);
     impl<'ast> Visit<'ast> for Find {
         fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
             if m.method == CHECK {
-                self.0 = true;
+                self.0 += 1;
             }
             visit::visit_expr_method_call(self, m);
         }
+        fn visit_item(&mut self, _: &'ast syn::Item) {}
     }
-    let mut f = Find(false);
+    let mut f = Find(0);
     f.visit_stmt(stmt);
-    f.0
+    match f.0 {
+        0 => None,
+        1 => Some(site_form(stmt)),
+        n => Some(Err(format!("{n} calls of {CHECK} in one statement"))),
+    }
+}
+
+/// Every name that a pattern in `block` binds (not in a nested item).
+fn bound_names(block: &Block) -> BTreeSet<String> {
+    struct Bind(BTreeSet<String>);
+    impl<'ast> Visit<'ast> for Bind {
+        fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
+            self.0.insert(p.ident.to_string());
+            visit::visit_pat_ident(self, p);
+        }
+        fn visit_item(&mut self, _: &'ast syn::Item) {}
+    }
+    let mut b = Bind(BTreeSet::new());
+    b.visit_block(block);
+    b.0
+}
+
+/// The one-segment path `R` (the parser) of an expression, if it is one.
+fn bare_ident(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Path(p) if p.qself.is_none() && p.path.segments.len() == 1 => {
+            let seg = &p.path.segments[0];
+            seg.arguments.is_none().then(|| seg.ident.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// `R.name()` with no arguments, R the receiver `recv`.
+fn is_call_on(e: &Expr, recv: &str, name: &str) -> bool {
+    matches!(e, Expr::MethodCall(m)
+        if m.method == name
+            && m.args.is_empty()
+            && m.turbofish.is_none()
+            && bare_ident(&m.receiver).as_deref() == Some(recv))
+}
+
+/// Is `stmt` one of the 2 site forms of the patch (the module doc)?
+fn site_form(stmt: &Stmt) -> Result<(), String> {
+    let Stmt::Expr(Expr::If(i), _) = stmt else {
+        return Err("not an `if` statement at the top level of the body".into());
+    };
+    if i.else_branch.is_some() {
+        return Err("the `if` has an `else`".into());
+    }
+    // The condition: `C::CHECKS_RECURSION && !R.config.may_recurse()`.
+    let cond = match &*i.cond {
+        Expr::Binary(b) if matches!(b.op, syn::BinOp::And(_)) => Some(b),
+        _ => None,
+    };
+    let recv = cond.and_then(|b| {
+        let gate = match &*b.left {
+            Expr::Path(p) => {
+                let segs = &p.path.segments;
+                p.qself.is_none()
+                    && segs.len() == 2
+                    && segs.iter().all(|s| s.arguments.is_none())
+                    && segs[1].ident == "CHECKS_RECURSION"
+            }
+            _ => false,
+        };
+        let Expr::Unary(u) = &*b.right else {
+            return None;
+        };
+        let Expr::MethodCall(m) = &*u.expr else {
+            return None;
+        };
+        let Expr::Field(field) = &*m.receiver else {
+            return None;
+        };
+        let config = matches!(&field.member, syn::Member::Named(n) if n == "config");
+        (gate
+            && matches!(u.op, syn::UnOp::Not(_))
+            && m.method == CHECK
+            && m.args.is_empty()
+            && m.turbofish.is_none()
+            && config)
+            .then(|| bare_ident(&field.base))
+            .flatten()
+    });
+    let Some(recv) = recv else {
+        return Err(format!(
+            "the condition is not `C::CHECKS_RECURSION && !R.config.{CHECK}()`"
+        ));
+    };
+    // The body: one `return R.recursion_stopped()` or `return Err(R.recursion_stopped_error())`.
+    let stop = match i.then_branch.stmts.as_slice() {
+        [Stmt::Expr(Expr::Return(r), _)] => r.expr.as_deref(),
+        _ => None,
+    };
+    let ok = stop.is_some_and(|e| {
+        is_call_on(e, &recv, "recursion_stopped")
+            || matches!(e, Expr::Call(c)
+                if bare_ident(&c.func).as_deref() == Some("Err")
+                    && c.args.len() == 1
+                    && is_call_on(&c.args[0], &recv, "recursion_stopped_error"))
+    });
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "the body is not one `return {recv}.recursion_stopped()` or \
+             `return Err({recv}.recursion_stopped_error())`"
+        ))
+    }
 }
 
 /// Collects the uses of a body; nested fn and impl items go to `nested`.
@@ -1794,13 +1949,13 @@ mod tests {
             impl Lexer { fn checkpoint(&self) -> u32 { self.pos } }
             impl<C> ParserImpl<C> {
                 fn parse_a(&mut self) -> u32 {
-                    if C::CHECKS_RECURSION && !self.config.may_recurse() { return self.stop(); }
+                    if C::CHECKS_RECURSION && !self.config.may_recurse() { return self.recursion_stopped(); }
                     self.parse_b()
                 }
                 fn parse_b(&mut self) -> u32 { if self.more() { self.parse_a() } else { 0 } }
                 fn more(&mut self) -> bool { self.checkpoint() > 0 }
                 fn checkpoint(&mut self) -> u32 { self.lexer.checkpoint() }
-                fn stop(&mut self) -> u32 { 0 }
+                fn recursion_stopped(&mut self) -> u32 { 0 }
                 fn set_pure_on_call_or_new_expr() {}
                 fn jsx_member_expression_eq() {}
             }"#;
@@ -1861,7 +2016,7 @@ mod tests {
             impl<C> ParserImpl<C> {
                 fn parse_x(&mut self) -> u32 {
                     let a = self.parse_y();
-                    if !self.config.may_recurse() { return 0; }
+                    if C::CHECKS_RECURSION && !self.config.may_recurse() { return self.recursion_stopped(); }
                     a
                 }
                 fn parse_y(&mut self) -> u32 { debug_assert!(self.ok()); self.parse_x() }
@@ -2075,7 +2230,7 @@ mod tests {
             impl<C> ParserImpl<C> {
                 fn reset(&mut self) { self.parse_a(); }
                 fn parse_a(&mut self) -> u32 {
-                    if C::CHECKS_RECURSION && !self.config.may_recurse() { return 0; }
+                    if C::CHECKS_RECURSION && !self.config.may_recurse() { return self.recursion_stopped(); }
                     self.parse_a()
                 }
                 fn set_pure_on_call_or_new_expr() {}
@@ -2091,5 +2246,123 @@ mod tests {
             )]
         );
         assert!(!r.ok());
+    }
+
+    /// Fixture 8 (review V6): only the 2 site forms of the patch are sites. Each other statement
+    /// that calls `may_recurse` is a finding, and it cuts nothing: one that does not stop, one
+    /// that calls more in its condition, one in a nested block, one with an `else`.
+    #[test]
+    fn only_the_2_site_forms_are_sites() {
+        const FORM: &str = "if C::CHECKS_RECURSION && !self.config.may_recurse() { return self.recursion_stopped(); }";
+        let src = r#"
+            impl<C> ParserImpl<C> {
+                fn parse_a(&mut self) -> u32 {
+                    if C::CHECKS_RECURSION && !self.config.may_recurse() { return self.recursion_stopped(); }
+                    self.parse_a()
+                }
+                fn parse_e(&self, p: &Self) -> Result<u32, Diag> {
+                    if C::CHECKS_RECURSION && !p.config.may_recurse() { return Err(p.recursion_stopped_error()); }
+                    self.parse_e(p)
+                }
+                fn f(&mut self) -> Option<u32> { None }
+                fn error(&mut self) {}
+                fn recursion_stopped(&mut self) -> u32 { 0 }
+                fn recursion_stopped_error(&self) -> Diag { Diag }
+                fn set_pure_on_call_or_new_expr() {}
+                fn jsx_member_expression_eq() {}
+            }"#;
+        let r = report(&[("s.rs", src)]);
+        assert!(r.ok(), "{:?} {:?}", r.cycles, r.bad_checks);
+        assert_eq!(r.sites.len(), 2, "both forms are sites");
+        for (bad, why) in [
+            (
+                "if C::CHECKS_RECURSION && !self.config.may_recurse() { self.error(); }",
+                "the body is not one",
+            ),
+            (
+                "if self.f().is_some() && !self.config.may_recurse() { return self.recursion_stopped(); }",
+                "the condition is not",
+            ),
+            (
+                "if true { if C::CHECKS_RECURSION && !self.config.may_recurse() { return self.recursion_stopped(); } }",
+                "the condition is not",
+            ),
+            (
+                "if C::CHECKS_RECURSION && !self.config.may_recurse() { return self.recursion_stopped(); } else { self.error(); }",
+                "has an `else`",
+            ),
+            (
+                "let _go = self.config.may_recurse();",
+                "not an `if` statement",
+            ),
+        ] {
+            let text = src.replacen(FORM, bad, 1);
+            assert_ne!(text, src);
+            let r = report(&[("s.rs", &text)]);
+            assert!(!r.ok(), "{bad}");
+            assert_eq!(r.bad_checks.len(), 1, "{bad}");
+            let (label, file, line, got) = &r.bad_checks[0];
+            assert_eq!(
+                (label.as_str(), file.as_str(), *line),
+                ("parse_a", "s.rs", 4),
+                "{bad}"
+            );
+            assert!(got.contains(why), "{bad}: {got}");
+            // It cuts nothing: the recursion of parse_a is a cycle.
+            assert_eq!(r.cycles, vec![keys(&["ParserImpl::parse_a"])], "{bad}");
+        }
+    }
+
+    /// Review V7: a call in the body of a `macro_rules!` of the sources is an edge where the
+    /// macro is used (the edges of its expansion), so a recursion through it is a cycle.
+    #[test]
+    fn a_call_in_a_macro_body_is_an_edge_at_the_use() {
+        let src = r#"
+            macro_rules! m { ($s:ident) => { $s.f() } }
+            impl<C> ParserImpl<C> {
+                fn f(&mut self) -> u32 { m!(self) }
+                fn set_pure_on_call_or_new_expr() {}
+                fn jsx_member_expression_eq() {}
+            }"#;
+        let r = report(&[("m.rs", src)]);
+        assert_eq!(r.cycles, vec![keys(&["ParserImpl::f"])]);
+        assert!(!r.ok());
+    }
+
+    /// Review V8: a call of a trait method that has no default, in a trait default fn, is an
+    /// edge to each impl of that method, so the recursion through the trait is a cycle.
+    #[test]
+    fn a_trait_call_with_no_default_is_an_edge_to_each_impl() {
+        let src = r#"
+            trait T { fn a(&mut self) { self.g() } fn g(&mut self); }
+            struct X;
+            impl T for X { fn g(&mut self) { self.a() } }"#;
+        let r = report(&[("t.rs", src)]);
+        assert_eq!(r.cycles, vec![keys(&["T::a", "X::g"])]);
+        assert!(
+            r.edges["T::a"].contains_key("X::g"),
+            "{:?}",
+            r.edges["T::a"]
+        );
+    }
+
+    /// Review V8 (b): a typed parameter that a `let` binds again has another type after it, so
+    /// a call on that name is an edge to every method of the name, not only to the one of the
+    /// parameter type (the edge to `B::f` closes the cycle).
+    #[test]
+    fn a_parameter_bound_again_has_no_known_type() {
+        let src = r#"
+            struct P { b: B }
+            struct A; struct B;
+            impl A { fn f(&mut self, p: &mut P) -> u32 { 0 } }
+            impl B { fn f(&mut self, p: &mut P) -> u32 { p.g(&mut A) } }
+            impl P {
+                fn g(&mut self, a: &mut A) -> u32 { let a = &mut self.b; a.f(self) }
+            }"#;
+        let r = report(&[("p.rs", src)]);
+        assert_eq!(r.cycles, vec![keys(&["B::f", "P::g"])]);
+        // With no `let`, the parameter type holds: only `A::f`, no cycle.
+        let typed = src.replace("let a = &mut self.b; ", "");
+        assert!(report(&[("p.rs", &typed)]).cycles.is_empty());
     }
 }
