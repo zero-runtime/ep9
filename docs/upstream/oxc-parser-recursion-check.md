@@ -5,7 +5,7 @@
 | Project, ref | oxc, a PR for issue oxc-project/oxc#21953 (open). The change is the ep9 patch `third_party/patches/oxc/0002-parser-recursion-check.patch` on oxc_parser 0.158.0 |
 | Status | draft (2026-11-25). Not "ready": no agent that did not write it ran the repro, and the repro on upstream main is not run (12-governance §5 check 1). Not sent: only the owner sends it |
 | ep9 need | H01 layer 1 (built in month 12, M12-P1; DL M12-L1-START): deep input gives a RangeError, never an abort; gate P1 (01-front-end §7). Due: none, the local patch covers it |
-| Workaround | The local patch itself (`third_party/patches/oxc`, through `[patch.crates-io]`). Local oxc patches after this: 1/3 (the patch set has 2 files; `0001-parser-published-manifest.patch` is packaging, not for upstream, and does not count). When upstream takes the change, the count goes back to 0 |
+| Workaround | The local patch itself (`third_party/patches/oxc`, through `[patch.crates-io]`). Local oxc patches after this: 1/3 (the patch set has 2 patch files; `0001-parser-published-manifest.patch` is packaging, not for upstream, and does not count). When upstream takes the change, the count goes back to 0 |
 | Verified by | none yet |
 
 ## Upstream state
@@ -33,7 +33,7 @@ The oxc contributor guide (`AGENTS.md` and `CONTRIBUTING.md` of oxc main, read a
 2. A human contributor who takes full responsibility for the PR, and who reviewed, tested and understood the code before sending it. Which account sends it is an owner call.
 3. A scoped Conventional Commits title, for example `feat(parser): opt-in recursion check in ParserConfig` (the oxc PR workflow checks it; the title in "Text to post" is not in that form).
 4. Their checks for an oxc_parser change: `just allocs` (the allocation snapshots), `just test`, and `cargo coverage parser` (the parser conformance). ep9 has no oxc workspace build, so none of them ran.
-5. The guide says: no new unit tests in the lexer or the parser unless the maintainers ask. The patch adds `crates/oxc_parser/tests/recursion_check.rs`: keep it, move it, or drop it.
+5. The oxc_parser test section of `AGENTS.md` tells an AI tool: "Do not add unit tests to the lexer or parser unless explicitly instructed by the user". The user there is the human who directs the AI tool, not a maintainer. The same section says that the parser has conformance tests only (`tasks/coverage`). The patch adds `crates/oxc_parser/tests/recursion_check.rs`: the owner, who directs the tool here, decides to keep it, move it, or drop it.
 
 ## Text to post
 
@@ -48,7 +48,7 @@ The oxc contributor guide (`AGENTS.md` and `CONTRIBUTING.md` of oxc main, read a
 > - `ParserConfig::CHECKS_RECURSION: bool` (default `false`) and `ParserConfig::may_recurse(&self) -> bool` (default `true`). The built-in configs keep the defaults, so every check compiles away for them. A config that sets `CHECKS_RECURSION = true` gives the body: for example "the stack pointer is above a limit", or a counter.
 > - 20 checks, one at each recursion entry that the call graph needs: 17 entries that tokens drive (assignment expression, unary, update, await, binary rest, private-in, primary after the identifier fast path, statement list item, binding pattern, TS type, non-array type, type operator, `is_start_of_type`, type assertion, namespace declaration, JSX element, JSX fragment) and 3 walks over a subtree that is already built (`AssignmentTarget::cover`, `SimpleAssignmentTarget::cover`, `cover_binding_as_expression`). A check is `if C::CHECKS_RECURSION && !self.config.may_recurse() { return self.recursion_stopped(); }`; `recursion_stopped` sets a fatal error, as `fatal_error` does.
 > - 2 walks become loops: `set_pure_on_call_or_new_expr` (down a member chain) and `jsx_member_expression_eq` (down a JSX name chain). The parser builds a member chain with a loop, so a walk over it must not use stack per member.
-> - The stop is sticky. `rewind` restores the fatal error of its checkpoint, so it can drop a stop (the point of the 2026-11-05 comment on #21953). A `Cell<bool>` outside the checkpoint keeps the stop, and the exits of `parse` and `parse_expression` read it. Then the result is one "Maximum call stack size exceeded" error, a program with no body, `fatal_error = true`, and a new field `ParserReturn::stack_limit_hit` (the struct is `#[non_exhaustive]`).
+> - The stop is sticky. `rewind` restores the fatal error of its checkpoint, so it can drop a stop (the point of the 2026-11-05 comment on #21953). A `Cell<bool>` outside the checkpoint keeps the stop, and the exits of `parse` and `parse_expression` read it. Then `parse` gives one "Maximum call stack size exceeded" error, a program with no body, `fatal_error = true`, and a new field `ParserReturn::stack_limit_hit` (the struct is `#[non_exhaustive]`); `parse_expression` gives `Err` with that one error.
 >
 > **Which entries.** A cycle in the call graph of `oxc_parser` that no check cuts is a recursion with no stop. With the 20 checks and the 2 loops, the call graph of the 0.158.0 sources has no such cycle (a call-graph script over the sources: function calls, method calls, path calls and function values). If one of the 20 checks is removed, a cycle stays. `keyof keyof T` and the other TS type paths are in the list.
 >
@@ -58,4 +58,4 @@ The oxc contributor guide (`AGENTS.md` and `CONTRIBUTING.md` of oxc main, read a
 >
 > **Not covered.** The check does not bound the regular expression parser when `ParseOptions::parse_regular_expression` is on: the regex parser runs inside the parse and recurses in `parse_disjunction` and `parse_nested_class`. A follow-up PR can add the same 2 checks there. Until then, a caller that needs a bound keeps that option off (the default) and checks its regex literals on its own.
 >
-> **Tests.** `tests/recursion_check.rs`: a deep input of each form stops with one error; a stop at any one entry survives every rewind; a config that checks and goes on gives the result of one that does not check; a stop wins over a lexer error at the end of the input; the 2 loops on a 1 MiB thread.
+> **Tests.** `tests/recursion_check.rs`: a deep input of each form stops with one error; a stop at any one entry survives every rewind; a config that checks and goes on gives the result of one that does not check; a stop wins over a lexer error before it; the 2 loops on a 1 MiB thread.
