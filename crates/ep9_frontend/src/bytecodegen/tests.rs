@@ -765,7 +765,9 @@ fn non_transfers(f: &ep9_bytecode::Function) -> Vec<String> {
         for (k, spec) in info.operands.iter().enumerate() {
             let jump = matches!(
                 spec.kind,
-                ep9_bytecode::OperandKind::JumpFwd | ep9_bytecode::OperandKind::JumpBack
+                ep9_bytecode::OperandKind::JumpFwd
+                    | ep9_bytecode::OperandKind::JumpFwd16
+                    | ep9_bytecode::OperandKind::JumpBack
             );
             if !spec.kind.is_register() && !jump {
                 write!(text, " {}", insn.operand(k)).unwrap();
@@ -1671,7 +1673,10 @@ fn t1_decode(f: &ep9_bytecode::Function) -> Vec<T1Insn> {
         let mut text = format!("{:?}", insn.opcode);
         let mut table = Vec::new();
         for k in 0..insn.operand_count() {
-            if !matches!(insn.operand_kind(k), K::JumpFwd | K::JumpBack) {
+            if !matches!(
+                insn.operand_kind(k),
+                K::JumpFwd | K::JumpFwd16 | K::JumpBack
+            ) {
                 write!(text, " {}", insn.operand(k)).unwrap();
             }
             if insn.opcode.info().flags.contains(OpcodeFlags::SWITCH)
@@ -2600,7 +2605,7 @@ pub(crate) fn star_dst_expand(f: &ep9_bytecode::Function) -> (ep9_bytecode::Func
         }
     }
     // Scales: what the operands other than jumps need, then jumps grown to a fixpoint.
-    let jump = |k: K| matches!(k, K::JumpFwd | K::JumpBack);
+    let jump = |k: K| matches!(k, K::JumpFwd | K::JumpFwd16 | K::JumpBack);
     let mut scales: Vec<OperandScale> = out
         .iter()
         .map(|x| {
@@ -3314,4 +3319,159 @@ fn star_dst_on_files() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+// ---- WIDE-SET probe (ABI 8): bit 0 of EP9_WIDE_FORMS, the Far jump twins ----
+
+/// T16 (front-end half): the parse rule of `EP9_WIDE_FORMS`. The ep9_vm half pins the same
+/// table (`tests/wide_forms.rs`).
+#[test]
+fn wide_forms_parse_table() {
+    use super::wide_forms_from as p;
+    for (v, want) in [("1", 1), ("2", 2), ("3", 3)] {
+        assert_eq!(p(Some(v)), want, "{v:?}");
+    }
+    assert_eq!(p(None), 0);
+    for v in ["0", "", "4", "01", " 1", "1 ", "x"] {
+        assert_eq!(p(Some(v)), 0, "{v:?}");
+    }
+}
+
+/// One function of a unit for T6, by instruction index: (opcode after `near_form`, the
+/// operands other than the jump, the jump target), the jump tables, the handlers and the
+/// position entries.
+type T6Function = (
+    Vec<(Opcode, Vec<i64>, Option<usize>)>,
+    Vec<Vec<usize>>,
+    Vec<(usize, usize, usize, i32, u8)>,
+    Vec<(usize, u32, bool)>,
+);
+
+fn t6_function(f: &ep9_bytecode::Function) -> T6Function {
+    use ep9_bytecode::{Constant, OperandKind as K};
+    let insns: Vec<_> = ep9_bytecode::Instructions::new(&f.bytecode)
+        .map(|i| i.expect("verified code decodes"))
+        .collect();
+    // An instruction start or the code end, as an instruction index.
+    let at = |off: u32| {
+        insns
+            .iter()
+            .position(|i| i.offset == off)
+            .unwrap_or_else(|| {
+                assert_eq!(off as usize, f.bytecode.len());
+                insns.len()
+            })
+    };
+    let mut list = Vec::new();
+    let mut tables = Vec::new();
+    for i in &insns {
+        let mut vals = Vec::new();
+        for k in 0..i.operand_count() {
+            let kind = i.operand_kind(k);
+            if !matches!(kind, K::JumpFwd | K::JumpFwd16 | K::JumpBack) {
+                vals.push(i.operand(k));
+            }
+            if i.opcode.info().flags.contains(OpcodeFlags::SWITCH)
+                && kind == K::Const
+                && let Some(Constant::JumpTable(t)) = f.constants.get(i.operand(k) as usize)
+            {
+                tables.push(t.iter().map(|&e| at(i.offset + e)).collect());
+            }
+        }
+        list.push((i.opcode.near_form(), vals, i.jump_target().map(at)));
+    }
+    let handlers = f
+        .handlers
+        .iter()
+        .map(|h| {
+            (
+                at(h.start),
+                at(h.end),
+                at(h.target),
+                h.context.to_operand(),
+                h.kind as u8,
+            )
+        })
+        .collect();
+    let positions = f
+        .positions
+        .iter()
+        .map(|p| (at(p.bytecode_offset), p.source_offset, p.is_statement))
+        .collect();
+    (list, tables, handlers, positions)
+}
+
+/// (twins, prefixed instructions of the 11 bases) of a unit.
+fn t6_far_counts(u: &VerifiedUnit) -> (usize, usize) {
+    let (mut twins, mut wide) = (0, 0);
+    for f in &u.functions {
+        for i in ep9_bytecode::Instructions::new(&f.bytecode) {
+            let i = i.unwrap();
+            if i.opcode.near_form() != i.opcode {
+                twins += 1;
+            } else if i.opcode.far_twin().is_some() && i.scale != ep9_bytecode::OperandScale::Single
+            {
+                wide += 1;
+            }
+        }
+    }
+    (twins, wide)
+}
+
+/// T6 (WD:274): far jumps over a `try` range, in a generator and in a `switch` (each skipped
+/// block holds more than 256 bytes of code). With bit 0 off and on (the test override): the
+/// instruction lists are equal after `near_form`, and so are the jump targets, the jump-table
+/// targets, the handler ranges and the position entries by instruction index, the constants,
+/// the slots and the frame size; the "on" unit has no prefixed jump of the 11 bases, and each
+/// twin replaces one prefixed jump of the "off" unit.
+#[test]
+fn far_jumps_over_try_generator_switch() {
+    let big: String = (0..60)
+        .map(|i| format!("o.p{i} = o.q{i} + {i};\n"))
+        .collect();
+    let src: &'static str = Box::leak(
+        format!(
+            "function t(o, c) {{\n  if (c) {{ try {{\n{big}  }} catch (e) {{ o.e = e; }} }}\n  \
+             try {{ if (o.x) {{\n{big}  }} }} finally {{ o.f = 1; }}\n  return o;\n}}\n\
+             function* g(o) {{\n  if (o.a) {{\n{big}    yield 1;\n  }}\n  yield o;\n}}\n\
+             function s(x, o) {{\n  switch (x) {{\n    case 1:\n{big}      break;\n    \
+             case 2: o.b = 2; break;\n    default:\n{big}  }}\n  while (o.w) {{\n{big}  }}\n  \
+             return x ? o : null;\n}}\n"
+        )
+        .into_boxed_str(),
+    );
+    let off = super::with_far_jumps(false, move || compile_case(Sloppy, src)).unwrap();
+    let on = super::with_far_jumps(true, move || compile_case(Sloppy, src)).unwrap();
+    let (twins_off, wide_off) = t6_far_counts(&off);
+    let (twins_on, wide_on) = t6_far_counts(&on);
+    assert_eq!((twins_off, wide_on), (0, 0));
+    assert!(twins_on >= 6, "{twins_on} twins");
+    assert_eq!(twins_on, wide_off);
+    // With no override the process value of bit 0 decides (off when the switch is not set).
+    let default = compile_case(Sloppy, src).unwrap();
+    let process = if super::wide_forms() & 1 != 0 {
+        &on
+    } else {
+        &off
+    };
+    assert_eq!(default.to_bytes(), process.to_bytes());
+    assert_eq!(off.functions.len(), on.functions.len());
+    for (k, (a, b)) in off.functions.iter().zip(&on.functions).enumerate() {
+        assert_eq!(t6_function(a), t6_function(b), "function {k}");
+        // Jump-table entries are byte offsets: `t6_function` compares them by index.
+        let consts = |f: &ep9_bytecode::Function| -> Vec<String> {
+            f.constants
+                .iter()
+                .map(|c| match c {
+                    ep9_bytecode::Constant::JumpTable(t) => format!("JumpTable({})", t.len()),
+                    other => format!("{other:?}"),
+                })
+                .collect()
+        };
+        assert_eq!(consts(a), consts(b), "function {k}");
+        assert_eq!(a.feedback_slots, b.feedback_slots, "function {k}");
+        assert_eq!(a.register_count, b.register_count, "function {k}");
+        assert_eq!(a.mapped_parameters, b.mapped_parameters, "function {k}");
+        assert!(b.bytecode.len() <= a.bytecode.len(), "function {k}");
+    }
 }

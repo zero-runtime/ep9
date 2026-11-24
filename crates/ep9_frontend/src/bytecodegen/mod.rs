@@ -1,4 +1,4 @@
-//! BytecodeGen v0: JS source -> [`CompiledUnit`](ep9_bytecode::CompiledUnit) (bytecode ABI 7).
+//! BytecodeGen v0: JS source -> [`CompiledUnit`](ep9_bytecode::CompiledUnit) (bytecode ABI 8).
 //!
 //! ```text
 //! compile_script / compile_module / compile (and eval.rs compile_eval: own parse job, Eval root)
@@ -357,6 +357,66 @@ pub(crate) fn generate(
     options: CompileOptions,
 ) -> Result<VerifiedUnit, CodegenError> {
     generate_with(fe, sa, options, regopt::DEFAULT)
+}
+
+/// The value of the switch `EP9_WIDE_FORMS` (WIDE-SET probe only; the merge removes it): bit 0
+/// = W-1, the `Far` jump twins (this crate), bit 1 = W-2, the wide table (ep9_vm, its own
+/// read of the same rule). Exactly `1`, `2` or `3` gives that value; unset, `0` or any other
+/// text gives 0.
+pub(crate) fn wide_forms_from(v: Option<&str>) -> u8 {
+    match v {
+        Some("1") => 1,
+        Some("2") => 2,
+        Some("3") => 3,
+        _ => 0,
+    }
+}
+
+/// `EP9_WIDE_FORMS`, read once per process (the only read of this crate).
+fn wide_forms() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| wide_forms_from(std::env::var("EP9_WIDE_FORMS").ok().as_deref()))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test-only override of bit 0 on this thread (no env), so one test process compiles
+    /// both values.
+    static FAR_JUMPS_TEST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with bit 0 of `EP9_WIDE_FORMS` set to `on` (tests only). It runs on the
+/// front-end worker of this thread, where a compile inside `f` runs inline (`worker::run`),
+/// so the override reaches the builder.
+#[cfg(test)]
+pub(crate) fn with_far_jumps<T: Send + 'static>(
+    on: bool,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    struct Restore(Option<bool>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FAR_JUMPS_TEST.with(|c| c.set(self.0));
+        }
+    }
+    crate::worker::run(crate::stack::WORKER_STACK_BYTES, move || {
+        let _restore = Restore(FAR_JUMPS_TEST.with(|c| c.replace(Some(on))));
+        f()
+    })
+    .expect("the front-end worker starts")
+}
+
+/// A function builder with the `far_jumps` flag of bit 0 (W-1; `Mode` does not change).
+pub(crate) fn function_builder(meta: ep9_bytecode::FunctionMeta) -> ep9_bytecode::FunctionBuilder {
+    #[cfg(test)]
+    let far = FAR_JUMPS_TEST
+        .with(|c| c.get())
+        .unwrap_or_else(|| wide_forms() & 1 != 0);
+    #[cfg(not(test))]
+    let far = wide_forms() & 1 != 0;
+    let mut b = ep9_bytecode::FunctionBuilder::new(meta);
+    b.set_far_jumps(far);
+    b
 }
 
 /// [`generate`], with the register optimizer on or off.
