@@ -533,3 +533,7 @@ pin	H34-relocation-kinds.md	docs/adr/README.md:170	docs/adr/README.md	^Counts on
 pin	H36-fp-semantics.md	docs/adr/README.md:170	docs/adr/README.md	^Counts on 	0
 pin	H15-interpreter-dispatch.md	crates/ep9_vm/tests/golden/handler-frames.linux-x64.txt:15-16	crates/ep9_vm/tests/golden/handler-frames.linux-x64.txt	^align64 ics 	0	^align64 sib 	0
 pin	H15-interpreter-dispatch.md	crates/ep9_vm/tests/golden/handler-frames.windows-x64.txt:15-16	crates/ep9_vm/tests/golden/handler-frames.windows-x64.txt	^align64 ics 	0	^align64 sib 	0
+# M12-P0 integration fixer (ADRLINE after the STACK-FORMS T-A CI step, +10 ci.yml lines): the H14
+# Change-log row of 2026-11-23 (f30efae5, approved in 016a7061) keeps the number of its commit;
+# an approved Change-log row is not edited.
+history	H14-frames-and-dispatch.md	.github/workflows/ci.yml:689	| 2026-11-23 | clarify (proposed; Frozen part "frames core"	f30efae5	run\: cargo xtask disasm\-check \-\-manifest\-path crates/ep9_vm/Cargo\.toml \-p ep9_vm \-\-expect 290
