@@ -79,6 +79,46 @@ struct Sample {
     scope: usize,
 }
 
+/// The parse call of the worker (`crate::parse`, lib.rs): `regex_check::parse` with the
+/// source type of the goal. The whole call runs on the worker stack, so the probe measures the
+/// whole call: in debug builds pass 1 (tokens off, own arena) and pass 2 (tokens on), in
+/// release pass 2 only, then the regex literal check over the tokens (regex parsing is off in
+/// oxc, so a regex pattern is parsed in that check, not in the parser).
+fn worker_parse<'a>(
+    allocator: &'a Allocator,
+    src: &'a str,
+    module: bool,
+) -> Result<oxc_parser::ParserReturn<'a>, oxc_diagnostics::Diagnostics> {
+    let source_type = if module {
+        oxc_span::SourceType::mjs()
+    } else {
+        oxc_span::SourceType::script()
+    };
+    crate::regex_check::parse(allocator, src, source_type)
+}
+
+/// The parse of `form` at `n` must have no error (a fatal one or a diagnostic).
+fn assert_parsed<'a>(
+    form: &Form,
+    n: usize,
+    parsed: Result<oxc_parser::ParserReturn<'a>, oxc_diagnostics::Diagnostics>,
+) -> oxc_parser::ParserReturn<'a> {
+    let parsed = parsed.unwrap_or_else(|fatal| {
+        panic!(
+            "form {} n {n}: fatal {:?}",
+            form.name,
+            fatal.errors().next()
+        )
+    });
+    assert!(
+        !parsed.diagnostics.has_errors(),
+        "form {} n {n}: {:?}",
+        form.name,
+        parsed.diagnostics.errors().next()
+    );
+    parsed
+}
+
 fn sample(form: &Form, n: usize, paint: usize) -> Sample {
     let src = (form.build)(n);
     let opts = if form.module {
@@ -89,27 +129,9 @@ fn sample(form: &Form, n: usize, paint: usize) -> Sample {
     let module = opts.goal() == Goal::Module;
     let (prescan_bytes, est) = measure(paint, || prescan::estimate(src.as_bytes(), module));
     let allocator = Allocator::default();
-    let source_type = if module {
-        oxc_span::SourceType::mjs()
-    } else {
-        oxc_span::SourceType::script()
-    };
-    let options = oxc_parser::ParseOptions {
-        parse_regular_expression: true,
-        ..oxc_parser::ParseOptions::default()
-    };
-    let (parse_bytes, parsed) = measure(paint, || {
-        oxc_parser::Parser::new(&allocator, &src, source_type)
-            .with_options(options)
-            .parse()
-    });
-    assert!(
-        !parsed.diagnostics.has_errors(),
-        "form {} n {n}: {:?}",
-        form.name,
-        parsed.diagnostics.errors().next()
-    );
-    let program = parsed.program;
+    // The parse as the worker runs it (see `worker_parse`): the T-A slope is of that call.
+    let (parse_bytes, parsed) = measure(paint, || worker_parse(&allocator, &src, module));
+    let program = assert_parsed(form, n, parsed).program;
     let (depth_bytes, ast) = measure(paint, || depth::check_ast_depth(&program, u32::MAX));
     let ast_depth = ast.expect("no cap");
     let (semantic_bytes, built) = measure(paint, || {
@@ -181,7 +203,8 @@ fn over_budget(delta_bytes: usize, delta_units: u32, budget: usize) -> Option<St
 const T_A_ASSERT: bool = true;
 
 /// Measures every form, and fails when a slope does not fit its share of the worker stack:
-/// parse per pre-scan unit, the depth pass, oxc_semantic and the scope pass per AST level.
+/// parse per pre-scan unit (the whole worker parse call, [`worker_parse`]), the depth pass,
+/// oxc_semantic and the scope pass per AST level.
 #[test]
 #[ignore = "measurement; run on demand with --ignored --nocapture"]
 fn measure_forms() {
@@ -938,11 +961,13 @@ fn p4_lone_surrogate_eval_count() {
     );
 }
 
-/// T-D: the oxc parse of every form at the pre-scan cap (the largest n with estimate <=
+/// T-D: the worker parse call of every form at the pre-scan cap (the largest n with estimate <=
 /// `PRESCAN_CAP`, the fit of `depth_tests::check_prescan_cap_form`) fits the worker stack with
 /// the 1.5x margin of `stack.rs`. The pre-scan lets such an input reach oxc, so this is the
-/// deepest parse the worker can run for the form. Forms whose estimate does not grow have no
-/// pre-scan cap and are only listed.
+/// deepest parse the worker can run for the form. The measure is of the whole call of
+/// [`worker_parse`] (`regex_check::parse`: in debug both passes, then the regex literal check),
+/// as on the worker stack. Forms whose estimate does not grow have no pre-scan cap and are only
+/// listed.
 #[test]
 #[ignore = "measurement; run on demand with --ignored --nocapture"]
 fn parse_stack_at_the_cap() {
@@ -985,26 +1010,11 @@ fn parse_stack_at_the_cap() {
                 let e = prescan::estimate(src.as_bytes(), form.module).depth;
                 assert!(e <= crate::PRESCAN_CAP, "{} n {n}: estimate {e}", form.name);
                 let allocator = Allocator::default();
-                let source_type = if form.module {
-                    oxc_span::SourceType::mjs()
-                } else {
-                    oxc_span::SourceType::script()
-                };
-                let options = oxc_parser::ParseOptions {
-                    parse_regular_expression: true,
-                    ..oxc_parser::ParseOptions::default()
-                };
-                let (bytes, parsed, full) = measure_or_full(paint, || {
-                    oxc_parser::Parser::new(&allocator, &src, source_type)
-                        .with_options(options)
-                        .parse()
-                });
-                assert!(
-                    !parsed.diagnostics.has_errors(),
-                    "form {} n {n}: {:?}",
-                    form.name,
-                    parsed.diagnostics.errors().next()
-                );
+                // The whole worker parse call (`worker_parse`: both debug passes and the
+                // regex literal check).
+                let (bytes, parsed, full) =
+                    measure_or_full(paint, || worker_parse(&allocator, &src, form.module));
+                assert_parsed(form, n, parsed);
                 writeln!(out, "| {} | {n} | {e} | {bytes} | {full} |", form.name).unwrap();
                 rows.push((form.name, n, e, bytes, full));
             }
