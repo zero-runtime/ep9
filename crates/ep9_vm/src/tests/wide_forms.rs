@@ -399,11 +399,13 @@ pub(super) const WIDE_SLOTS: [u32; 5] = [302, 303, 0, 1, 304];
 /// What one run of the cases of [`run_wide_cases`] gave: the results, the IC states of the
 /// load and the store, the values of the other slots, the budget, the cold body runs (the
 /// misses and the polls: `step_cold` and the `_w2` cold handlers), the stub cache probe hits
-/// of the fast bodies and of all probes, and the `_w2` runs.
+/// of the fast bodies and of all probes, and the `_w2` runs. The 2 IC states are a fixed
+/// array on the stack, not a `Vec`: gc-lint matches a type by its last name, and the name
+/// `State` is stack-only (the JSON stringify `State` of ep9_builtins holds a `Local`; H20 R2).
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct WideRun {
     pub results: Vec<u64>,
-    pub states: Vec<crate::ic::State>,
+    pub states: [crate::ic::State; 2],
     pub values: Vec<u64>,
     pub budget: i64,
     pub cold: u64,
@@ -462,10 +464,7 @@ pub(super) fn run_wide_cases(c: IsolateConfig, f: Feedback, on: bool, budget: i6
             let units = iso.rt.units.borrow();
             let v = feedback::vector(&units.last().unwrap().infos[1]).unwrap();
             (
-                WIDE_SLOTS[..2]
-                    .iter()
-                    .map(|&s| crate::ic::state(v, s))
-                    .collect(),
+                [WIDE_SLOTS[0], WIDE_SLOTS[1]].map(|s| crate::ic::state(v, s)),
                 WIDE_SLOTS[2..]
                     .iter()
                     .map(|&s| feedback::value(v, s))
