@@ -44,10 +44,25 @@ fn linear(form: &Form) -> (u32, u32) {
     (a, b)
 }
 
-/// The largest n with AST depth <= AST_CAP, or `None` for forms without AST depth (regex).
+/// The largest n with AST depth <= AST_CAP and pre-scan estimate <= PRESCAN_CAP, or `None` for
+/// forms without AST depth (regex).
 fn n_cap(form: &Form) -> Option<usize> {
     let (a, b) = linear(form);
-    (a > 0).then(|| usize::try_from((AST_CAP - b) / a).unwrap())
+    (a > 0).then(|| {
+        let ast = usize::try_from((AST_CAP - b) / a).unwrap();
+        // The new-expression forms count 2 pre-scan units per AST level, so PRESCAN_CAP binds
+        // before AST_CAP for them; route PRESCAN-NEW-COUNT.
+        let estimate =
+            |n: usize| crate::prescan::estimate((form.build)(n).as_bytes(), form.module).depth;
+        let (e10, e11) = (estimate(10), estimate(11));
+        let ea = e11 - e10;
+        let eb = e10 - 10 * ea;
+        if ea == 0 {
+            ast
+        } else {
+            ast.min(usize::try_from((crate::PRESCAN_CAP - eb) / ea).unwrap())
+        }
+    })
 }
 
 /// Every form at the cap: the unit compiles, or the form is a v0-unsupported construct.
