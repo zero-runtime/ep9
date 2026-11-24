@@ -169,9 +169,29 @@ impl<'a> Instruction<'a> {
         }
         // The jump operand is always operand 0 (a unit test of the opcode table checks it).
         let off = self.operand(0);
+        // Exhaustive (ABI 8): a new jump kind must name its direction here.
         let target = match self.operand_kind(0) {
-            OperandKind::JumpFwd => i64::from(self.offset) + off,
-            _ => i64::from(self.offset) - off,
+            OperandKind::JumpFwd | OperandKind::JumpFwd16 => i64::from(self.offset) + off,
+            OperandKind::JumpBack => i64::from(self.offset) - off,
+            OperandKind::Reg
+            | OperandKind::RegOut
+            | OperandKind::RegInOut
+            | OperandKind::RegList
+            | OperandKind::RegOutList
+            | OperandKind::RegPair
+            | OperandKind::RegOutTriple
+            | OperandKind::RegCount
+            | OperandKind::Imm
+            | OperandKind::UImm
+            | OperandKind::Const
+            | OperandKind::Slot
+            | OperandKind::CtxSlot
+            | OperandKind::CtxDepth
+            | OperandKind::Flag8
+            | OperandKind::Flag16
+            | OperandKind::Runtime
+            | OperandKind::TypeOfLiteral
+            | OperandKind::RegOutPair => return None,
         };
         u32::try_from(target).ok()
     }
@@ -437,5 +457,48 @@ mod tests {
         assert_eq!(insns[0].jump_target(), Some(3));
         assert_eq!(insns[1].jump_target(), None);
         assert_eq!(insns[2].jump_target(), Some(2));
+    }
+
+    /// ABI 8: each of the 11 `Far` twins gives a forward target (instruction start + the u16
+    /// offset), the same target as its base at `Wide` scale; a prefix before a twin does not
+    /// decode.
+    #[test]
+    fn far_twin_jump_targets() {
+        let mut seen = 0;
+        for info in OPCODES.iter() {
+            let twin = info.opcode;
+            if twin.near_form() == twin {
+                continue;
+            }
+            seen += 1;
+            let base = twin.near_form();
+            for (at, off) in [(0u32, 256u16), (5, 300), (7, 65_535)] {
+                let mut code = vec![Opcode::LdaZero as u8; at as usize];
+                let o = off.to_le_bytes();
+                code.extend_from_slice(&[twin as u8, o[0], o[1]]);
+                let insn = decode_at(&code, at).unwrap();
+                assert_eq!(
+                    (insn.opcode, insn.scale, insn.size()),
+                    (twin, OperandScale::Single, 3)
+                );
+                assert_eq!(insn.unsigned(0), u32::from(off));
+                assert_eq!(
+                    insn.jump_target(),
+                    Some(at + u32::from(off)),
+                    "{}",
+                    info.name
+                );
+                let mut wide = vec![Opcode::LdaZero as u8; at as usize];
+                wide.extend_from_slice(&[Opcode::Wide as u8, base as u8, o[0], o[1]]);
+                let w = decode_at(&wide, at).unwrap();
+                assert_eq!(w.jump_target(), insn.jump_target(), "{}", base.name());
+                let prefixed = [Opcode::Wide as u8, twin as u8, o[0], o[1]];
+                assert_eq!(
+                    decode_at(&prefixed, 0),
+                    Err(DecodeError::PrefixWithoutScalableOperand(twin))
+                );
+            }
+        }
+        assert_eq!(seen, 11);
     }
 }

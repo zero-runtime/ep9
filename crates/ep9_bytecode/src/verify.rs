@@ -522,6 +522,14 @@ fn verify_function(
                     }
                     true
                 }
+                // ABI 8 (WIDE-SET probe): a `Far` twin needs its 16 bits (offset > 255) and
+                // jumps to an instruction start. The probe form also takes the `Wide` base.
+                OperandKind::JumpFwd16 => {
+                    if v <= 255 || !is_start(i64::from(insn.offset) + v) {
+                        return cx.err(at, VerifyErrorKind::Jump(k));
+                    }
+                    true
+                }
                 OperandKind::JumpBack => {
                     if !is_start(i64::from(insn.offset) - v) {
                         return cx.err(at, VerifyErrorKind::Jump(k));

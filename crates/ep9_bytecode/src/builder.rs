@@ -246,6 +246,9 @@ macro_rules! operand_type {
     (JumpFwd) => {
         Label
     };
+    (JumpFwd16) => {
+        Label // ABI 8: no typed emitter uses it (`if_near!` drops the twins; `finish` makes them)
+    };
     (JumpBack) => {
         Label
     };
@@ -843,6 +846,14 @@ macro_rules! if_emittable {
     ([$first:ident $(, $rest:ident)*] $($body:tt)*) => { if_emittable!([$($rest),*] $($body)*); };
 }
 
+/// ABI 8 (WIDE-SET probe): a `Far` twin (operand kind `JumpFwd16`) gets no typed emitter; only
+/// `finish` makes twins, so BytecodeGen cannot emit one for an offset that fits 8 bits.
+macro_rules! if_near {
+    ([] $($body:tt)*) => { $($body)* };
+    ([JumpFwd16 $(, $rest:ident)*] $($body:tt)*) => {};
+    ([$first:ident $(, $rest:ident)*] $($body:tt)*) => { if_near!([$($rest),*] $($body)*); };
+}
+
 macro_rules! define_emitters {
     ( []
       $( $(#[$doc:meta])* $name:ident = $code:literal, $snake:ident, acc: $acc:ident,
@@ -853,13 +864,13 @@ macro_rules! define_emitters {
         /// name, with one argument per operand.
         impl FunctionBuilder {
             $(
-                if_emittable! { [$($flag),*]
+                if_emittable! { [$($flag),*] if_near! { [$($okind),*]
                     $(#[$doc])*
                     #[allow(clippy::too_many_arguments)]
                     pub fn $snake(&mut self $(, $oname: operand_type!($okind))*) -> &mut Self {
                         self.emit(Opcode::$name, &[$( IntoOperand::into_pending($oname) ),*])
                     }
-                }
+                } }
             )*
         }
     };

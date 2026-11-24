@@ -21,8 +21,8 @@ const FUSED: [(Opcode, Opcode); 3] = [
 /// T7: the rows are appended at 0x9e-0xa0, and each is its load plus a last `RegOut`.
 #[test]
 fn fused_rows_are_the_load_with_a_last_dst() {
-    assert_eq!(OPCODE_COUNT, 0xa1);
-    assert_eq!(ABI_VERSION, 7);
+    assert_eq!(OPCODE_COUNT, 0xac);
+    assert_eq!(ABI_VERSION, 8);
     assert_eq!(Opcode::GetNamedPropertyStar as u8, 0x9e);
     assert_eq!(Opcode::LdaCurrentContextSlotStar as u8, 0x9f);
     assert_eq!(Opcode::LdaContextSlotStar as u8, 0xa0);

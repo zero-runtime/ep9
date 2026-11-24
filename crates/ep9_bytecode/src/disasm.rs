@@ -277,10 +277,12 @@ pub fn instruction_text(unit: &CompiledUnit, func: &Function, insn: &Instruction
                 format!("k{v}")
             }
             OperandKind::Slot => format!("s{v}"),
-            OperandKind::JumpFwd | OperandKind::JumpBack => match insn.jump_target() {
-                Some(target) => format!("@{target}"),
-                None => format!("@?{v}"),
-            },
+            OperandKind::JumpFwd | OperandKind::JumpFwd16 | OperandKind::JumpBack => {
+                match insn.jump_target() {
+                    Some(target) => format!("@{target}"),
+                    None => format!("@?{v}"),
+                }
+            }
             OperandKind::Flag8 | OperandKind::Flag16 => format!("#0x{v:02x}"),
             OperandKind::Runtime => RuntimeId::from_u16(v as u16)
                 .map_or_else(|| format!("<runtime {v}>"), |id| id.info().name.to_string()),
