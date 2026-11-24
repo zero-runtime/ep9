@@ -1412,7 +1412,7 @@ jobs:
           set -euo pipefail
           retry() { "$@" || { echo "::warning::$* failed; one retry in 20 s"; sleep 20; "$@"; }; }
           # BENCH-TREE-NEST: no parent dir of a tree is this checkout; binaries and logs stay in $BENCH_DIR.
-          mkdir -p "$RUNNER_TEMP/bench" && mv bench/base bench/head "$RUNNER_TEMP/bench/" && cd "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/bench"; mv bench/base bench/head "$RUNNER_TEMP/bench/"; cd "$RUNNER_TEMP"
           for side in base head; do
             target="$BENCH_DIR/target-$side" jitless="$BENCH_DIR/target-jitless-$side"
             pushd "bench/$side" > /dev/null
