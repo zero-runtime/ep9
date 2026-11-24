@@ -27,7 +27,7 @@ fn expansions_and_defaults() {
     let n = crate::internals::THREADED_HANDLERS;
     assert_eq!(
         n,
-        ep9_bytecode::OPCODE_COUNT + crate::internals::COLD_OPCODES + 3
+        ep9_bytecode::OPCODE_COUNT + crate::internals::COLD_OPCODES + 3 + 2 * 3 + 1
     );
     eprintln!("threaded handlers per expansion: {n}");
 }
