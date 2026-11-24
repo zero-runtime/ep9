@@ -57,11 +57,9 @@ fn n_cap(form: &Form) -> Option<usize> {
         let (e10, e11) = (estimate(10), estimate(11));
         let ea = e11 - e10;
         let eb = e10 - 10 * ea;
-        if ea == 0 {
-            ast
-        } else {
-            ast.min(usize::try_from((crate::PRESCAN_CAP - eb) / ea).unwrap())
-        }
+        (crate::PRESCAN_CAP - eb)
+            .checked_div(ea)
+            .map_or(ast, |fit| ast.min(usize::try_from(fit).unwrap()))
     })
 }
 
