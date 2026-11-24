@@ -2997,3 +2997,294 @@ pub(crate) mod gc_budget_override {
         pub(crate) static ARM: Cell<Option<u8>> = const { Cell::new(None) };
     }
 }
+
+/// The tests of the GC-BUDGET probe switch ([`gc_budget_arm`]): the parse, the values per
+/// arm, the read of the process value, and the first budget GC per arm on a heap.
+#[cfg(test)]
+mod gc_budget_tests {
+    use super::*;
+    use crate::layout::PAGE_SIZE;
+    use crate::tests::{new_node, store, test_heap};
+
+    const MIB: usize = 1 << 20;
+    /// The child marker of [`the_process_value_is_read_once`].
+    const CHILD: &str = "EP9_GC_BUDGET_TEST_CHILD";
+
+    /// Runs `f` with [`gc_budget_arm`] = `arm` on this thread.
+    fn with_arm<R>(arm: u8, f: impl FnOnce() -> R) -> R {
+        struct Reset(Option<u8>);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                gc_budget_override::ARM.set(self.0);
+            }
+        }
+        let _reset = Reset(gc_budget_override::ARM.replace(Some(arm)));
+        f()
+    }
+
+    /// The S1 budget of the base tree (before the switch), as a literal expression.
+    fn base_s1(initial: usize, old: usize) -> usize {
+        old.min(72 * MIB).max(old / 2).max(initial)
+    }
+
+    /// T1: `"1"` is B1, `"2"` is B2, every other value is arm 0.
+    #[test]
+    fn gc_budget_parse() {
+        let cases: [(Option<&str>, u8); 8] = [
+            (None, 0),
+            (Some("0"), 0),
+            (Some("1"), 1),
+            (Some("2"), 2),
+            (Some("3"), 0),
+            (Some(""), 0),
+            (Some(" 1"), 0),
+            (Some("x"), 0),
+        ];
+        for (var, arm) in cases {
+            assert_eq!(budget_arm_from(var), arm, "{var:?}");
+        }
+    }
+
+    /// T2, arm 0: the bytes of the base tree. The first budget is 8 MiB, and the S1 budget is
+    /// every value of `the_s1_budget_rule` (tests/minor.rs) and the base expression on a sweep.
+    #[test]
+    fn gc_budget_arm0_values_are_the_base_values() {
+        assert_eq!(budget_initial(0), 8 << 20);
+        assert_eq!(MAX_S1_BUDGET, 72 * MIB);
+        let s = |initial, old| s1_budget_in(0, initial, old);
+        // Band 1: the old bytes (the initial budget is the floor).
+        assert_eq!(s(8 * MIB, 2 * MIB), 8 * MIB);
+        assert_eq!(s(8 * MIB, 40 * MIB), 40 * MIB);
+        assert_eq!(s(8 * MIB, 72 * MIB), 72 * MIB);
+        // Band 2: the cap.
+        assert_eq!(s(8 * MIB, 72 * MIB + 1), 72 * MIB);
+        assert_eq!(s(8 * MIB, 80 * MIB), 72 * MIB);
+        assert_eq!(s(8 * MIB, 144 * MIB), 72 * MIB);
+        // Band 3: half the old bytes.
+        assert_eq!(s(8 * MIB, 144 * MIB + 2), 72 * MIB + 1);
+        assert_eq!(s(8 * MIB, 1024 * MIB), 512 * MIB);
+        // An initial budget above the rule wins.
+        assert_eq!(s(100 * MIB, 80 * MIB), 100 * MIB);
+        // The sweep of old sizes (1 MiB to 1 GiB, odd steps) and two floors.
+        for initial in [PAGE_SIZE, 8 * MIB] {
+            for old in (MIB..=1024 * MIB).step_by(MIB + 4_099) {
+                assert_eq!(s(initial, old), base_s1(initial, old), "{initial} {old}");
+            }
+        }
+        // A value that is not an arm is arm 0.
+        for arm in [3, 4, 255] {
+            assert_eq!(budget_initial(arm), 8 << 20);
+            assert_eq!(s1_budget_in(arm, 8 * MIB, 100 * MIB), 72 * MIB);
+        }
+    }
+
+    /// T2, B1: a first budget of 32 MiB and the arm-0 formula (its floor is now 32 MiB).
+    #[test]
+    fn gc_budget_b1_values() {
+        const B: usize = 32 << 20;
+        assert_eq!(budget_initial(1), B);
+        let s = |old| s1_budget_in(1, B, old);
+        assert_eq!(s(2 * MIB), B);
+        assert_eq!(s(20 * MIB), B);
+        assert_eq!(s(40 * MIB), 40 * MIB);
+        assert_eq!(s(65 * MIB), 65 * MIB);
+        assert_eq!(s(72 * MIB), 72 * MIB);
+        assert_eq!(s(100 * MIB), 72 * MIB);
+        assert_eq!(s(144 * MIB), 72 * MIB);
+        assert_eq!(s(144 * MIB + 2), 72 * MIB + 1);
+        assert_eq!(s(1024 * MIB), 512 * MIB);
+        for old in (MIB..=1024 * MIB).step_by(MIB + 4_099) {
+            assert_eq!(s(old), base_s1(B, old), "old {old}");
+        }
+    }
+
+    /// T2, B2: a first budget of 32 MiB and `max(initial, min(old * 3 / 2, 144 MiB), old / 2)`:
+    /// the floor, the 3/2 band (up to 96 MiB of old bytes), the cap (to 288 MiB), then half.
+    #[test]
+    fn gc_budget_b2_values() {
+        const B: usize = 32 << 20;
+        assert_eq!(budget_initial(2), B);
+        assert_eq!(B2_S1_CAP, 144 * MIB);
+        let s = |old| s1_budget_in(2, B, old);
+        // The floor.
+        assert_eq!(s(2 * MIB), B);
+        assert_eq!(s(20 * MIB), B);
+        // The 3/2 band: above the arm-0 cap from 48 MiB of old bytes on.
+        assert_eq!(s(40 * MIB), 60 * MIB);
+        assert_eq!(s(50 * MIB), 75 * MIB);
+        assert_eq!(s(65 * MIB), 97 * MIB + MIB / 2);
+        assert_eq!(s(96 * MIB), 144 * MIB);
+        // The cap.
+        assert_eq!(s(96 * MIB + 2), 144 * MIB);
+        assert_eq!(s(200 * MIB), 144 * MIB);
+        assert_eq!(s(288 * MIB), 144 * MIB);
+        // Half the old bytes.
+        assert_eq!(s(288 * MIB + 2), 144 * MIB + 1);
+        assert_eq!(s(1024 * MIB), 512 * MIB);
+        // An initial budget above the rule wins.
+        assert_eq!(s1_budget_in(2, 100 * MIB, 10 * MIB), 100 * MIB);
+        // No overflow at the top of the range.
+        assert_eq!(s1_budget_in(2, B, usize::MAX), usize::MAX / 2);
+        for old in (MIB..=1024 * MIB).step_by(MIB + 4_099) {
+            let b = s(old);
+            assert!(
+                b >= base_s1(B, old) && b <= B2_S1_CAP.max(old / 2),
+                "old {old}: {b}"
+            );
+        }
+    }
+
+    /// T2: `s1_budget` and `HeapConfig::default` read the arm of this thread.
+    #[test]
+    fn gc_budget_the_readers_take_the_arm() {
+        for (arm, first, s1) in [
+            (0, 8 * MIB, 72 * MIB),
+            (1, 32 * MIB, 72 * MIB),
+            (2, 32 * MIB, 120 * MIB),
+        ] {
+            with_arm(arm, || {
+                assert_eq!(gc_budget_arm(), arm);
+                assert_eq!(HeapConfig::default().initial_budget, first, "arm {arm}");
+                assert_eq!(s1_budget(8 * MIB, 80 * MIB), s1, "arm {arm}");
+            });
+        }
+    }
+
+    /// T3: the process value. Not set in the test process: arm 0 and the 8 MiB default. A
+    /// child process of this test with `EP9_GC_BUDGET=1` and `=2` reads B1 and B2.
+    #[test]
+    #[cfg_attr(miri, ignore = "spawns a child process")]
+    fn gc_budget_the_process_value_is_read_once() {
+        if std::env::var_os(CHILD).is_some() {
+            println!(
+                "GCB_CHILD arm={} initial={}",
+                gc_budget_arm(),
+                HeapConfig::default().initial_budget
+            );
+            return;
+        }
+        let own = budget_arm_from(std::env::var("EP9_GC_BUDGET").ok().as_deref());
+        assert_eq!(gc_budget_arm(), own);
+        if std::env::var_os("EP9_GC_BUDGET").is_none() {
+            assert_eq!(gc_budget_arm(), 0);
+            assert_eq!(HeapConfig::default().initial_budget, 8 << 20);
+        }
+        for (var, want) in [
+            ("1", "arm=1 initial=33554432"),
+            ("2", "arm=2 initial=33554432"),
+        ] {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "heap::gc_budget_tests::gc_budget_the_process_value_is_read_once",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .env("EP9_GC_BUDGET", var)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains(&format!("GCB_CHILD {want}")),
+                "EP9_GC_BUDGET={var}: {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    /// The GC kinds of the budget GCs and the bytes allocated before each, while `step(i)` runs
+    /// for `i` in `0..n` (the `budget_gcs` helper of tests/minor.rs).
+    fn budget_gcs(heap: &Heap, n: u32, mut step: impl FnMut(u32)) -> Vec<(bool, u64)> {
+        let mut seen = heap.stats().collections;
+        let mut at = heap.stats().allocated_bytes;
+        let mut gcs = Vec::new();
+        for i in 0..n {
+            let before = heap.stats().allocated_bytes;
+            step(i);
+            let st = heap.stats();
+            if st.collections != seen {
+                seen = st.collections;
+                gcs.push((st.last_minor, before - at));
+                at = before;
+            }
+        }
+        gcs
+    }
+
+    /// A generational test heap of the default config (so its first budget is the arm's).
+    fn arm_heap() -> Heap {
+        test_heap(|c| c.generational = true)
+    }
+
+    /// Asserts that `bytes` is `budget` within a page.
+    fn near(bytes: u64, budget: usize, what: &str) {
+        let (b, p) = (budget as u64, PAGE_SIZE as u64);
+        assert!(
+            bytes > b - p && bytes <= b + p,
+            "{what}: {bytes} bytes, budget {budget}"
+        );
+    }
+
+    /// T4: the first budget GC of a default heap comes after the arm's first budget (within a
+    /// page): 8 MiB in arm 0, 32 MiB in B1 and B2. Young nodes of 4,016 B that all die.
+    #[test]
+    #[cfg_attr(miri, ignore = "up to 36 MiB of allocations")]
+    fn gc_budget_the_first_budget_gc_per_arm() {
+        for (arm, first) in [(0, 8 * MIB), (1, 32 * MIB), (2, 32 * MIB)] {
+            with_arm(arm, || {
+                let heap = arm_heap();
+                let gcs = budget_gcs(&heap, 9_000, |i| {
+                    new_node(&heap, i + 1, 500);
+                });
+                assert!(!gcs.is_empty(), "arm {arm}: no GC");
+                assert!(gcs[0].0, "arm {arm}: the first budget GC is minor: {gcs:?}");
+                near(gcs[0].1, first, &format!("arm {arm}, the first GC"));
+            });
+        }
+    }
+
+    /// T4: about 50 MiB of rooted old bytes, then young nodes that all die. The next budget
+    /// GC comes after the S1 budget of the arm (within a page): the old bytes in B1 (below the
+    /// 72 MiB cap), 3/2 of them in B2 (above the cap).
+    #[test]
+    #[cfg_attr(miri, ignore = "50 MiB of old cells and 80 MiB of young ones")]
+    fn gc_budget_the_s1_budget_per_arm() {
+        for arm in [1, 2] {
+            with_arm(arm, || {
+                let heap = arm_heap();
+                // 50 rooted nodes of about 1 MiB (LOS cells). A major GC every 16 nodes (16 MiB,
+                // below the 32 MiB first budget) keeps the budget GCs out.
+                let root = new_node(&heap, 0, 50);
+                let g = heap.new_global(root.to_value());
+                for i in 0..50u32 {
+                    if i % 16 == 0 {
+                        heap.collect_with_words(&[]);
+                    }
+                    let big = new_node(&heap, i + 1, 131_000);
+                    store(&heap, root, i as usize, big.to_value());
+                }
+                heap.collect_with_words(&[]);
+                assert!(!heap.stats().last_minor);
+                let live = heap.stats().last_marked_bytes;
+                assert!(live > 49 * MIB && live < 51 * MIB, "{live} live bytes");
+                let want = s1_budget_in(arm, 32 * MIB, live);
+                if arm == 1 {
+                    assert_eq!(want, live);
+                } else {
+                    assert_eq!(want, live * 3 / 2);
+                    assert!(want > MAX_S1_BUDGET, "B2: {want}");
+                }
+                // 21,000 young nodes of 4,016 B (about 80 MiB): one window of the budget.
+                let gcs = budget_gcs(&heap, 21_000, |i| {
+                    new_node(&heap, 1_000 + i, 500);
+                });
+                assert!(!gcs.is_empty(), "arm {arm}: no GC");
+                assert!(gcs[0].0, "arm {arm}: {gcs:?}");
+                near(gcs[0].1, want, &format!("arm {arm}, the S1 budget GC"));
+                heap.drop_global(g);
+            });
+        }
+    }
+}
