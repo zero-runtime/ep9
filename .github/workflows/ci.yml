@@ -1022,6 +1022,9 @@ jobs:
       # The root [patch.crates-io] icu_calendar path (third_party/icu4x) too (INTL W1 R2).
       - name: icu4x sync
         run: bash scripts/sync-icu4x.sh
+      # The root [patch.crates-io] oxc_parser path (third_party/oxc) too (H01 layer 1).
+      - name: oxc sync
+        run: bash scripts/sync-oxc.sh
       - run: cargo "+$MIRI_TOOLCHAIN" miri setup
       - run: cargo "+$MIRI_TOOLCHAIN" miri test --locked -p ep9_value -p ep9_heap -p ep9_math
       # The shared-memory accessors and the waiter list of ep9_platform (TypedArray TA-4,
@@ -1415,6 +1418,7 @@ jobs:
             rustup toolchain install "$chan" --profile minimal ${comps:+--component "$comps"} --no-self-update
             retry bash scripts/sync-regress.sh
             if [ -f scripts/sync-icu4x.sh ]; then retry bash scripts/sync-icu4x.sh; fi
+            if [ -f scripts/sync-oxc.sh ]; then retry bash scripts/sync-oxc.sh; fi
             cargo build --release --locked -p ep9_cli --target-dir "$target" --message-format=json-render-diagnostics > "$BENCH_DIR/build-$side.jsonl"
             cargo build --release --locked -p ep9_cli --no-default-features --target-dir "$jitless" --message-format=json-render-diagnostics > "$BENCH_DIR/build-jitless-$side.jsonl"
             popd > /dev/null

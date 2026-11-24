@@ -67,3 +67,6 @@ regress = { path = "../../third_party/regress" }
 # icu_calendar with the `until` month search, as in the root Cargo.toml: run
 # `bash scripts/sync-icu4x.sh` first. dep-guards check 16 checks this entry.
 icu_calendar = { path = "../../third_party/icu4x/components/calendar" }
+# The oxc_parser fork, as in the root Cargo.toml (H01 layer 1; this workspace builds
+# ep9_frontend): run `bash scripts/sync-oxc.sh` first. dep-guards check 16 checks this entry.
+oxc_parser = { path = "../../third_party/oxc/crates/oxc_parser" }

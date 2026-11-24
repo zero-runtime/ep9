@@ -70,3 +70,7 @@ bench = false
 # root, so this workspace has the same entry (the regexp target runs ep9_regexp, RX0).
 [patch.crates-io]
 regress = { path = "../third_party/regress" }
+# The oxc_parser fork of the root Cargo.toml (H01 layer 1; third_party/patches/oxc/README.md):
+# every target builds ep9_frontend. Run `bash scripts/sync-oxc.sh` first. dep-guards check 16
+# checks this entry.
+oxc_parser = { path = "../third_party/oxc/crates/oxc_parser" }
