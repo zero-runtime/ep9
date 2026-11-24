@@ -157,12 +157,12 @@ fn per(delta_bytes: usize, delta_units: u32) -> String {
 const FLAT: usize = 4 << 10;
 
 /// Parse stack one pre-scan unit may use: its share of the worker stack, keeping the 1.5x
-/// margin of `stack.rs` (6,199 B debug, 2,615 B release).
+/// margin of `stack.rs` (7,463 B debug, 2,615 B release).
 const PARSE_UNIT_BUDGET: usize =
     crate::stack::WORKER_STACK_BYTES / 3 * 2 / crate::PRESCAN_CAP as usize;
 
 /// Pass stack one AST level may use: its share of the worker stack, keeping the 1.5x margin of
-/// `stack.rs`, as `bytecodegen::stack_tests` does for codegen (7,749 B debug, 3,269 B release).
+/// `stack.rs`, as `bytecodegen::stack_tests` does for codegen (9,329 B debug, 3,269 B release).
 const PASS_LEVEL_BUDGET: usize = crate::stack::WORKER_STACK_BYTES / 3 * 2 / crate::AST_CAP as usize;
 
 /// `None` if `delta_bytes` over `delta_units` fits `budget` per unit; else what is wrong. No
@@ -177,8 +177,8 @@ fn over_budget(delta_bytes: usize, delta_units: u32, budget: usize) -> Option<St
 }
 
 /// T-A: the final assert of `measure_forms` runs only when this is true.
-/// push 1 of plan v17 §5.2: print only; step 3 sets it true
-const T_A_ASSERT: bool = false;
+/// On since the debug unit of `stack.rs` comes from T-A on the 4 CI targets (H01 B2).
+const T_A_ASSERT: bool = true;
 
 /// Measures every form, and fails when a slope does not fit its share of the worker stack:
 /// parse per pre-scan unit, the depth pass, oxc_semantic and the scope pass per AST level.
