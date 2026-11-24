@@ -1201,3 +1201,82 @@ fn star_dst_opcode_rules() {
         VerifyErrorKind::NonMinimalScale
     );
 }
+
+// ---- ABI 8: the Far jump twins (WIDE-SET probe) ----
+
+/// `<twin> off16` then LdaZero up to `len` bytes, then Return.
+fn far_code(op: Opcode, off: u16, len: usize) -> Vec<u8> {
+    let o = off.to_le_bytes();
+    let mut code = vec![op as u8, o[0], o[1]];
+    code.resize(len, O::LdaZero as u8);
+    code.push(RET);
+    code
+}
+
+/// T2: a twin needs its 16 bits. An offset <= 255 fits the base, so the twin is refused with
+/// the jump error (the canonical form is the 2-byte base); 256 is the smallest twin offset.
+#[test]
+fn far_twin_offset_255_is_rejected() {
+    for b in O::Jump as u8..=O::JumpIfJSReceiver as u8 {
+        let twin = Opcode::from_u8(b).unwrap().far_twin().unwrap();
+        assert_eq!(
+            err(with_code(&far_code(twin, 255, 300))),
+            VerifyErrorKind::Jump(0),
+            "{twin}"
+        );
+        verify(with_code(&far_code(twin, 256, 300))).unwrap();
+        // The largest offset: 0: <twin> 65,535 -> 65,535: Return.
+        verify(with_code(&far_code(twin, 65_535, 65_535))).unwrap();
+    }
+}
+
+/// T2: a twin target is an instruction start, inside the code.
+#[test]
+fn far_twin_target_not_an_instruction_start() {
+    let twin = O::JumpIfTrueFar;
+    // 0: twin 301; LdaZero from 3 to 299; 300: LdaSmi 7 (2 bytes); 302: Return. 301 is the
+    // operand of LdaSmi; 300 is its start.
+    let mut code = far_code(twin, 301, 300);
+    code.pop();
+    code.extend([O::LdaSmi as u8, 7, RET]);
+    assert_eq!(err(with_code(&code)), VerifyErrorKind::Jump(0));
+    code[1] = 300u16.to_le_bytes()[0];
+    code[2] = 300u16.to_le_bytes()[1];
+    verify(with_code(&code)).unwrap();
+    // Past the end.
+    assert_eq!(
+        err(with_code(&far_code(twin, 400, 300))),
+        VerifyErrorKind::Jump(0)
+    );
+}
+
+/// T2 (check fix A1): `JumpFwd16` is a fixed kind, so a prefix before a twin does not decode.
+#[test]
+fn wide_before_a_far_twin_is_prefix_without_scalable_operand() {
+    for (p, twin) in [
+        (O::Wide, O::JumpFar),
+        (O::ExtraWide, O::JumpIfJSReceiverFar),
+    ] {
+        let mut code = vec![p as u8];
+        code.extend(far_code(twin, 300, 300));
+        assert_eq!(
+            err(with_code(&code)),
+            VerifyErrorKind::Decode(DecodeError::PrefixWithoutScalableOperand(twin))
+        );
+    }
+}
+
+/// T2, the probe form (INV-6): both encodings of a far jump pass, `Wide JumpIfTrue` 300
+/// (4 bytes) and `JumpIfTrueFar` 300 (3 bytes). (The merge form refuses the first.)
+#[test]
+fn both_encodings_verify_on_the_probe() {
+    let mut wide = vec![O::Wide as u8, O::JumpIfTrue as u8, 0x2c, 0x01];
+    wide.resize(300, O::LdaZero as u8);
+    wide.push(RET);
+    verify(with_code(&wide)).unwrap();
+    verify(with_code(&far_code(O::JumpIfTrueFar, 300, 300))).unwrap();
+    // Both jump to the same offset, 300.
+    assert_eq!(decode_at(&wide, 0).unwrap().jump_target(), Some(300));
+    let far = far_code(O::JumpIfTrueFar, 300, 300);
+    assert_eq!(decode_at(&far, 0).unwrap().jump_target(), Some(300));
+}

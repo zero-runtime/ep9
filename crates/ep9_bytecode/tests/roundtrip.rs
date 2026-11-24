@@ -87,6 +87,23 @@ fn random_units_cover_every_emittable_opcode() {
             }
         }
     }
+    // ABI 8 (check fix B5): only `finish` makes a `Far` twin, so the 11 twins come from a
+    // far-jump case with `far_jumps` on: each forward jump over 300 bytes.
+    for b in Opcode::Jump as u8..=Opcode::JumpIfJSReceiver as u8 {
+        let mut f = FunctionBuilder::new(FunctionMeta::entry(CodeKind::Script, false, 0));
+        f.set_far_jumps(true);
+        let l = f.new_label();
+        f.emit(Opcode::from_u8(b).unwrap(), &[l.into_pending()]);
+        for _ in 0..300 {
+            f.lda_zero();
+        }
+        f.bind(l);
+        f.return_();
+        let code = f.finish().unwrap();
+        for i in Instructions::new(code.bytecode()) {
+            seen[i.unwrap().opcode as usize] = true;
+        }
+    }
     let missing: Vec<&str> = OPCODES
         .iter()
         .filter(|i| {
