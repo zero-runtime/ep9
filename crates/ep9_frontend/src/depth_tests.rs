@@ -1555,6 +1555,49 @@ fn chain_walk_cost() {
                 });
                 println!("CHAIN-COST {name}: {bytes} B per AST level");
             }
+            // The other walks on the chains that the parser builds (point 2 of the round):
+            // oxc_semantic, the scope pass, and an oxc `Visit` with no override (the frames of
+            // the eval walks `Allowed::collect`, `post_checks` and the surrogate patch on these
+            // nodes: none of them overrides a TS or JSX visit function).
+            for (i, name) in CHAINS.iter().enumerate().take(4) {
+                let semantic = per_level(&|n| {
+                    with_chain(i, n, |program| {
+                        let (low, _) = crate::probe::deepest_point(paint, || {
+                            crate::semantic("", program).map(|_| ())
+                        });
+                        (low, depth::check_ast_depth(program, AST_CAP).unwrap())
+                    })
+                });
+                let scope = per_level(&|n| {
+                    with_chain(i, n, |program| {
+                        let semantic = crate::semantic("", program).expect("semantic");
+                        let fe = crate::FrontEnd {
+                            source: "",
+                            opts: SourceOpts::script(Strictness::Sloppy),
+                            program,
+                            semantic: &semantic,
+                        };
+                        let (low, r) =
+                            crate::probe::deepest_point(paint, || crate::scope::analyze(&fe));
+                        assert!(r.is_ok(), "{name}: scope pass");
+                        (low, depth::check_ast_depth(program, AST_CAP).unwrap())
+                    })
+                });
+                let plain = per_level(&|n| {
+                    struct Plain;
+                    impl oxc_ast_visit::Visit<'_> for Plain {}
+                    with_chain(i, n, |program| {
+                        let (low, ()) = crate::probe::deepest_point(paint, || {
+                            oxc_ast_visit::Visit::visit_program(&mut Plain, program);
+                        });
+                        (low, depth::check_ast_depth(program, AST_CAP).unwrap())
+                    })
+                });
+                println!(
+                    "CHAIN-COST {name}: oxc_semantic {semantic} B, scope pass {scope} B, \
+                     a plain Visit {plain} B per AST level"
+                );
+            }
             let bytes = per_level(&|n| {
                 let src = format!("a{}", ".a".repeat(n));
                 let allocator = Allocator::default();
