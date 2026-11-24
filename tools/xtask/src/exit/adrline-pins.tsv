@@ -548,3 +548,12 @@ history	H16-ics-and-feedback.md	.github/workflows/ci.yml:689	| Approval (M11-P3 
 # H24:279 now names tests.rs:2225 for the "unmarked" case (2206 before), and 2225 was an older H24 token
 # of the "expression dead" line (4776dae3), so the diff map would read it from there: it is pinned to its line at HEAD.
 pin	H24-debug-and-profiling-hooks.md	crates/ep9_frontend/src/bytecodegen/tests.rs:2225	crates/ep9_frontend/src/bytecodegen/tests.rs	^        \(\"unmarked\"\, Sloppy\, \"function f\(p\) \{ return \(0\, p\, 1\)\; \}\"\)\,$	0
+# M12-P1 integration fixer (ADRLINE after the L1-STACK-CHECK commits, the ci.yml steps T-SITES 9f94ab25 and oxc sync c486d1a7):
+# 2 moved H15 numbers equal older H15 tokens of other ci.yml lines (51895a7e), so the diff map would read them from there:
+# they are pinned to their lines at HEAD (the TA-1 fixer form).
+pin	H15-interpreter-dispatch.md	.github/workflows/ci.yml:702	.github/workflows/ci.yml	^        run\: cargo xtask disasm\-check \-\-manifest\-path crates/ep9_vm/Cargo\.toml \-p ep9_vm \-\-expect	0
+pin	H15-interpreter-dispatch.md	.github/workflows/ci.yml:1384	.github/workflows/ci.yml	^          path\: bench/base$	0
+# The H15 row 1b of the M11-P1 set (X86-ALIGN-RULE, checked at e5cf109e) names the FRESH_PATHS and ENGINE_PATHS lines of
+# m2_exit.rs; the oxc fork commit c99a1ee0 changed both lines (9 -> 11 and 8 -> 10 paths), so the row keeps the numbers of its commit.
+history	H15-interpreter-dispatch.md	tools/xtask/src/m2_exit.rs:190	| 1b Second reviewer (M11-P1 amendment: the 2026-11-22 rewrite row, H15:39 x64 function alignment, X86-ALIGN-RULE	e5cf109e	^const FRESH_PATHS\: \[&str; 9\] = \[$
+history	H15-interpreter-dispatch.md	tools/xtask/src/m2_exit.rs:203	| 1b Second reviewer (M11-P1 amendment: the 2026-11-22 rewrite row, H15:39 x64 function alignment, X86-ALIGN-RULE	e5cf109e	^const ENGINE_PATHS\: \[&str; 8\] = \[$
