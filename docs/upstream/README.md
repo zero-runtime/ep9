@@ -12,6 +12,7 @@
 | [oxc-function-constructor.md](oxc-function-constructor.md) | oxc | none yet (new issue) | Parse Function() parameters and body apart; M1 exit | Three parses (`function_ctor.rs` F1): the parameter text and the body text each in a wrapper whose shape is checked, then the joined text through `compile_eval` | ready (2026-10-21) |
 | [oxc-strict-eval-default-init.md](oxc-strict-eval-default-init.md) | oxc | none (fixed upstream in 0.157.0) | PRE-1: strict `eval`/`arguments` read inside a destructuring target; M1 front end, no gate | None since M8-P0: oxc 0.157.0 reports only writes; the post-filter (`strict_filter.rs`, M4-P2) is removed, `crates/ep9_frontend/tests/strict_eval_arguments.rs` keeps its cases | dropped (fixed upstream) |
 | [oxc-let-as-label.md](oxc-let-as-label.md) | oxc | none yet (new issue) | `let: 42` as a label in sloppy code (test262 staging/sm/syntax/let-as-label.js); no gate | None; the test stays an expected failure | draft |
+| [oxc-parser-recursion-check.md](oxc-parser-recursion-check.md) | oxc | a PR for #21953 (open PR #28929 has a fixed limit of 256) | Depth error instead of abort: H01 layer 1, a stack check (built M12-P1); P1 | The local patch `third_party/patches/oxc/0002-parser-recursion-check.patch` (local oxc patches 1/3) | draft (2026-11-25; not sent) |
 
 ## Shared repro program
 
