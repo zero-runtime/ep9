@@ -1176,3 +1176,245 @@ fn get_named_property_star_runs_a_js_getter_as_its_pair() {
         );
     }
 }
+
+// ---- the facts after the first call of each receiver kind (M12-P0, M11-P3-STAR-T3-FIRST) --
+
+/// What one call from Rust gives: the value, the facts of the named slots of function 1 (in
+/// the slot order of the unit), and every record of function 1 as a line (key, facts, flags;
+/// the unit hash written as `UNIT`).
+type Step = (u64, Vec<Option<SlotFacts>>, Vec<String>);
+
+/// A unit maker that also gives the named slots of function 1, in order.
+type MakeSlots = fn(Form) -> (VerifiedUnit, Vec<u32>);
+
+/// The facts of function 1 of the unit `hash` now: the slots `slots`, and every record.
+fn function_facts(iso: &Isolate, hash: &ep9_facts::UnitHash, slots: &[u32]) -> Step {
+    let snap = export_facts(iso, hash).expect("the unit is loaded");
+    let named = format!("{hash:?}");
+    let lines = snap
+        .records_with_meta()
+        .filter(|(k, _, _)| k.function == 1)
+        .map(|(k, v, m)| format!("{k:?} {v:?} {m:?}").replace(&named, "UNIT"))
+        .collect();
+    let slot_facts = slots.iter().map(|&s| snap.get(1, s).cloned()).collect();
+    (0, slot_facts, lines)
+}
+
+/// The calls of the global `name` (function 1 of `make(form)`, with its named slots) on the
+/// receiver globals `calls`, from Rust (no script site), in a new isolate as [`run_form`]
+/// makes it, after [`js_receivers`]: one [`Step`] per call, with the facts exported after that
+/// call. With `gc`, after each call: the export E1, a full GC (`Isolate::collect_garbage`;
+/// the GC count must grow), the export E2, and E1 must equal E2; the step holds E2.
+#[allow(clippy::too_many_arguments)]
+fn calls_run(
+    d: Dispatch,
+    f: Feedback,
+    stress: bool,
+    form: Form,
+    make: MakeSlots,
+    name: &'static str,
+    calls: Vec<&'static str>,
+    gc: bool,
+) -> Vec<Step> {
+    on_big_stack(move || {
+        let mut c = config(d, stress);
+        c.feedback_threshold = 0;
+        let mut iso = Isolate::new_with(c, ExecOptions::default().feedback(f)).unwrap();
+        iso.register_host_function("print", 1, print);
+        iso.with_cx_checkpoint(js_receivers).unwrap();
+        let (unit, slots) = make(form);
+        let hash = unit.content_hash();
+        iso.with_cx_checkpoint(|cx| cx.run_script(unit, "calls.js").map(|_| ()))
+            .unwrap();
+        let mut steps = Vec::new();
+        for recv in calls {
+            let v = iso
+                .with_cx(|cx| {
+                    let fun = cx.global_binding(name)?.expect("the test function");
+                    let o = cx.global_binding(recv)?.expect("the receiver");
+                    Ok(cx.call(fun, Local::undefined(), &[o])?.bits())
+                })
+                .unwrap();
+            let mut step = function_facts(&iso, &hash, &slots);
+            if gc {
+                let n0 = iso.gc_stats().collections;
+                iso.collect_garbage();
+                assert!(iso.gc_stats().collections > n0, "{recv}: no full GC ran");
+                let e2 = function_facts(&iso, &hash, &slots);
+                assert_eq!(step, e2, "{recv}: the facts differ after a full GC");
+                step = e2;
+            }
+            step.0 = v;
+            steps.push(step);
+        }
+        iso.collect_garbage();
+        iso.verify_heap().unwrap();
+        steps
+    })
+}
+
+/// `first(a)`: `r = 7; r = a.x; return r` with one named slot, the slot `Asm::named`.
+fn first_unit(form: Form) -> (VerifiedUnit, Vec<u32>) {
+    let mut a = Asm::new(meta("first", 1, 0, 0, 0));
+    let k = a.b.string_constant("x");
+    let (p, s) = (a.b.parameter(0), a.named);
+    let r = a.b.new_register();
+    a.b.lda_smi(7).star(r);
+    load_star(&mut a, form, Load::Named(p, k, s), r);
+    a.b.ldar(r).return_();
+    let defs = vec![("first".to_owned(), a.finish())];
+    (program(vec![], defs, &[]), vec![s.0])
+}
+
+/// One call of `first` on `recv` in a new isolate, then the export.
+fn first_run(d: Dispatch, f: Feedback, stress: bool, form: Form, recv: &'static str) -> Step {
+    calls_run(d, f, stress, form, first_unit, "first", vec![recv], false).remove(0)
+}
+
+/// [`two_unit`] with its slots as a list.
+fn two_unit_list(form: Form) -> (VerifiedUnit, Vec<u32>) {
+    let (u, s) = two_unit(form);
+    (u, s.to_vec())
+}
+
+/// [`two_unit`] with the second `dst` past r127 (a `Wide` fused load, the `wide` form of
+/// [`named_defs`]): `r1 = a.x`, `w = a.length` (w = r199 of a list), `return w + r1`.
+fn two_wide_unit(form: Form) -> (VerifiedUnit, Vec<u32>) {
+    let mut a = Asm::new(meta("two", 1, 0, 0, 0));
+    let s2 = a.b.feedback_slot(FeedbackSlotKind::LoadNamed);
+    let s1 = a.named;
+    let (kx, kl) = (a.b.string_constant("x"), a.b.string_constant("length"));
+    let p = a.b.parameter(0);
+    let r1 = a.b.new_register();
+    let w = a.b.new_register_list(200).get(199);
+    load_star(&mut a, form, Load::Named(p, kx, s1), r1);
+    load_star(&mut a, form, Load::Named(p, kl, s2), w);
+    a.b.ldar(w).add(r1, a.bin).return_();
+    let defs = vec![("two".to_owned(), a.finish())];
+    (program(vec![], defs, &[]), vec![s1.0, s2.0])
+}
+
+/// The receivers of the first-call test, each with the value of `first` and the access of the
+/// one case that the export gives after the first call (`None`: the entry has no exported
+/// case). Read in `ic.rs` (the miss path `slow::get_named` computes the case with `load_case`
+/// before the load and records it with `record` after a load that did not throw) and in
+/// `facts_export.rs` (`case`, `describe`):
+///
+/// - `oGet`, `oJs`: an own accessor: `load_case` gives `Handler::Accessor` (kind `GETTER`,
+///   no chain), `record` makes a `GETTER` handler cell, and `case` reads `GETTER` as
+///   `Access::Generic`;
+/// - `oProto`: `x` is field 0 of the prototype: `walk` gives `Chain::Data`, `chain_load` a
+///   `Handler::ProtoLoad`, `record` a `PROTO_LOAD` cell with a valid validity cell
+///   (`chain_cell`), and `case` an `Access::ProtoField` at depth 1 (`chain_depth`);
+/// - `oMiss`: no object on the chain has `x`: `Chain::Missing`, a `MISSING` cell, and
+///   `Access::Missing` at depth 1 (one prototype walked, %Object.prototype%);
+/// - `oProxy`: a proxy kind is an object with an empty shape, and `exotic_name` is true for
+///   any name of a proxy: `load_case` gives `SLOW`, and `record` stores it; `describe` has no
+///   `ObjectKind` for a proxy shape, so the export leaves the case out (a monomorphic entry
+///   with no case).
+fn first_cases() -> [(&'static str, u64, Option<Access>); 5] {
+    [
+        ("oGet", int(2), Some(Access::Generic)),
+        (
+            "oProto",
+            int(4),
+            Some(Access::ProtoField { depth: 1, field: 0 }),
+        ),
+        ("oMiss", UNDEFINED, Some(Access::Missing { depth: 1 })),
+        ("oProxy", int(42), None),
+        ("oJs", int(101), Some(Access::Generic)),
+    ]
+}
+
+/// The single named slot of a [`first_run`] step: monomorphic, with the cases `want`.
+fn first_site(step: &Step, want: &Option<Access>) -> bool {
+    match &step.1[0] {
+        Some(SlotFacts::LoadNamed(p)) => {
+            let got: Vec<Access> = p.cases.iter().map(|c| c.access.clone()).collect();
+            p.state == IcState::Monomorphic && got.as_slice() == want.as_slice()
+        }
+        _ => false,
+    }
+}
+
+/// The shapes of the megamorphic 2-slot run: more shapes than a polymorphic entry holds
+/// (`ic::POLY_CASES` is 4), then `oIn` again.
+const MEGA_CALLS: [&str; 7] = ["m0", "m1", "m2", "m3", "m4", "m5", "oIn"];
+
+/// T3, the first call of each receiver kind that is not an own field (a getter, a prototype
+/// field, a missing name, a proxy, a JS getter), in both feedback modes, with and without GC
+/// stress: after ONE call of a function with one fused named load the slot has the record
+/// that `ic.rs` writes for that case ([`first_cases`]), in both forms (a fused handler that
+/// skips the first record of such a case fails here: the other tests export only after later
+/// misses filled the slot again). Then 2 slots in one function: a megamorphic second slot
+/// (with the first) and a `Wide` second `dst`: the values, and the facts of both slots in both
+/// forms after each call. The receivers are globals, so their shapes stay alive and no GC
+/// clears a key of a compared slot (the compare holds under GC stress too).
+#[test]
+fn fused_named_load_facts_after_the_first_call_of_each_receiver_kind() {
+    for &d in Dispatch::ALL {
+        for f in [Feedback::FULL, Feedback::ICS_ONLY] {
+            for stress in [false, true] {
+                let label = format!("{} {} stress={stress}", d.name(), f.name());
+                for (recv, value, want) in first_cases() {
+                    let pair = first_run(d, f, stress, Form::Pair, recv);
+                    let fused = first_run(d, f, stress, Form::Fused, recv);
+                    for (form, step) in [("pair", &pair), ("fused", &fused)] {
+                        assert_eq!(step.0, value, "{label} {form} {recv}: value");
+                        assert!(
+                            first_site(step, &want),
+                            "{label} {form} {recv}: the facts after the first call: {:#?}",
+                            step.1
+                        );
+                    }
+                    assert_eq!(pair.1, fused.1, "{label} {recv}: the facts of the 2 forms");
+                }
+                let runs: [(&str, MakeSlots, Vec<&str>, Vec<u64>); 2] = [
+                    (
+                        "mega",
+                        two_unit_list,
+                        MEGA_CALLS.to_vec(),
+                        (0..6).map(|i| int(50 + 2 * i)).chain([int(12)]).collect(),
+                    ),
+                    (
+                        "wide",
+                        two_wide_unit,
+                        TWO_CALLS.to_vec(),
+                        vec![int(12), int(12), int(14)],
+                    ),
+                ];
+                for (what, make, calls, values) in runs {
+                    let pair =
+                        calls_run(d, f, stress, Form::Pair, make, "two", calls.clone(), false);
+                    let fused = calls_run(d, f, stress, Form::Fused, make, "two", calls, false);
+                    for (form, steps) in [("pair", &pair), ("fused", &fused)] {
+                        let got: Vec<u64> = steps.iter().map(|s| s.0).collect();
+                        assert_eq!(got, values, "{label} {what} {form}: values");
+                    }
+                    for (i, (p, q)) in pair.iter().zip(&fused).enumerate() {
+                        assert_eq!(
+                            p.1, q.1,
+                            "{label} {what}: call {i}: the facts of the 2 forms"
+                        );
+                    }
+                    let last = |s: &Step, i: usize| match &s.1[i] {
+                        Some(SlotFacts::LoadNamed(p)) => p.state,
+                        _ => IcState::Uninitialized,
+                    };
+                    let end = &fused[fused.len() - 1];
+                    let want = if what == "mega" {
+                        IcState::Megamorphic
+                    } else {
+                        IcState::Polymorphic
+                    };
+                    assert_eq!(
+                        [last(end, 0), last(end, 1)],
+                        [want, want],
+                        "{label} {what}: the states after the last call: {:#?}",
+                        end.1
+                    );
+                }
+            }
+        }
+    }
+}
