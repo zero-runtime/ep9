@@ -544,3 +544,7 @@ history	H02-bytecode-abi.md	.github/workflows/ci.yml:689	| Approval (M11-P3 amen
 history	H14-frames-and-dispatch.md	.github/workflows/ci.yml:689	| Approval (M11-P3 amendment: the 2026-11-23 clarify row, the handler count 290 of the H15:50 command, STAR-DST)	016a7061	run\: cargo xtask disasm\-check \-\-manifest\-path crates/ep9_vm/Cargo\.toml \-p ep9_vm \-\-expect 290
 history	H15-interpreter-dispatch.md	.github/workflows/ci.yml:689	| Approval (M11-P3 amendment: the 2026-11-23 rewrite row H15:167, dispatch core, STAR-DST)	016a7061	run\: cargo xtask disasm\-check \-\-manifest\-path crates/ep9_vm/Cargo\.toml \-p ep9_vm \-\-expect 290
 history	H16-ics-and-feedback.md	.github/workflows/ci.yml:689	| Approval (M11-P3 amendment: the 2026-11-23 rewrite row H16:321, feedback core, STAR-DST)	016a7061	run\: cargo xtask disasm\-check \-\-manifest\-path crates/ep9_vm/Cargo\.toml \-p ep9_vm \-\-expect 290
+# M12-P0 integration fixer r3 (ADRLINE after the P0-NOTES merge 27adee25, bytecodegen/tests.rs line shifts):
+# H24:279 now names tests.rs:2225 for the "unmarked" case (2206 before), and 2225 was an older H24 token
+# of the "expression dead" line (4776dae3), so the diff map would read it from there: it is pinned to its line at HEAD.
+pin	H24-debug-and-profiling-hooks.md	crates/ep9_frontend/src/bytecodegen/tests.rs:2225	crates/ep9_frontend/src/bytecodegen/tests.rs	^        \(\"unmarked\"\, Sloppy\, \"function f\(p\) \{ return \(0\, p\, 1\)\; \}\"\)\,$	0
