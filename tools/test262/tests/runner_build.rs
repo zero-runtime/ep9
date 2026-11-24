@@ -66,6 +66,8 @@ fn a_change_under_a_compiled_path_is_dirty() {
     write(&d, "third_party/patches/regress/README.md", "# p\n");
     write(&d, "third_party/icu4x.commit", "b\n");
     write(&d, "third_party/patches/icu4x/README.md", "# p\n");
+    write(&d, "third_party/oxc.commit", "b\n");
+    write(&d, "third_party/patches/oxc/README.md", "# p\n");
     write(&d, "docs/x.md", "doc\n");
     git(&d, &["init", "-q"]);
     git(&d, &["add", "-A"]);
@@ -86,6 +88,8 @@ fn a_change_under_a_compiled_path_is_dirty() {
         ("third_party/patches/regress/README.md", "# edited\n"),
         ("third_party/icu4x.commit", "c\n"),
         ("third_party/patches/icu4x/README.md", "# edited\n"),
+        ("third_party/oxc.commit", "c\n"),
+        ("third_party/patches/oxc/README.md", "# edited\n"),
     ] {
         assert!(watched(&watch, &d.join(file)), "{file}: {watch:?}");
         let old = std::fs::read_to_string(d.join(file)).unwrap();

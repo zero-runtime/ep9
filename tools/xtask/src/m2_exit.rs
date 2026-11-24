@@ -3128,6 +3128,44 @@ mod tests {
         }
     }
 
+    /// H01 layer 1 (M12-P1): the oxc twin of `an_icu4x_pin_or_patch_change_makes_inputs_stale`.
+    /// A change of the oxc fork pin or of its patch set alone (no change in `crates`) makes the
+    /// same cells OPEN: ep9_frontend builds oxc_parser from that checkout.
+    #[test]
+    fn an_oxc_pin_or_patch_change_makes_inputs_stale() {
+        for (k, path) in [
+            "third_party/oxc.commit",
+            "third_party/patches/oxc/0001.patch",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let r = repo(&format!("oxc{k}"));
+            let o = all(&r, "gate-pass.json");
+            let base = run(&o).unwrap();
+            write(&r.root, path, "y\n");
+            git_in(&r.root, &["commit", "-q", "-am", "oxc"]);
+            let rep = run(&o).unwrap();
+            for i in [0, 1, 2, 3, 4, 5, 6, 9, 10] {
+                assert_ne!(
+                    base.cells[i].evidence, rep.cells[i].evidence,
+                    "{path}: {i}: the evidence did not change"
+                );
+                assert_eq!(
+                    rep.cells[i].status,
+                    Status::Open,
+                    "{path}: {i}: {}",
+                    rep.cells[i].evidence
+                );
+                assert!(
+                    rep.cells[i].evidence.contains("changed between"),
+                    "{path}: {i}: {}",
+                    rep.cells[i].evidence
+                );
+            }
+        }
+    }
+
     #[test]
     fn linux_x64_without_a_gate_host_reads_marginal() {
         let r = repo("linux");
