@@ -893,10 +893,10 @@ fn pure_member_chains_never_abort() {
 
 /// T-PASS: the walks after the parse stop on a thread smaller than the budget.
 /// (1) The backstops of the ep9 walks, with a limit 32 KiB below the walk on the real worker:
-/// the layer-2 walk (`check_ast_depth`) stops by its backstop; layer 2 and BytecodeGen give
-/// StackLimit; the scope pass gives its layer-3 RangeError
-/// (scope/mod.rs maps its stop to TooDeep(Pass)). The `rewrite_completion` backstop has its own
-/// test in eval.rs.
+/// the layer-2 walk (`check_ast_depth`) stops by its backstop; layer 2, the scope pass and
+/// BytecodeGen give StackLimit (review R2 F1: scope/mod.rs maps a backstop stop of the scope
+/// pass to StackLimit, and a stop at its cap to TooDeep(Pass)). The `rewrite_completion`
+/// backstop has its own test in eval.rs.
 /// (2) In a child, on the 4 MiB worker, an input inside the caps whose parse is a loop (a member
 /// chain): the eval path (`Allowed::collect`, `Shim::patch`, `post_checks`, oxc_semantic),
 /// `compile_script_with_completion` and `compile` give StackLimit (the run-time budget check, or
@@ -997,7 +997,7 @@ fn passes_stop_on_a_small_stack() {
     .unwrap();
     assert_eq!(kinds.3, "stack_limit", "the layer-2 walk backstop");
     assert_eq!(kinds.0, STACK_LIMIT, "layer 2");
-    assert_eq!(kinds.1, "Range(TooDeep(Pass))", "scope pass");
+    assert_eq!(kinds.1, STACK_LIMIT, "scope pass");
     assert_eq!(kinds.2, STACK_LIMIT, "BytecodeGen");
 }
 
