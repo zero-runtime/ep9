@@ -33,20 +33,31 @@ fn measure<R>(bytes: usize, f: impl FnOnce() -> R) -> (usize, R) {
 }
 
 /// As [`measure`], but reports a full region instead of panicking.
+///
+/// The stack is touched from the anchor down, 8 bytes at a time (reads in the gap, then the
+/// paint from `high` down to `low`), because Windows commits a thread stack one guard page at
+/// a time from the top and a first touch below the guard page is an access violation.
 #[inline(never)]
 fn measure_or_full<R>(bytes: usize, f: impl FnOnce() -> R) -> (usize, R, bool) {
     let anchor = 0u8;
     let sp = black_box(&raw const anchor) as usize;
     let low = (sp - bytes) & !7;
     let high = (sp - GAP) & !7;
-    let mut addr = low;
-    while addr < high {
-        // SAFETY: `[low, high)` lies inside this thread's stack (the probe thread has a 2 GiB
-        // stack and `bytes` is at most 1.5 GiB), below the current stack pointer minus a 64 KiB
-        // gap, so no live frame and no red zone uses it. Volatile writes keep the compiler from
-        // eliding or reordering them.
-        unsafe { std::ptr::write_volatile(addr as *mut u64, PATTERN) };
-        addr += 8;
+    let mut addr = sp & !7;
+    while addr > low {
+        addr -= 8;
+        if addr >= high {
+            // SAFETY: `[high, sp)` (the gap) lies inside this thread's stack just below the
+            // anchor; a volatile read changes nothing. On Windows it commits the gap pages in
+            // order.
+            unsafe { std::ptr::read_volatile(addr as *const u64) };
+        } else {
+            // SAFETY: `[low, high)` lies inside this thread's stack (the probe thread has a
+            // 2 GiB stack and `bytes` is at most 1.5 GiB), below the current stack pointer
+            // minus the 16 KiB `GAP`, so no live frame and no red zone uses it. Volatile writes
+            // keep the compiler from eliding or reordering them.
+            unsafe { std::ptr::write_volatile(addr as *mut u64, PATTERN) };
+        }
     }
     let result = black_box(f());
     let mut addr = low;
