@@ -2101,6 +2101,8 @@ macro_rules! if_cold {
     (GetNamedPropertyStar { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
     (LdaCurrentContextSlotStar { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
     (LdaContextSlotStar { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
+    (JumpIfToBooleanTrueFar { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
+    (JumpIfToBooleanFalseFar { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
     ($other:ident { $($y:tt)* } else { $($n:tt)* }) => { $($n)* };
 }
 pub(crate) use if_cold;
@@ -3400,3 +3402,24 @@ mod star_dst_branch_form {
         }
     }
 }
+
+// ---- the Far jump twins (ABI 8, the WIDE-SET probe; DL M12-P2-WIDE-GRANTS) ------------------
+
+// Each twin runs the fast and cold bodies of its base. Its operand is a fixed 16-bit offset
+// from the instruction start (`JumpFwd16`, read as `Fwd`), so `st.fwd` gives the target of
+// `Wide <base>` with the same offset. Only the 2 ToBoolean bases have a cold body.
+op!(JumpFar(st, target: Fwd) { Jump::fast(st, target) });
+op!(JumpIfTrueFar(st, target: Fwd) { JumpIfTrue::fast(st, target) });
+op!(JumpIfFalseFar(st, target: Fwd) { JumpIfFalse::fast(st, target) });
+op!(JumpIfToBooleanTrueFar(st, target: Fwd) {
+    JumpIfToBooleanTrue::fast(st, target)
+} cold { JumpIfToBooleanTrue::cold(st, target) });
+op!(JumpIfToBooleanFalseFar(st, target: Fwd) {
+    JumpIfToBooleanFalse::fast(st, target)
+} cold { JumpIfToBooleanFalse::cold(st, target) });
+op!(JumpIfNullFar(st, target: Fwd) { JumpIfNull::fast(st, target) });
+op!(JumpIfNotNullFar(st, target: Fwd) { JumpIfNotNull::fast(st, target) });
+op!(JumpIfUndefinedFar(st, target: Fwd) { JumpIfUndefined::fast(st, target) });
+op!(JumpIfNotUndefinedFar(st, target: Fwd) { JumpIfNotUndefined::fast(st, target) });
+op!(JumpIfUndefinedOrNullFar(st, target: Fwd) { JumpIfUndefinedOrNull::fast(st, target) });
+op!(JumpIfJSReceiverFar(st, target: Fwd) { JumpIfJSReceiver::fast(st, target) });

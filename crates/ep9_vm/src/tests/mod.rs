@@ -101,6 +101,7 @@ mod string_search;
 // so no cited line above moves.
 mod json_quote;
 mod star_dst; // STAR-DST probe (ABI 7, T3): the fused Star opcodes run as their pairs
+mod wide_forms; // WIDE-SET probe (ABI 8): the Far jump twins and the wide table
 
 #[path = "../../../ep9_bytecode/tests/common/mod.rs"]
 pub(crate) mod common;

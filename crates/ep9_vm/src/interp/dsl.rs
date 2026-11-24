@@ -205,6 +205,10 @@ pub(crate) mod kind {
         p.cast::<[u8; 2]>().read()
     )));
     operand!(TypeOfLiteral, TyLit, |p, S| TyLit(*p));
+    // ABI 8 (WIDE-SET probe): the fixed 16-bit forward offset of a `Far` twin.
+    operand!(JumpFwd16, Fwd, |p, S| Fwd(u32::from(u16::from_le_bytes(
+        p.cast::<[u8; 2]>().read()
+    ))));
 }
 
 /// Decodes the operands of the instruction at `$pc` (prefix included) at scale `$S`.

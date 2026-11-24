@@ -9,7 +9,7 @@
 //! no feedback record. Then the helper runs the miss path that the cold body ran before.
 //!
 //! No new `Flow` arm, no DSL exit and no new cold block (H15 dispatch core; plan rule 72).
-//! These functions are not handlers: `cargo xtask disasm-check` counts the same 290. On
+//! These functions are not handlers: `cargo xtask disasm-check` counts the same 303. On
 //! other targets (and on x86-64 with `ic-stats`, where the fast body keeps its full hit path)
 //! each name here is the function that the cold body called before.
 
