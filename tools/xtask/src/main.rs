@@ -13,6 +13,7 @@
 //! | `adr-lint` | `adr_lint.rs` | M1 exit item 6: ADR trailers and review records (M4-P0: only `--trailers-only`) |
 //! | `extref-lint` | `extref_lint.rs` | native words in heap cells only through `ExternalRef` (H25-Q2, C-26; M5-P0: the task name only, exits 2) |
 //! | `api-list` | `api_list.rs` | the public API of `ep9_vm` from rustdoc JSON (nightly), against `crates/ep9_vm/tests/golden/public-api.txt` (H20-Q6) |
+//! | `oxc-sites` | `oxc_sites.rs` | T-SITES: every recursion of the patched oxc_parser checkout passes a layer-1 stack check site (H01) |
 //!
 //! `m0_exit.rs`, `m1_exit.rs` and `m2_exit.rs` share the input readers and the cell type in
 //! `exit/`.
@@ -36,6 +37,7 @@ mod gc_lint;
 mod m0_exit;
 mod m1_exit;
 mod m2_exit;
+mod oxc_sites;
 
 use std::process::ExitCode;
 
@@ -53,6 +55,7 @@ fn main() -> ExitCode {
         "adr-lint" => adr_lint::main(&args[1..]),
         "extref-lint" => extref_lint::main(&args[1..]),
         "api-list" => api_list::main(&args[1..]),
+        "oxc-sites" => oxc_sites::main(&args[1..]),
         _ => {
             eprintln!("xtask: task {task:?} is not implemented yet");
             return ExitCode::from(2);
