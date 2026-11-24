@@ -68,6 +68,38 @@ fn measure_or_full<R>(bytes: usize, f: impl FnOnce() -> R) -> (usize, R, bool) {
     (sp.saturating_sub(addr), result, addr == low)
 }
 
+/// T-RED (l1.rs): paint `bytes` of stack below the caller, run `f`, and give the lowest address
+/// that `f` touched. The paint and touch order of [`measure_or_full`] (top down, for Windows).
+///
+/// Panics if `f` used the whole painted region.
+#[inline(never)]
+pub(crate) fn deepest_point<R>(bytes: usize, f: impl FnOnce() -> R) -> (usize, R) {
+    let anchor = 0u8;
+    let sp = black_box(&raw const anchor) as usize;
+    let low = (sp - bytes) & !7;
+    let high = (sp - GAP) & !7;
+    let mut addr = sp & !7;
+    while addr > low {
+        addr -= 8;
+        if addr >= high {
+            // SAFETY: as in `measure_or_full`: the gap below the anchor, a read.
+            unsafe { std::ptr::read_volatile(addr as *const u64) };
+        } else {
+            // SAFETY: as in `measure_or_full`: `[low, high)` lies in this thread's stack (the
+            // caller keeps `bytes` above the guard pages), below every live frame.
+            unsafe { std::ptr::write_volatile(addr as *mut u64, PATTERN) };
+        }
+    }
+    let result = black_box(f());
+    let mut addr = low;
+    // SAFETY: as above: reads of this thread's own stack below every live frame.
+    while addr < high && unsafe { std::ptr::read_volatile(addr as *const u64) } == PATTERN {
+        addr += 8;
+    }
+    assert!(addr > low, "the painted region ({bytes} B) is too small");
+    (addr, result)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct Sample {
     estimate: u32,
@@ -201,6 +233,34 @@ fn over_budget(delta_bytes: usize, delta_units: u32, budget: usize) -> Option<St
     }
 }
 
+/// The 4 walks of the eval path after layer 2 (`eval::measure_walks`): the T-PASS columns.
+const WALKS: [&str; 4] = [
+    "Allowed::collect",
+    "Shim::patch",
+    "rewrite_completion",
+    "post_checks",
+];
+
+/// The text of a form at n levels.
+type Build = fn(usize) -> String;
+
+/// T-COVER: the class-B walks of oxc (the cover grammar of arrow heads and assignment targets),
+/// at n levels.
+const COVER: [(&str, Build); 4] = [
+    ("([[[a]]])=>0", |n| {
+        format!("({}a{})=>0", "[".repeat(n), "]".repeat(n))
+    }),
+    ("({a:{a:b}})=>0", |n| {
+        format!("({}b{})=>0", "{a:".repeat(n), "}".repeat(n))
+    }),
+    ("[[[a]]]=0", |n| {
+        format!("{}a{}=0", "[".repeat(n), "]".repeat(n))
+    }),
+    ("((((a))))=0", |n| {
+        format!("{}a{}=0", "(".repeat(n), ")".repeat(n))
+    }),
+];
+
 /// T-A: the final assert of `measure_forms` runs only when this is true.
 /// On since the debug unit of `stack.rs` comes from T-A on the 4 CI targets (H01 B2).
 const T_A_ASSERT: bool = true;
@@ -217,7 +277,7 @@ fn measure_forms() {
     } else {
         "release"
     };
-    let (out, over, worst) = std::thread::Builder::new()
+    let (out, over, worst, eval_out, eval_over, eval_worst, cover_out) = std::thread::Builder::new()
         .stack_size(2 << 30)
         .spawn(move || {
             // Layer 1: this thread's limit, as a worker has one (l1.rs).
@@ -238,6 +298,11 @@ fn measure_forms() {
             )
             .unwrap();
             writeln!(out, "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|").unwrap();
+            let mut eval_out = String::new();
+            writeln!(eval_out, "| form | {} B/AST |\n|---|---|---|---|---|", WALKS.join(" B/AST | "))
+                .unwrap();
+            let mut eval_over = Vec::new();
+            let mut eval_worst: [Option<(usize, &'static str)>; 4] = [None; 4];
             for form in FORMS {
                 let paint = 384 << 20;
                 let a = sample(form, n1, paint);
@@ -297,8 +362,53 @@ fn measure_forms() {
                         over.push(format!("{} {phase}: {problem}", form.name));
                     }
                 }
+                // T-PASS columns: the 4 walks of the eval path per AST level (print only).
+                if !form.module {
+                    let walks = |n: usize| {
+                        // A lone surrogate (shim text), so that `Shim::patch` walks.
+                        let text = format!("\"\u{FDD0}d800\";\n{}", (form.build)(n));
+                        crate::eval::measure_walks(&text, &mut |f: &mut dyn FnMut()| {
+                            measure(paint, f).0
+                        })
+                    };
+                    match (walks(n1), walks(n2)) {
+                        (Some(wa), Some(wb)) => {
+                            let cols: Vec<String> =
+                                (0..4).map(|k| per(wb[k].saturating_sub(wa[k]), dast)).collect();
+                            writeln!(eval_out, "| {} | {} |", form.name, cols.join(" | "))
+                                .unwrap();
+                            for k in 0..4 {
+                                if let Some(problem) =
+                                    over_budget(wb[k].saturating_sub(wa[k]), dast, PASS_LEVEL_BUDGET)
+                                {
+                                    eval_over.push(format!("{} {}: {problem}", form.name, WALKS[k]));
+                                }
+                                if dast > 0 {
+                                    let slope = wb[k].saturating_sub(wa[k]) / dast as usize;
+                                    if eval_worst[k].is_none_or(|(w, _)| slope > w) {
+                                        eval_worst[k] = Some((slope, form.name));
+                                    }
+                                }
+                            }
+                        }
+                        _ => writeln!(eval_out, "| {} | no eval code | | | |", form.name).unwrap(),
+                    }
+                }
             }
-            (out, over, worst)
+            // T-COVER: the cover walks of oxc (class B sites) per level, in the whole parse.
+            let mut cover_out = String::new();
+            for (name, build) in COVER {
+                let bytes = |n: usize| {
+                    let src = build(n);
+                    let allocator = Allocator::default();
+                    let (used, parsed) = measure(384 << 20, || worker_parse(&allocator, &src, false));
+                    assert!(parsed.is_ok_and(|p| !p.diagnostics.has_errors()), "T-COVER {name}");
+                    used
+                };
+                let level = (bytes(n2).saturating_sub(bytes(n1))) / (n2 - n1);
+                writeln!(cover_out, "T-COVER {profile} {name}: {level} B per level (parse)").unwrap();
+            }
+            (out, over, worst, eval_out, eval_over, eval_worst, cover_out)
         })
         .unwrap()
         .join()
@@ -313,6 +423,23 @@ fn measure_forms() {
     for line in &over {
         println!("T-A over: {line}");
     }
+    // T-PASS (push 1 prints; the run-time budget check of layer 1 takes PASS_PER_LEVEL as the
+    // worst of these columns and the pass columns above, part 2).
+    println!("T-PASS eval walks per AST level:\n{eval_out}");
+    for (k, worst) in eval_worst.iter().enumerate() {
+        if let Some((w, name)) = worst {
+            println!(
+                "T-PASS worst {}-{} {profile}: {} {w} B per AST level (form {name}); budget {PASS_LEVEL_BUDGET} B",
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                WALKS[k]
+            );
+        }
+    }
+    for line in &eval_over {
+        println!("T-PASS over: {line}");
+    }
+    print!("{cover_out}");
     if T_A_ASSERT {
         assert!(
             over.is_empty(),

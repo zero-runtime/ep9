@@ -549,3 +549,443 @@ fn check_prescan_cap_form() {
     }
     println!("PRESCAN_CAP_FORM no pre-scan cap (estimate does not grow): {flat:?}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Layer 1 (l1.rs, H01): the stack check of the parse, the budget checks and the backstops. The
+// small-stack tests run each case in a child process (an abort kills only the child), on a
+// worker of `SMALL_WORKER` bytes, so the room above the limit is 3 MiB.
+
+/// The child env var of the layer-1 tests: `<test name>:<case index>`.
+const L1_CHILD: &str = "EP9_L1_CHILD";
+
+/// The worker of the small-stack tests.
+const SMALL_WORKER: usize = 4 << 20;
+
+/// The small worker as a front-end stack.
+const SMALL: crate::l1::Stack = crate::l1::Stack::Worker(SMALL_WORKER);
+
+/// In a child of the test `test`: the case index that it runs.
+fn l1_child(test: &str) -> Option<usize> {
+    let value = std::env::var(L1_CHILD).ok()?;
+    let (name, case) = value.split_once(':')?;
+    (name == test).then(|| case.parse().expect("a case index"))
+}
+
+/// The child line of a case: `L1 <test> <case> -> <word>`.
+fn l1_line(test: &str, case: usize, word: &str) {
+    println!("L1 {test} {case} -> {word}");
+}
+
+/// Run the cases `0..count` of `test` (a test of this module), each in its own child process,
+/// a few at a time. Gives the word that each child printed. Panics on a signal, a non-zero
+/// status or no line, with the case name and the stderr tail.
+fn run_children(test: &str, names: &[String]) -> Vec<String> {
+    let width = std::thread::available_parallelism().map_or(1, |n| n.get().min(4));
+    let mut words = Vec::new();
+    let indices: Vec<usize> = (0..names.len()).collect();
+    for chunk in indices.chunks(width) {
+        let children: Vec<_> = chunk
+            .iter()
+            .map(|&i| {
+                let child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        &format!("depth_tests::{test}"),
+                        "--nocapture",
+                        "--test-threads=1",
+                    ])
+                    .env(L1_CHILD, format!("{test}:{i}"))
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                (i, child)
+            })
+            .collect();
+        for (i, child) in children {
+            let out = child.wait_with_output().unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            // The harness prints "test ... " on the same line before the child's line.
+            let mark = format!("L1 {test} {i} -> ");
+            let word = stdout
+                .lines()
+                .find_map(|l| l.find(&mark).map(|at| l[at + mark.len()..].to_owned()));
+            let tail: Vec<&str> = stderr.lines().rev().take(20).collect();
+            let tail: Vec<&str> = tail.into_iter().rev().collect();
+            assert!(
+                out.status.success() && word.is_some(),
+                "{test} case {i} ({}): {:?}\nstderr tail:\n{}",
+                names[i],
+                out.status,
+                tail.join("\n")
+            );
+            words.push(word.unwrap());
+        }
+    }
+    words
+}
+
+/// The result kind as a word: `Ok`, `Syntax`, `Range(<kind>)`.
+fn word(result: &Result<(), CompileError>) -> String {
+    match result {
+        Ok(()) => "Ok".to_owned(),
+        Err(CompileError::Syntax(_)) => "Syntax".to_owned(),
+        Err(CompileError::Range(e)) => format!("Range({:?})", e.kind),
+    }
+}
+
+/// As [`word`], for the BytecodeGen entries.
+fn codegen_word<T>(result: &Result<T, crate::CodegenError>) -> String {
+    match result {
+        Ok(_) => "Ok".to_owned(),
+        Err(crate::CodegenError::Compile(e)) => word(&Err(e.clone())),
+        Err(e) => format!("Other({e})"),
+    }
+}
+
+/// `check_early_errors` with the job on `stack`.
+fn check_on(src: &str, opts: SourceOpts, stack: crate::l1::Stack) -> Result<(), CompileError> {
+    crate::with_front_end_at(src, opts, stack, |_| Ok(()))
+}
+
+const STACK_LIMIT: &str = "Range(StackLimit)";
+
+/// The largest n of `form` within both caps (the AST cap, and the pre-scan cap where the
+/// estimate grows).
+fn cap_n(form: &Form) -> usize {
+    let (a, b) = linear(|n| ast_depth(form, n));
+    let (ea, eb) = linear(|n| estimate(form, n));
+    let ast = (AST_CAP - b).checked_div(a);
+    let pre = (PRESCAN_CAP - eb).checked_div(ea);
+    let n = ast.into_iter().chain(pre).min();
+    usize::try_from(n.unwrap_or_else(|| panic!("{}: no cap", form.name))).unwrap()
+}
+
+/// `x = {}`, `{}` and a regex literal with a backquote before the text: the carrier of hunt
+/// rule 18 (the pre-scan reads a template from the backquote and skips the text).
+fn carried(text: &str) -> String {
+    format!("x={{}}\n{{}}\n/`/;{text};/`/")
+}
+
+/// `prefix + open x n + mid + close x n + suffix`.
+fn nest(prefix: &str, open: &str, mid: &str, close: &str, suffix: &str, n: usize) -> String {
+    format!("{prefix}{}{mid}{}{suffix}", open.repeat(n), close.repeat(n))
+}
+
+/// The pre-scan holes of the design check (PCHK K1-K6, `check_exp.py`), with the TS type sites
+/// that a Script parse reaches (K2, K3): (name, text at `n`). Each one nests `n` levels that the
+/// pre-scan does not count.
+fn pchk_rows(n: usize) -> Vec<(&'static str, String)> {
+    const IF: &str = "if(a)";
+    vec![
+        (
+            "K1 H1-deco-heritage-carried",
+            carried(&nest("x=", "@a @a class extends ", "B", "{}", "", n)),
+        ),
+        (
+            "K1 H1b-deco-paren-carried",
+            carried(&nest("x=", "@(a) @(a) class extends ", "B", "{}", "", n)),
+        ),
+        (
+            "K1 H1c-deco-stmt-carried",
+            carried(&nest("", "@a @a class A extends ", "B", "{}", "", n)),
+        ),
+        (
+            "K2 H2-typeargs-bang",
+            nest("x as ", "A<B!,", "B", ">,B", "", n),
+        ),
+        (
+            "K2 H2-typeargs-bang-carried",
+            carried(&nest("x as ", "A<B!,", "B", ">,B", "", n)),
+        ),
+        (
+            "K3 H4-gt-regex-bang",
+            format!("x as A<B>/{}a/1", "!".repeat(n)),
+        ),
+        (
+            "K3 H4b-gt-regex-array",
+            nest("x as A<B>/", "[", "0", "]", "/1", n),
+        ),
+        (
+            "K3 H4c-gt-regex-typeof",
+            format!("x satisfies A<B>/{}a/1", "typeof ".repeat(n)),
+        ),
+        (
+            "K4 H5-phantom-brace-paren",
+            format!("(x=a\\u{{);{};", IF.repeat(n)),
+        ),
+        (
+            "K4 H5b-phantom-brace-bracket",
+            format!("[a\\u{{];{};", IF.repeat(n)),
+        ),
+        (
+            "K5 H7-var-comma-pattern",
+            format!("var a,{{b}}\n/\"/;{};", IF.repeat(n)),
+        ),
+        (
+            "K5 H7b-let-comma-pattern",
+            format!("let a,{{b}}\n/\"/;{};", IF.repeat(n)),
+        ),
+        (
+            "K5 H7-var-comma-pattern-carried",
+            carried(&format!("var a,{{b}}\n/\"/;{};", IF.repeat(n))),
+        ),
+        (
+            "K6 H6-zwnj-assign-carried",
+            carried(&format!("x={}0", "a\u{200C}b=".repeat(n))),
+        ),
+    ]
+}
+
+/// The 2 forms of the design's C-1: a `/*@__PURE__*/` member chain with no call, and one after
+/// a call (oxc's `set_pure_on_call_or_new_expr`, a loop since patch 0002).
+fn pure_chain(call: bool, n: usize) -> String {
+    let head = if call { "a()" } else { "a" };
+    format!("/*@__PURE__*/{head}{}", ".a".repeat(n))
+}
+
+/// A case of T-SMALL: its name, and the maker of its text and opts (run in the child only).
+type SmallCase = (String, Box<dyn Fn() -> (String, SourceOpts)>);
+
+/// The case list of T-SMALL.
+fn small_cases() -> Vec<SmallCase> {
+    let mut cases: Vec<SmallCase> = FORMS
+        .iter()
+        .map(|f| {
+            let case: Box<dyn Fn() -> (String, SourceOpts)> =
+                Box::new(move || ((f.build)(cap_n(f)), opts(f)));
+            (format!("form {}", f.name), case)
+        })
+        .collect();
+    let script = SourceOpts::script(Strictness::Sloppy);
+    // AST depth n + 3 (Program, the statement, n members, the name) and n + 4 with the call:
+    // at the AST cap. (In release the layer-2 walk of one more level fits the small worker and
+    // gives TooDeep(Ast).)
+    let n = AST_CAP as usize - 4;
+    for call in [false, true] {
+        cases.push((
+            format!("C-1 pure chain (call {call})"),
+            Box::new(move || (pure_chain(call, n), script)),
+        ));
+    }
+    for (i, (name, _)) in pchk_rows(1).into_iter().enumerate() {
+        cases.push((
+            format!("PCHK {name}"),
+            Box::new(move || (pchk_rows(100_000).swap_remove(i).1, script)),
+        ));
+    }
+    cases
+}
+
+/// T-SMALL: on a 4 MiB worker, every form at its cap, the 2 C-1 forms at the AST cap and the
+/// PCHK rows (K1-K6, the TS type sites from a Script parse) give RangeError(StackLimit), never
+/// a signal. Each path of the front end has a stop: the parse sites, the regex budget, the
+/// layer-2 backstop or the run-time budget check.
+#[test]
+fn every_form_stops_on_a_small_stack() {
+    const TEST: &str = "every_form_stops_on_a_small_stack";
+    let cases = small_cases();
+    if let Some(i) = l1_child(TEST) {
+        let (src, opts) = (cases[i].1)();
+        l1_line(TEST, i, &word(&check_on(&src, opts, SMALL)));
+        return;
+    }
+    let names: Vec<String> = cases.iter().map(|c| c.0.clone()).collect();
+    let words = run_children(TEST, &names);
+    let wrong: Vec<String> = names
+        .iter()
+        .zip(&words)
+        .filter(|(_, w)| *w != STACK_LIMIT)
+        .map(|(n, w)| format!("{n}: {w}"))
+        .collect();
+    assert!(wrong.is_empty(), "not a StackLimit:\n{}", wrong.join("\n"));
+}
+
+/// T-STICKY: the stop inside a part that the parser reads speculatively and then rewinds (a
+/// rewind drops a fatal error): an arrow head, a default value, an `async (` head, a
+/// parenthesized expression. StackLimit, never SyntaxError or Ok.
+#[test]
+fn a_stack_stop_survives_a_rewind() {
+    const TEST: &str = "a_stack_stop_survives_a_rewind";
+    // Within the pre-scan cap, far above the 3 MiB of the small worker.
+    let n = 20_000;
+    let cases: Vec<(&str, String)> = vec![
+        ("arrow head", nest("(", "[", "a", "]", ")=>0", n)),
+        ("arrow default value", nest("(a=", "[", "0", "]", ")=>a", n)),
+        (
+            "async arrow head",
+            nest("async (", "[", "a", "]", ")=>0", n),
+        ),
+        ("async call", nest("async (", "[", "0", "]", ")", n)),
+        ("parenthesized", nest("(", "[", "0", "]", ")", n)),
+        (
+            "object arrow head",
+            nest("({a:", "{a:", "b", "}", "})=>0", n),
+        ),
+    ];
+    if let Some(i) = l1_child(TEST) {
+        let script = SourceOpts::script(Strictness::Sloppy);
+        l1_line(TEST, i, &word(&check_on(&cases[i].1, script, SMALL)));
+        return;
+    }
+    let names: Vec<String> = cases.iter().map(|c| c.0.to_owned()).collect();
+    for (name, w) in names.iter().zip(run_children(TEST, &names)) {
+        assert_eq!(w, STACK_LIMIT, "{name}");
+    }
+}
+
+/// T-EXIT: a lexer error before the deep part. oxc then keeps `fatal_error` and drops the
+/// message of the stop (the end-of-text branch of its parse exit), so only the flag shows the
+/// stop: StackLimit, not SyntaxError.
+#[test]
+fn the_stop_flag_wins_over_a_lexer_error() {
+    const TEST: &str = "the_stop_flag_wins_over_a_lexer_error";
+    let cases = |n: usize| -> Vec<(&'static str, String)> {
+        vec![
+            (
+                "string escape",
+                format!(
+                    "x = \"\\u{{110000}}\";\n{}0{}",
+                    "[".repeat(n),
+                    "]".repeat(n)
+                ),
+            ),
+            (
+                "identifier escape (PCHK K4)",
+                format!("(x=a\\u{{);{};", "if(a)".repeat(n * 5)),
+            ),
+        ]
+    };
+    let script = SourceOpts::script(Strictness::Sloppy);
+    if let Some(i) = l1_child(TEST) {
+        let src = cases(20_000).swap_remove(i).1;
+        l1_line(TEST, i, &word(&check_on(&src, script, SMALL)));
+        return;
+    }
+    // The texts hold a lexer error: a shallow one is a SyntaxError.
+    for (name, src) in cases(3) {
+        assert_eq!(word(&check_early_errors(&src, script)), "Syntax", "{name}");
+    }
+    let names: Vec<String> = cases(1).iter().map(|c| c.0.to_owned()).collect();
+    for (name, w) in names.iter().zip(run_children(TEST, &names)) {
+        assert_eq!(w, STACK_LIMIT, "{name}");
+    }
+}
+
+/// T-PURE (the design's C-1): both `/*@__PURE__*/` member chain forms with 4,000,000 members
+/// on the real worker. Patch 0002 makes oxc's walk over the chain a loop, so they need no stack
+/// and give TooDeep(Ast) on every host, never an abort.
+#[test]
+fn pure_member_chains_never_abort() {
+    const TEST: &str = "pure_member_chains_never_abort";
+    let script = SourceOpts::script(Strictness::Sloppy);
+    if let Some(i) = l1_child(TEST) {
+        let src = pure_chain(i == 1, 4_000_000);
+        l1_line(TEST, i, &word(&check_early_errors(&src, script)));
+        return;
+    }
+    let names = ["no call".to_owned(), "after a call".to_owned()];
+    for (name, w) in names.iter().zip(run_children(TEST, &names)) {
+        assert_eq!(w, "Range(TooDeep(Ast))", "{name}");
+    }
+}
+
+/// T-PASS: the walks after the parse stop on a thread smaller than the budget.
+/// (1) The backstops of the ep9 walks, with a limit 32 KiB below the walk on the real worker:
+/// layer 2 and BytecodeGen give StackLimit; the scope pass gives its layer-3 RangeError
+/// (scope/mod.rs maps its stop to TooDeep(Pass)). The `rewrite_completion` backstop has its own
+/// test in eval.rs.
+/// (2) In a child, on the 4 MiB worker, an input inside the caps whose parse is a loop (a member
+/// chain): the eval path (`Allowed::collect`, `Shim::patch`, `post_checks`, oxc_semantic),
+/// `compile_script_with_completion` and `compile` give StackLimit (the run-time budget check, or
+/// the layer-2 backstop), never an abort. On the real worker the same input compiles.
+#[test]
+fn passes_stop_on_a_small_stack() {
+    const TEST: &str = "passes_stop_on_a_small_stack";
+    let chain = format!("a{}", ".a".repeat(5_000));
+    let entries = ["compile_eval", "compile_script_with_completion", "compile"];
+    if let Some(i) = l1_child(TEST) {
+        let w = match i {
+            0 => codegen_word(&crate::eval::compile_eval_at(
+                &chain,
+                &ep9_bytecode::EvalContext::default(),
+                crate::CompileOptions::default(),
+                SMALL,
+            )),
+            1 => codegen_word(&crate::eval::with_script_completion_at(
+                &chain,
+                Strictness::Sloppy,
+                SMALL,
+                |fe| {
+                    let analysis = crate::scope::analyze(fe)?;
+                    crate::bytecodegen::generate(fe, &analysis, crate::CompileOptions::default())
+                },
+            )),
+            _ => {
+                let opts = SourceOpts::script(Strictness::Sloppy);
+                let r = crate::with_front_end_at(&chain, opts, SMALL, |fe| {
+                    let analysis = crate::scope::analyze(fe)?;
+                    Ok(crate::bytecodegen::generate(
+                        fe,
+                        &analysis,
+                        crate::CompileOptions::default(),
+                    ))
+                });
+                match r {
+                    Ok(unit) => codegen_word(&unit),
+                    Err(e) => word(&Err(e)),
+                }
+            }
+        };
+        l1_line(TEST, i, &w);
+        return;
+    }
+    // (2) The same input compiles on the real worker (Claim D), and stops on the small one.
+    let full = crate::compile_eval(
+        &chain,
+        &ep9_bytecode::EvalContext::default(),
+        crate::CompileOptions::default(),
+    );
+    assert_eq!(codegen_word(&full), "Ok");
+    let names: Vec<String> = entries.iter().map(|&e| e.to_owned()).collect();
+    for (name, w) in names.iter().zip(run_children(TEST, &names)) {
+        assert_eq!(w, STACK_LIMIT, "{name}");
+    }
+    // (1) The backstops, one walk at a time.
+    let src = chain.clone();
+    let kinds = crate::worker::run(crate::stack::WORKER_STACK_BYTES, move || {
+        let opts = SourceOpts::script(Strictness::Sloppy);
+        let allocator = Allocator::default();
+        let program = parse(&allocator, &src, opts).expect("parses on the real worker");
+        let layer2 = {
+            let _tight = crate::l1::LimitScope::room(32 << 10);
+            word(&crate::check_depth(&program, &src).map_err(CompileError::Range))
+        };
+        let semantic = crate::semantic(&src, &program).expect("semantic");
+        let fe = crate::FrontEnd {
+            source: &src,
+            opts,
+            program: &program,
+            semantic: &semantic,
+        };
+        let scope = {
+            let _tight = crate::l1::LimitScope::room(32 << 10);
+            word(&crate::scope::analyze(&fe).map(|_| ()))
+        };
+        let analysis = crate::scope::analyze(&fe).expect("scope pass");
+        let codegen = {
+            let _tight = crate::l1::LimitScope::room(32 << 10);
+            codegen_word(&crate::bytecodegen::generate(
+                &fe,
+                &analysis,
+                crate::CompileOptions::default(),
+            ))
+        };
+        (layer2, scope, codegen)
+    })
+    .unwrap();
+    assert_eq!(kinds.0, STACK_LIMIT, "layer 2");
+    assert_eq!(kinds.1, "Range(TooDeep(Pass))", "scope pass");
+    assert_eq!(kinds.2, STACK_LIMIT, "BytecodeGen");
+}

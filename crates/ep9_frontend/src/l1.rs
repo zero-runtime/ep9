@@ -113,6 +113,13 @@ impl LimitScope {
     pub(crate) fn of(stack_bytes: usize) -> Self {
         Self::set(limit_below(stack_address(), stack_bytes))
     }
+
+    /// Test only: a limit `room` bytes below this point, to reach the backstops of the passes on
+    /// a big stack.
+    #[cfg(test)]
+    pub(crate) fn room(room: usize) -> Self {
+        Self::set(stack_address().saturating_sub(room).max(1))
+    }
 }
 
 impl Drop for LimitScope {
@@ -259,9 +266,9 @@ pub(crate) enum Stack {
     /// DES section 7: on the caller's thread when its stack has the room of a worker, else on the
     /// worker (`WORKER_STACK_BYTES`). `low` is the lowest address of the caller's stack
     /// (`ep9_platform::stack::current_thread_stack_bounds`).
-    #[expect(
-        dead_code,
-        reason = "no public entry yet (H01 B1); T-INLINE comes with the tests"
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "no public entry yet (H01 B1); T-INLINE tests it")
     )]
     Inline { low: usize },
 }
@@ -296,5 +303,200 @@ where
             }
             worker::run(WORKER_STACK_BYTES, job)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+
+    use super::*;
+    use crate::bytecodegen::{CodegenError, CompileOptions};
+    use crate::forms::FORMS;
+    use crate::stack::BUDGET_BYTES;
+    use crate::{CompileError, RangeErrorKind, SourceOpts, Strictness};
+
+    fn opts(module: bool) -> SourceOpts {
+        if module {
+            SourceOpts::module()
+        } else {
+            SourceOpts::script(Strictness::Sloppy)
+        }
+    }
+
+    /// The unit bytes of `source` compiled with the job on `stack`, and whether the job ran on
+    /// the calling thread.
+    fn compile_on(
+        source: &str,
+        opts: SourceOpts,
+        stack: Stack,
+    ) -> (Result<Vec<u8>, CodegenError>, bool) {
+        let caller = thread::current().id();
+        let result = crate::with_front_end_at(source, opts, stack, move |fe| {
+            let here = thread::current().id() == caller;
+            let analysis = crate::scope::analyze(fe)?;
+            Ok((
+                crate::bytecodegen::generate(fe, &analysis, CompileOptions::default()),
+                here,
+            ))
+        });
+        match result {
+            Ok((unit, here)) => (unit.map(|u| u.unit().to_bytes()), here),
+            Err(e) => (Err(CodegenError::Compile(e)), false),
+        }
+    }
+
+    /// The stack bounds of this thread (T-RED, T-INLINE).
+    fn low() -> usize {
+        ep9_platform::stack::current_thread_stack_bounds()
+            .expect("the stack bounds of this thread")
+            .low
+    }
+
+    /// A thread whose stack can hold the inline job: W of room above the entry and RED more.
+    fn on_big_thread<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
+        thread::Builder::new()
+            .stack_size(WORKER_STACK_BYTES + 2 * RED)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_thread_with_no_limit_stops_at_the_first_site() {
+        assert_eq!(thread_limit(), 0, "a test thread has no limit");
+        let allocator = oxc_allocator::Allocator::default();
+        let result = crate::regex_check::parse(&allocator, "[[0]]", oxc_span::SourceType::script());
+        assert!(
+            matches!(result, Err(crate::regex_check::Stopped::StackLimit(_))),
+            "{:?}",
+            result.err()
+        );
+        // With a limit the same parse runs.
+        let _scope = LimitScope::of(2 << 20);
+        assert!(
+            crate::regex_check::parse(&allocator, "[[0]]", oxc_span::SourceType::script()).is_ok()
+        );
+    }
+
+    /// T-INLINE (DES section 7): the inline path and the worker path give one result. (1) The
+    /// same bytecode for a sample (every form at a small size, both goals). (2) One form above
+    /// the budget, on a thread larger than W: StackLimit on both paths (the room above the limit
+    /// is `W - RED` on both, so a bigger caller stack gives no deeper parse).
+    #[test]
+    fn inline_and_worker_give_one_result() {
+        on_big_thread(|| {
+            let low = low();
+            let mut sample: Vec<(String, SourceOpts)> = FORMS
+                .iter()
+                .map(|f| ((f.build)(7), opts(f.module)))
+                .collect();
+            sample.push((
+                "function f(a, ...b) { return [a, ...b].map(x => x * 2); } f(1, 2)".into(),
+                opts(false),
+            ));
+            sample.push((
+                "export const x = class { #p = 1; m() { return this.#p; } };".into(),
+                opts(true),
+            ));
+            for (src, opts) in &sample {
+                let (inline, here) = compile_on(src, *opts, Stack::Inline { low });
+                assert!(here, "the job did not run inline: {src}");
+                let (worker, there) = compile_on(src, *opts, WORKER);
+                assert!(!there, "the worker job ran on the caller: {src}");
+                match (&inline, &worker) {
+                    (Ok(a), Ok(b)) => assert!(a == b, "inline and worker bytecode differ: {src}"),
+                    (a, b) => assert_eq!(format!("{a:?}"), format!("{b:?}"), "{src}"),
+                }
+            }
+            // Above the budget: a pre-scan hole (PCHK K2, the TS type sites from a Script
+            // parse), 2,000,000 levels, which needs far more than W - RED.
+            let deep = format!(
+                "x as {}B{}",
+                "A<B!,".repeat(2_000_000),
+                ">,B".repeat(2_000_000)
+            );
+            for stack in [Stack::Inline { low }, WORKER] {
+                let result = crate::with_front_end_at(&deep, opts(false), stack, |_| Ok(()));
+                let kind = result
+                    .as_ref()
+                    .err()
+                    .and_then(CompileError::as_range)
+                    .map(|r| r.kind);
+                assert_eq!(
+                    kind,
+                    Some(RangeErrorKind::StackLimit),
+                    "{stack:?}: {result:?}"
+                );
+            }
+        });
+    }
+
+    /// T-RED (push 1 prints; the asserts come with the units of part 2): (1) the limit lies in
+    /// the real stack with room: `limit - low` on the worker and on the inline path, against
+    /// RED / 2. (2) The deepest point that a stopped parse touches below the limit (the leaf
+    /// calls after the last check that passed, and the unwind), against RED / 2.
+    #[test]
+    fn the_red_zone_holds() {
+        let profile = if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        };
+        let target = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+        // (1) The worker of every public entry.
+        let (limit, low_w) = worker::run(WORKER_STACK_BYTES, || (thread_limit(), low())).unwrap();
+        println!(
+            "T-RED {target} {profile}: worker limit - low = {} B (RED / 2 = {} B)",
+            limit as isize - low_w as isize,
+            RED / 2
+        );
+        // (1) The inline path on a thread of W + 2 RED.
+        let (inline_limit, low_i, ran_inline) = on_big_thread(|| {
+            let low = low();
+            let caller = thread::current().id();
+            let (limit, here) = run(Stack::Inline { low }, move || {
+                (thread_limit(), thread::current().id() == caller)
+            })
+            .unwrap();
+            (limit, low, here)
+        });
+        assert!(ran_inline, "the inline job hopped to the worker");
+        println!(
+            "T-RED {target} {profile}: inline limit - low = {} B (RED / 2 = {} B)",
+            inline_limit as isize - low_i as isize,
+            RED / 2
+        );
+        // (2) A small worker (a new caller thread, so the worker is new and has this size); a
+        // parse that stops (an array nest below the pre-scan cap).
+        let small = 4 << 20;
+        let deep = format!("{}0{}", "[".repeat(20_000), "]".repeat(20_000));
+        let job = move || {
+            let limit = thread_limit();
+            let low = low();
+            // Paint from here down to 256 KiB above the end (the guard pages lie below).
+            let bytes = stack_address() - (low + (256 << 10));
+            let (deepest, result) = crate::probe::deepest_point(bytes, || {
+                let allocator = oxc_allocator::Allocator::default();
+                crate::parse(&allocator, &deep, SourceOpts::script(Strictness::Sloppy)).map(|_| ())
+            });
+            let kind = result.err().and_then(|e| e.as_range().map(|r| r.kind));
+            (limit as isize - deepest as isize, kind)
+        };
+        let (below, kind) = thread::spawn(move || worker::run(small, job).unwrap())
+            .join()
+            .unwrap();
+        assert_eq!(
+            kind,
+            Some(RangeErrorKind::StackLimit),
+            "the parse did not stop"
+        );
+        println!(
+            "T-RED {target} {profile}: deepest point below the limit = {below} B (RED / 2 = {} B)",
+            RED / 2
+        );
+        // The budget is a share of the reservation without RED (T-BUDGET).
+        assert_eq!(BUDGET_BYTES + RED, WORKER_STACK_BYTES);
     }
 }

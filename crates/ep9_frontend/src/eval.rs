@@ -946,9 +946,63 @@ fn is_function_like(e: &Expression<'_>) -> bool {
     }
 }
 
+/// Test only, the T-PASS columns of `probe::measure_forms`: the 4 walks of the eval path after
+/// layer 2 on the shim text `source`, in the order of `on_worker` (`Allowed::collect`,
+/// `Shim::patch`, `rewrite_completion`, `post_checks`), each one run by `measure`, which gives
+/// the stack bytes that it used. Give `source` a lone surrogate (shim text), else `Shim::patch`
+/// does not walk. `None` if the text has an error (it is no eval code).
+#[cfg(test)]
+pub(crate) fn measure_walks(
+    source: &str,
+    measure: &mut dyn FnMut(&mut dyn FnMut()) -> usize,
+) -> Option<[usize; 4]> {
+    let (text, mut shim) = crate::surrogate::decode(source);
+    let text: &str = &text;
+    let allocator = Allocator::default();
+    let mut parsed = crate::regex_check::parse(&allocator, text, SourceType::script()).ok()?;
+    if parsed.diagnostics.has_errors() {
+        return None;
+    }
+    let allow = Allow::from_context(&EvalContext::default());
+    let collect = measure(&mut || {
+        std::hint::black_box(Allowed::collect(&parsed.program, &allow));
+    });
+    let mut patched = Ok(());
+    let patch = measure(&mut || patched = shim.patch(&allocator, text, &mut parsed.program));
+    let ast = AstBuilder::new(&allocator);
+    let mut rewritten = true;
+    let rewrite = measure(&mut || rewritten = rewrite_completion(&ast, &mut parsed.program));
+    let mut checked = Ok(());
+    let post = measure(&mut || checked = post_checks(text, &parsed.program, &allow));
+    (patched.is_ok() && rewritten && checked.is_ok()).then_some([collect, patch, rewrite, post])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Layer 1: the backstop of `rewrite_completion` (l1.rs; T-PASS). With a limit 32 KiB below
+    /// the walk (as on a thread smaller than the budget), a deep block nest stops the rewrite
+    /// (`on_worker` then gives StackLimit); with the limit of the real worker it does not.
+    #[test]
+    fn the_rewrite_stops_at_the_stack_limit() {
+        let src = format!("{}0;{}", "{".repeat(3_000), "}".repeat(3_000));
+        let (stopped, full) = crate::worker::run(crate::stack::WORKER_STACK_BYTES, move || {
+            let allocator = Allocator::default();
+            let mut parsed = Parser::new(&allocator, &src, SourceType::script()).parse();
+            assert!(!parsed.diagnostics.has_errors());
+            let ast = AstBuilder::new(&allocator);
+            let stopped = {
+                let _tight = crate::l1::LimitScope::room(32 << 10);
+                !rewrite_completion(&ast, &mut parsed.program)
+            };
+            let mut again = Parser::new(&allocator, &src, SourceType::script()).parse();
+            (stopped, rewrite_completion(&ast, &mut again.program))
+        })
+        .unwrap();
+        assert!(stopped, "the rewrite did not stop at the limit");
+        assert!(full, "the rewrite stopped on the real worker");
+    }
 
     /// A direct eval in a plain function of a sloppy script.
     fn direct() -> EvalContext {
