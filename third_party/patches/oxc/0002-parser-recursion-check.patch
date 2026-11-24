@@ -33,7 +33,7 @@ off:
   checkpoint and so can drop the stop. `ParserImpl::stack_limit_hit`
   (a `Cell<bool>`, not in the checkpoint) keeps it, and the exits of
   `parse` and `parse_expression` read it: then the result is one
-  "Maximum call stack size exceeded" error, an empty program,
+  "Maximum call stack size exceeded" error, a program with no body,
   `fatal_error = true`, and the new `ParserReturn::stack_limit_hit`
   (the struct is `#[non_exhaustive]`).
 
@@ -448,7 +448,7 @@ index 98b20e6e..c4acbf06 100644
      }
  }
 diff --git a/crates/oxc_parser/src/lib.rs b/crates/oxc_parser/src/lib.rs
-index 0af41bb1..5e6168a5 100644
+index 0af41bb1..900ad543 100644
 --- a/crates/oxc_parser/src/lib.rs
 +++ b/crates/oxc_parser/src/lib.rs
 @@ -64,7 +64,7 @@
@@ -465,8 +465,8 @@ index 0af41bb1..5e6168a5 100644
      pub fatal_error: bool,
  
 +    /// Whether a recursion check stopped the parse: [`ParserConfig::may_recurse`] returned
-+    /// `false`. Then [`fatal_error`] is `true`, [`program`] is empty and [`diagnostics`] holds one
-+    /// error, "Maximum call stack size exceeded".
++    /// `false`. Then [`fatal_error`] is `true`, [`program`] has no body (its comments stay) and
++    /// [`diagnostics`] holds one error, "Maximum call stack size exceeded".
 +    ///
 +    /// Always `false` when [`ParserConfig::CHECKS_RECURSION`] is `false` (the default).
 +    ///
@@ -642,7 +642,7 @@ index c2ac1928..01c3f655 100644
              Kind::Any
 diff --git a/crates/oxc_parser/tests/recursion_check.rs b/crates/oxc_parser/tests/recursion_check.rs
 new file mode 100644
-index 00000000..566a1a72
+index 00000000..ef7cd22b
 --- /dev/null
 +++ b/crates/oxc_parser/tests/recursion_check.rs
 @@ -0,0 +1,233 @@
@@ -727,7 +727,7 @@ index 00000000..566a1a72
 +    assert!(o.stack_limit_hit, "{what}: no stop");
 +    assert!(o.fatal_error, "{what}: not fatal");
 +    assert_eq!(o.messages, ["Maximum call stack size exceeded"], "{what}");
-+    assert_eq!(o.statements, 0, "{what}: the program is not empty");
++    assert_eq!(o.statements, 0, "{what}: the program has a body");
 +}
 +
 +fn deep(open: &str, mid: &str, close: &str, n: usize) -> String {
