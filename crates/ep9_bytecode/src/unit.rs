@@ -36,7 +36,8 @@ use crate::string::UnitString;
 /// | 5 | Runtime ids 32-47 (async functions 32-35, async generators 36-41, modules 42-43, `SetFunctionName` 44, `ThrowTypeError` 45, Annex B.3.2.3 eval functions 46-47); `ScopeFlags::PARAMETER_ENV` (bit 3); the module records section (section 5, header 168 bytes); the mapped-parameter list per function (M3-P0 P0-LANG4) |
 /// | 6 | Runtime ids 48-49 (`GetDisposeMethod`, `CreateSuppressedError`) for `using` and `await using` (M7-P3 SPEC-ERM) |
 /// | 7 | Opcodes 0x9e-0xa0 `GetNamedPropertyStar`, `LdaCurrentContextSlotStar`, `LdaContextSlotStar` (STAR-DST, M11-P3) |
-pub const ABI_VERSION: u32 = 7;
+/// | 8 | Opcodes 0xa1-0xab `JumpFar` .. `JumpIfJSReceiverFar`, operand kind `JumpFwd16` (WIDE-SET probe branch) |
+pub const ABI_VERSION: u32 = 8;
 
 /// The ECMA-262 code kind of the unit's entry function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

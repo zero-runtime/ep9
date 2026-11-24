@@ -881,6 +881,8 @@ fn random_function(
         // CX-ABI1: CreateMappedArguments with formal parameters needs a mapped-parameter
         // list; only the list block above emits it there.
         .filter(|op| *op != Opcode::CreateMappedArguments || plan.params == 0)
+        // ABI 8: a `Far` twin has no emitter; only `finish` makes one (far_jumps on).
+        .filter(|op| op.near_form() == *op)
         .filter(|op| {
             id != 0
                 || !matches!(
@@ -1131,6 +1133,7 @@ fn emit_random(
                 ops.push(l.into_pending());
             }
             (OperandKind::JumpBack, _) => ops.push(rng.pick(bound).into_pending()),
+            (OperandKind::JumpFwd16, _) => unreachable!("{op}: a Far twin is not a candidate"),
             (OperandKind::Flag8, OperandParam::FlagMask(m)) => {
                 ops.push(((rng.next() as u16 & m) as u8).into_pending());
             }

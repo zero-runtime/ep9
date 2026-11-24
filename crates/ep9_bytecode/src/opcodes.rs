@@ -5,7 +5,7 @@
 //! 2026-10-20): register + accumulator machine, the same opcode names and operand order for
 //! the opcodes ep9 shares with V8. ADR H02 lists what ep9 changes: feedback-slot operands on
 //! arithmetic and compares (V8 now embeds that feedback), no `*Constant` jump variants (the
-//! builder relaxes jump sizes instead), forward-only jumps except `JumpLoop`, a reserved
+//! builder relaxes sizes; `Far` twins hold u16), forward-only jumps except `JumpLoop`, a reserved
 //! `TailCall` (D7), generator opcodes only in generator and async functions (ABI 3), and
 //! `CallRuntimeForPair` with a [`RegOutPair`](crate::OperandKind::RegOutPair) output (ABI 3).
 
@@ -557,6 +557,44 @@ macro_rules! for_each_opcode {
             /// (`LdaContextSlot` then `Star dst`)
             LdaContextSlotStar = 0xa0, lda_context_slot_star, acc: Write, flags: [],
                 operands: (context: Reg, slot_index: CtxSlot, depth: CtxDepth, dst: RegOut);
+
+            // ---- Far forward jumps (ABI 8, the WIDE-SET probe) ------------------------------
+            // Each is its base with a fixed 16-bit forward offset (256..=65,535) and no prefix.
+            // Only `FunctionBuilder::finish` makes them (no typed emitter).
+
+            /// `Jump` with a 16-bit offset
+            JumpFar = 0xa1, jump_far, acc: None, flags: [Jump, Terminator],
+                operands: (target: JumpFwd16);
+            /// `JumpIfTrue` with a 16-bit offset
+            JumpIfTrueFar = 0xa2, jump_if_true_far, acc: Read, flags: [Jump],
+                operands: (target: JumpFwd16);
+            /// `JumpIfFalse` with a 16-bit offset
+            JumpIfFalseFar = 0xa3, jump_if_false_far, acc: Read, flags: [Jump],
+                operands: (target: JumpFwd16);
+            /// `JumpIfToBooleanTrue` with a 16-bit offset
+            JumpIfToBooleanTrueFar = 0xa4, jump_if_to_boolean_true_far, acc: Read, flags: [Jump],
+                operands: (target: JumpFwd16);
+            /// `JumpIfToBooleanFalse` with a 16-bit offset
+            JumpIfToBooleanFalseFar = 0xa5, jump_if_to_boolean_false_far, acc: Read, flags: [Jump],
+                operands: (target: JumpFwd16);
+            /// `JumpIfNull` with a 16-bit offset
+            JumpIfNullFar = 0xa6, jump_if_null_far, acc: Read, flags: [Jump],
+                operands: (target: JumpFwd16);
+            /// `JumpIfNotNull` with a 16-bit offset
+            JumpIfNotNullFar = 0xa7, jump_if_not_null_far, acc: Read, flags: [Jump],
+                operands: (target: JumpFwd16);
+            /// `JumpIfUndefined` with a 16-bit offset
+            JumpIfUndefinedFar = 0xa8, jump_if_undefined_far, acc: Read, flags: [Jump],
+                operands: (target: JumpFwd16);
+            /// `JumpIfNotUndefined` with a 16-bit offset
+            JumpIfNotUndefinedFar = 0xa9, jump_if_not_undefined_far, acc: Read, flags: [Jump],
+                operands: (target: JumpFwd16);
+            /// `JumpIfUndefinedOrNull` with a 16-bit offset
+            JumpIfUndefinedOrNullFar = 0xaa, jump_if_undefined_or_null_far, acc: Read, flags: [Jump],
+                operands: (target: JumpFwd16);
+            /// `JumpIfJSReceiver` with a 16-bit offset
+            JumpIfJSReceiverFar = 0xab, jump_if_js_receiver_far, acc: Read, flags: [Jump],
+                operands: (target: JumpFwd16);
         }
     };
 }
@@ -897,6 +935,45 @@ impl Opcode {
             _ => None,
         }
     }
+
+    /// The `Far` twin (ABI 8, the WIDE-SET probe) of one of the 11 one-operand forward jumps
+    /// `Jump` .. `JumpIfJSReceiver`, or `None`. A twin holds a fixed 16-bit offset and takes no
+    /// prefix. `JumpLoop` and `JumpIfForInDone` have no twin.
+    pub const fn far_twin(self) -> Option<Opcode> {
+        Some(match self {
+            Opcode::Jump => Opcode::JumpFar,
+            Opcode::JumpIfTrue => Opcode::JumpIfTrueFar,
+            Opcode::JumpIfFalse => Opcode::JumpIfFalseFar,
+            Opcode::JumpIfToBooleanTrue => Opcode::JumpIfToBooleanTrueFar,
+            Opcode::JumpIfToBooleanFalse => Opcode::JumpIfToBooleanFalseFar,
+            Opcode::JumpIfNull => Opcode::JumpIfNullFar,
+            Opcode::JumpIfNotNull => Opcode::JumpIfNotNullFar,
+            Opcode::JumpIfUndefined => Opcode::JumpIfUndefinedFar,
+            Opcode::JumpIfNotUndefined => Opcode::JumpIfNotUndefinedFar,
+            Opcode::JumpIfUndefinedOrNull => Opcode::JumpIfUndefinedOrNullFar,
+            Opcode::JumpIfJSReceiver => Opcode::JumpIfJSReceiverFar,
+            _ => return None,
+        })
+    }
+
+    /// The base of a `Far` twin; every other opcode gives itself. A consumer that matches on
+    /// jump opcodes calls it first.
+    pub const fn near_form(self) -> Opcode {
+        match self {
+            Opcode::JumpFar => Opcode::Jump,
+            Opcode::JumpIfTrueFar => Opcode::JumpIfTrue,
+            Opcode::JumpIfFalseFar => Opcode::JumpIfFalse,
+            Opcode::JumpIfToBooleanTrueFar => Opcode::JumpIfToBooleanTrue,
+            Opcode::JumpIfToBooleanFalseFar => Opcode::JumpIfToBooleanFalse,
+            Opcode::JumpIfNullFar => Opcode::JumpIfNull,
+            Opcode::JumpIfNotNullFar => Opcode::JumpIfNotNull,
+            Opcode::JumpIfUndefinedFar => Opcode::JumpIfUndefined,
+            Opcode::JumpIfNotUndefinedFar => Opcode::JumpIfNotUndefined,
+            Opcode::JumpIfUndefinedOrNullFar => Opcode::JumpIfUndefinedOrNull,
+            Opcode::JumpIfJSReceiverFar => Opcode::JumpIfJSReceiver,
+            other => other,
+        }
+    }
 }
 
 impl core::fmt::Display for Opcode {
@@ -961,7 +1038,7 @@ mod tests {
 
     #[test]
     fn table_is_dense_and_round_trips() {
-        assert_eq!(OPCODE_COUNT, 0xa1);
+        assert_eq!(OPCODE_COUNT, 0xac);
         for (i, info) in OPCODES.iter().enumerate() {
             assert_eq!(info.opcode as usize, i);
             assert_eq!(Opcode::from_u8(i as u8), Some(info.opcode));
@@ -1027,9 +1104,12 @@ mod tests {
     fn flags_agree_with_operands() {
         for info in OPCODES.iter() {
             let ops = info.operands;
-            let has_jump = ops
-                .iter()
-                .any(|o| matches!(o.kind, OperandKind::JumpFwd | OperandKind::JumpBack));
+            let has_jump = ops.iter().any(|o| {
+                matches!(
+                    o.kind,
+                    OperandKind::JumpFwd | OperandKind::JumpFwd16 | OperandKind::JumpBack
+                )
+            });
             assert_eq!(
                 has_jump,
                 info.flags.contains(OpcodeFlags::JUMP),
@@ -1054,7 +1134,10 @@ mod tests {
             );
             // A jump operand, if any, is the first operand.
             for (i, o) in ops.iter().enumerate() {
-                if matches!(o.kind, OperandKind::JumpFwd | OperandKind::JumpBack) {
+                if matches!(
+                    o.kind,
+                    OperandKind::JumpFwd | OperandKind::JumpFwd16 | OperandKind::JumpBack
+                ) {
                     assert_eq!(i, 0, "{}", info.name);
                 }
             }
@@ -1101,6 +1184,84 @@ mod tests {
             );
             assert!(ops.len() <= MAX_OPERANDS);
         }
+    }
+
+    /// ABI 8 (WIDE-SET probe): the 11 `Far` twins sit at 0xa1-0xab in the order of their
+    /// bases; each has the acc and flags of its base and one operand, the jump kind
+    /// `JumpFwd16`, first; it takes no prefix and is 3 bytes.
+    #[test]
+    fn far_twins_are_jump_kind_first_operand() {
+        let twins: Vec<Opcode> = OPCODES
+            .iter()
+            .filter(|i| i.operands.iter().any(|o| o.kind == OperandKind::JumpFwd16))
+            .map(|i| i.opcode)
+            .collect();
+        assert_eq!(twins.len(), 11);
+        for (k, &twin) in twins.iter().enumerate() {
+            let info = twin.info();
+            let base = twin.near_form().info();
+            assert_eq!(twin as u8, 0xa1 + k as u8);
+            assert_eq!(base.opcode as u8, Opcode::Jump as u8 + k as u8);
+            assert_eq!(info.name, format!("{}Far", base.name));
+            assert_eq!(info.snake, format!("{}_far", base.snake));
+            assert_eq!(
+                (info.acc, info.flags),
+                (base.acc, base.flags),
+                "{}",
+                info.name
+            );
+            assert!(info.flags.contains(OpcodeFlags::JUMP));
+            assert_eq!(info.operands.len(), 1);
+            assert_eq!(info.operands[0].kind, OperandKind::JumpFwd16);
+            assert_eq!(info.operands[0].name, base.operands[0].name);
+            assert_eq!(base.operands[0].kind, OperandKind::JumpFwd);
+            assert!(!info.has_scalable_operands(), "{}", info.name);
+            for scale in OperandScale::ALL {
+                assert_eq!(info.operands_size(scale), 2);
+            }
+            assert_eq!(info.size(OperandScale::Single), 3);
+        }
+        assert_eq!(
+            Opcode::JumpFar.info().flags,
+            OpcodeFlags(OpcodeFlags::JUMP.0 | OpcodeFlags::TERMINATOR.0)
+        );
+        assert!(!OperandKind::JumpFwd16.is_scalable());
+        assert!(!OperandKind::JumpFwd16.is_signed());
+        assert!(!OperandKind::JumpFwd16.is_register());
+        assert_eq!(OperandKind::JumpFwd16 as u8, 21);
+        assert_eq!(OperandKind::JumpFwd16.name(), "JumpFwd16");
+    }
+
+    /// ABI 8: `far_twin` and `near_form` are inverse on the 11 forward jumps, `near_form` is
+    /// the identity on every other opcode, and only those 11 have a twin.
+    #[test]
+    fn far_twin_and_near_form_round_trip() {
+        let mut with_twin = Vec::new();
+        for info in OPCODES.iter() {
+            let op = info.opcode;
+            match op.far_twin() {
+                Some(t) => {
+                    with_twin.push(op);
+                    assert_eq!(t.near_form(), op, "{}", info.name);
+                    assert_ne!(t, op);
+                    assert_eq!(t.far_twin(), None, "{}", t.name());
+                }
+                None => {
+                    let base = op.near_form();
+                    if base != op {
+                        assert_eq!(base.far_twin(), Some(op), "{}", info.name);
+                    }
+                }
+            }
+        }
+        let want: Vec<Opcode> = (Opcode::Jump as u8..=Opcode::JumpIfJSReceiver as u8)
+            .map(|b| Opcode::from_u8(b).unwrap())
+            .collect();
+        assert_eq!(with_twin, want);
+        assert_eq!(Opcode::JumpLoop.far_twin(), None);
+        assert_eq!(Opcode::JumpIfForInDone.far_twin(), None);
+        assert_eq!(Opcode::JumpLoop.near_form(), Opcode::JumpLoop);
+        assert_eq!(Opcode::LdaSmi.near_form(), Opcode::LdaSmi);
     }
 
     #[test]

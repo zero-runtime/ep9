@@ -112,6 +112,9 @@ pub enum OperandKind {
     TypeOfLiteral = 19,
     /// Two consecutive locals the instruction writes (ABI 3, `CallRuntimeForPair`).
     RegOutPair = 20,
+    /// Forward jump of a `Far` twin (ABI 8, the WIDE-SET probe): target = instruction start +
+    /// offset, 256 <= offset <= 65,535. Unsigned, fixed 2 bytes (no prefix precedes a twin).
+    JumpFwd16 = 21,
 }
 
 impl OperandKind {
@@ -119,7 +122,7 @@ impl OperandKind {
     pub const fn is_scalable(self) -> bool {
         !matches!(
             self,
-            Self::Flag8 | Self::Flag16 | Self::Runtime | Self::TypeOfLiteral
+            Self::Flag8 | Self::Flag16 | Self::Runtime | Self::TypeOfLiteral | Self::JumpFwd16
         )
     }
 
@@ -158,7 +161,7 @@ impl OperandKind {
     pub const fn size(self, scale: OperandScale) -> usize {
         match self {
             Self::Flag8 | Self::TypeOfLiteral => 1,
-            Self::Flag16 | Self::Runtime => 2,
+            Self::Flag16 | Self::Runtime | Self::JumpFwd16 => 2,
             _ => scale.bytes(),
         }
     }
@@ -187,6 +190,7 @@ impl OperandKind {
             Self::Runtime => "Runtime",
             Self::TypeOfLiteral => "TypeOfLiteral",
             Self::RegOutPair => "RegOutPair",
+            Self::JumpFwd16 => "JumpFwd16",
         }
     }
 }
