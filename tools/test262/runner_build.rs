@@ -17,8 +17,8 @@
 //! the `dirty` word of `ep9 --version`, `crates/ep9_cli/build.rs`, which includes this file too).
 //!
 //! ```text
-//! fork line   sh -c '. scripts/sync-lib.sh; root=<root>; fork_attest regress icu4x'
-//!             -> "regress=pinned icu4x=pinned" (stale or absent in place of pinned)
+//! fork line   sh -c '. scripts/sync-lib.sh; root=<root>; fork_attest regress icu4x oxc'
+//!             -> "regress=pinned icu4x=pinned oxc=pinned" (stale or absent in place of pinned)
 //! watched     per fork: its .ep9-stamp, its .git/HEAD and the dir cargo builds from it
 //!             ([`FORK_BUILT`]); a sync rewrites the stamp, so cargo reruns the script
 //! ```
@@ -28,9 +28,10 @@ use std::process::Command;
 
 /// The paths, from the repo root, whose files build the runner: the engine crates, the runner,
 /// the root manifest and lock file, the toolchain, the regress fork (pin and patch set;
-/// ep9_vm builds regress through `[patch.crates-io]`) and the icu4x fork (pin and patch set;
-/// ep9_temporal and ep9_intl build icu_calendar through `[patch.crates-io]`).
-pub const COMPILED_PATHS: [&str; 9] = [
+/// ep9_vm builds regress through `[patch.crates-io]`), the icu4x fork (pin and patch set;
+/// ep9_temporal and ep9_intl build icu_calendar through `[patch.crates-io]`) and the oxc fork
+/// (pin and patch set; ep9_frontend builds oxc_parser through `[patch.crates-io]`).
+pub const COMPILED_PATHS: [&str; 11] = [
     "crates",
     "tools/test262",
     "Cargo.toml",
@@ -40,6 +41,8 @@ pub const COMPILED_PATHS: [&str; 9] = [
     "third_party/patches/regress",
     "third_party/icu4x.commit",
     "third_party/patches/icu4x",
+    "third_party/oxc.commit",
+    "third_party/patches/oxc",
 ];
 
 /// Some(true) when a tracked file under [`COMPILED_PATHS`] differs from HEAD, Some(false) when
@@ -83,14 +86,16 @@ pub fn dirty_watch_paths(root: &Path) -> Vec<PathBuf> {
 }
 
 /// The forks the engine builds from git-ignored checkouts (`[patch.crates-io]` of the root
-/// `Cargo.toml`), each with the dir that the patch entry names: regress (ep9_vm) and
-/// icu_calendar of icu4x (ep9_temporal, ep9_intl).
-pub const FORK_BUILT: [(&str, &str); 2] = [
+/// `Cargo.toml`), each with the dir that the patch entry names: regress (ep9_vm),
+/// icu_calendar of icu4x (ep9_temporal, ep9_intl) and oxc_parser of oxc (ep9_frontend).
+pub const FORK_BUILT: [(&str, &str); 3] = [
     ("regress", "third_party/regress"),
     ("icu4x", "third_party/icu4x/components/calendar"),
+    ("oxc", "third_party/oxc/crates/oxc_parser"),
 ];
 
-/// The fork line of the checkouts under `root` (module doc): `"regress=<state> icu4x=<state>"`
+/// The fork line of the checkouts under `root` (module doc):
+/// `"regress=<state> icu4x=<state> oxc=<state>"`
 /// as `fork_attest` of `scripts/sync-lib.sh` prints it. None when the check cannot run (no `sh`,
 /// no `scripts/sync-lib.sh`) or prints a line in another form.
 pub fn fork_attest(root: &Path) -> Option<String> {

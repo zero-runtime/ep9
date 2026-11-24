@@ -183,11 +183,12 @@ const SPLAY: &str = "splay-vs-node-jitless";
 /// The two builds of every M2 speed reading (V12-D6).
 const BUILDS: [&str; 2] = ["jit", "jitless"];
 
-/// What a speed input measured: the engine, its build and the forks it links: regress and
+/// What a speed input measured: the engine, its build and the forks it links: regress,
 /// icu_calendar (ep9_temporal and ep9_intl build it from the git-ignored checkout of
 /// `third_party/icu4x.commit` and `third_party/patches/icu4x`; M2EXIT-ICU4X-FRESH, the m1-exit
-/// form of INTL-FRESH-PATHS).
-const FRESH_PATHS: [&str; 9] = [
+/// form of INTL-FRESH-PATHS) and oxc_parser (ep9_frontend builds it from the git-ignored
+/// checkout of `third_party/oxc.commit` and `third_party/patches/oxc`; H01 layer 1, M12-P1).
+const FRESH_PATHS: [&str; 11] = [
     "crates",
     "tools/bench",
     "Cargo.toml",
@@ -197,10 +198,12 @@ const FRESH_PATHS: [&str; 9] = [
     "third_party/patches/regress",
     "third_party/icu4x.commit",
     "third_party/patches/icu4x",
+    "third_party/oxc.commit",
+    "third_party/patches/oxc",
 ];
 
 /// What a FASTDIFF run tested: the engine and its forks (no bench tool).
-const ENGINE_PATHS: [&str; 8] = [
+const ENGINE_PATHS: [&str; 10] = [
     "crates",
     "Cargo.toml",
     "Cargo.lock",
@@ -209,10 +212,12 @@ const ENGINE_PATHS: [&str; 8] = [
     "third_party/patches/regress",
     "third_party/icu4x.commit",
     "third_party/patches/icu4x",
+    "third_party/oxc.commit",
+    "third_party/patches/oxc",
 ];
 
 /// What a test262 run read (as m1-exit's fresh, named inputs).
-const T262_PATHS: [&str; 11] = [
+const T262_PATHS: [&str; 13] = [
     "crates",
     "tools/bench",
     "Cargo.toml",
@@ -224,6 +229,8 @@ const T262_PATHS: [&str; 11] = [
     "third_party/patches/regress",
     "third_party/icu4x.commit",
     "third_party/patches/icu4x",
+    "third_party/oxc.commit",
+    "third_party/patches/oxc",
 ];
 
 /// Item 5 dirs: (prefix under `test/`, the percent it needs).
@@ -260,7 +267,7 @@ const JETSTREAM_PIN: &str = "third_party/bench-jetstream.commit";
 
 const FUZZILLI_HOURS: f64 = 500.0;
 const CLOSED: [&str; 3] = ["fixed", "duplicate", "not-a-bug"];
-const FUZZ_PATHS: [&str; 8] = ENGINE_PATHS;
+const FUZZ_PATHS: [&str; 10] = ENGINE_PATHS;
 
 const P_GATES: [&str; 3] = ["P1", "P2", "P4"];
 const P_RESULTS: [&str; 2] = ["not tripped", "tripped"];
@@ -2855,6 +2862,8 @@ mod tests {
             "third_party/patches/regress/0001.patch",
             "third_party/icu4x.commit",
             "third_party/patches/icu4x/0001.patch",
+            "third_party/oxc.commit",
+            "third_party/patches/oxc/0001.patch",
             "third_party/test262.commit",
         ] {
             write(&root, p, "x\n");
@@ -3419,19 +3428,28 @@ mod tests {
     fn item5_reads_the_runner_fork_line() {
         let r = repo("t262-forks");
         let full = fixture("exec.json").replace(SHA, &r.head);
-        let pinned = "\"runner_forks\": \"regress=pinned icu4x=pinned\"";
+        let pinned = "\"runner_forks\": \"regress=pinned icu4x=pinned oxc=pinned\"";
         assert!(full.contains(pinned), "the fixture names the fork line");
         let cases = [
             (pinned.to_string(), None),
             (
-                "\"runner_forks\": \"regress=pinned icu4x=stale\"".to_string(),
+                "\"runner_forks\": \"regress=pinned icu4x=stale oxc=pinned\"".to_string(),
                 Some(
-                    "stale input: the icu4x fork checkout was not its pin plus its patches (runner_forks: regress=pinned icu4x=stale)",
+                    "stale input: the icu4x fork checkout was not its pin plus its patches (runner_forks: regress=pinned icu4x=stale oxc=pinned)",
                 ),
             ),
             (
-                "\"runner_forks\": \"regress=absent icu4x=pinned\"".to_string(),
+                "\"runner_forks\": \"regress=absent icu4x=pinned oxc=pinned\"".to_string(),
                 Some("the regress fork checkout was not its pin plus its patches"),
+            ),
+            (
+                "\"runner_forks\": \"regress=pinned icu4x=pinned oxc=stale\"".to_string(),
+                Some("the oxc fork checkout was not its pin plus its patches"),
+            ),
+            // An input of a tree with 2 forks (before H01 layer 1) is OPEN at a head with 3.
+            (
+                "\"runner_forks\": \"regress=pinned icu4x=pinned\"".to_string(),
+                Some("is in another form (runner_forks)"),
             ),
             (
                 "\"runner_forks\": \"regress=pinned\"".to_string(),
@@ -3574,7 +3592,7 @@ mod tests {
             .flat_map(|n| quoted(line(n)))
             .filter(|p| p != "tools/bench")
             .collect();
-        assert_eq!(tree.len(), 8, "{tree:?}");
+        assert_eq!(tree.len(), 10, "{tree:?}");
         assert_eq!(built, tree, "crates/ep9_cli/build.rs ENGINE_PATHS");
         assert_eq!(built, ENGINE_PATHS, "m2_exit.rs ENGINE_PATHS");
     }
