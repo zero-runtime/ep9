@@ -174,7 +174,7 @@ impl Emitter {
     /// A builder for a function with `named` named locals, which it allocates.
     pub(crate) fn new(meta: FunctionMeta, named: u32, mode: Mode) -> Self {
         let mut e = Self {
-            b: FunctionBuilder::new(meta),
+            b: super::function_builder(meta),
             mode,
             named,
             events: Vec::with_capacity(64),
@@ -513,6 +513,9 @@ macro_rules! regopt_operand_type {
     (JumpFwd) => {
         Label
     };
+    (JumpFwd16) => {
+        Label // ABI 8: BytecodeGen calls no `Far` twin emitter; the builder refuses a label there
+    };
     (JumpBack) => {
         Label
     };
@@ -556,6 +559,9 @@ macro_rules! regopt_arg {
         Arg::List($v)
     };
     (JumpFwd, $v:ident) => {
+        Arg::Label($v)
+    };
+    (JumpFwd16, $v:ident) => {
         Arg::Label($v)
     };
     (JumpBack, $v:ident) => {
