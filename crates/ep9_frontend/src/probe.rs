@@ -160,8 +160,10 @@ fn sample(form: &Form, n: usize, paint: usize) -> Sample {
     // The parse as the worker runs it (see `worker_parse`): the T-A slope is of that call.
     let (parse_bytes, parsed) = measure(paint, || worker_parse(&allocator, &src, module));
     let program = assert_parsed(form, n, parsed).program;
-    let (depth_bytes, ast) = measure(paint, || depth::check_ast_depth(&program, u32::MAX));
-    let ast_depth = ast.expect("no cap");
+    // At `AST_CAP`, as `check_depth` calls it: on this 2 GiB thread that is the copy with no
+    // backstop, the one that runs on the worker.
+    let (depth_bytes, ast) = measure(paint, || depth::check_ast_depth(&program, crate::AST_CAP));
+    let ast_depth = ast.expect("within the cap");
     let (semantic_bytes, built) = measure(paint, || {
         oxc_semantic::SemanticBuilder::new_compiler().build(&program)
     });

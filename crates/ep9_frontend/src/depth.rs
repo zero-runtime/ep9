@@ -64,7 +64,20 @@ pub(crate) struct TooDeep {
 ///
 /// Returns [`TooDeep`] with the first node deeper than `cap`.
 pub(crate) fn check_ast_depth(program: &Program<'_>, cap: u32) -> Result<u32, TooDeep> {
-    let mut pass = DepthPass {
+    // Layer 1: the walk goes at most a few levels past `cap` (the module head). When the stack
+    // above this thread's limit holds `cap + 1` levels at `PASS_PER_LEVEL` (which covers the
+    // depth-pass row of stack.rs) with the margin, the backstop can never fire: walk without it.
+    // That is the case on the worker at `AST_CAP` (stack.rs: the budget holds the pass bound).
+    // On a smaller stack, or with no cap, the walk keeps the backstop.
+    if crate::l1::passes_fit(cap.saturating_add(1)) {
+        walk_depth::<false>(program, cap)
+    } else {
+        walk_depth::<true>(program, cap)
+    }
+}
+
+fn walk_depth<const BACKSTOP: bool>(program: &Program<'_>, cap: u32) -> Result<u32, TooDeep> {
+    let mut pass = DepthPass::<BACKSTOP> {
         depth: 0,
         max: 0,
         cap,
@@ -81,7 +94,9 @@ pub(crate) fn check_ast_depth(program: &Program<'_>, cap: u32) -> Result<u32, To
     }
 }
 
-struct DepthPass {
+/// `BACKSTOP`: the layer-1 backstop runs at the depth step (a stack read every
+/// `l1::BACKSTOP_STEP` levels). Without it the code is the walk of layer 2 alone.
+struct DepthPass<const BACKSTOP: bool> {
     depth: u32,
     max: u32,
     cap: u32,
@@ -90,7 +105,7 @@ struct DepthPass {
     stack_limit: bool,
 }
 
-impl DepthPass {
+impl<const BACKSTOP: bool> DepthPass<BACKSTOP> {
     /// False once the current path is below the cap: the caller then skips the subtree.
     #[inline]
     fn may_descend(&self) -> bool {
@@ -98,7 +113,7 @@ impl DepthPass {
     }
 }
 
-impl<'a> Visit<'a> for DepthPass {
+impl<'a, const BACKSTOP: bool> Visit<'a> for DepthPass<BACKSTOP> {
     #[inline]
     fn enter_node(&mut self, kind: AstKind<'a>) {
         self.depth += 1;
@@ -114,7 +129,7 @@ impl<'a> Visit<'a> for DepthPass {
         }
         // Layer 1 backstop (l1.rs): on a thread smaller than the budget. With cap 0, no node
         // descends from here, so the walk unwinds.
-        if self.cap > 0 && crate::l1::backstop(self.depth) {
+        if BACKSTOP && self.cap > 0 && crate::l1::backstop(self.depth) {
             self.cap = 0;
             if self.too_deep.is_none() {
                 let span = kind.span();
