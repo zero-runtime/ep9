@@ -313,6 +313,7 @@ pub struct FunctionBuilder {
     mapped_parameters: Option<MappedParameters>,
     error: Option<BuildError>,
     last_bind: Option<u32>, // rule O13 B2: the instruction index of the last `bind`
+    far_jumps: bool,        // ABI 8 (WIDE-SET probe): `finish` may pick the `Far` twins
 }
 
 impl FunctionBuilder {
@@ -334,7 +335,15 @@ impl FunctionBuilder {
             mapped_parameters: None,
             error: None,
             last_bind: None,
+            far_jumps: false,
         }
+    }
+
+    /// (ABI 8, the WIDE-SET probe.) With `on`, `finish` encodes a forward jump of `Jump` ..
+    /// `JumpIfJSReceiver` with an offset of 256 to 65,535 as its `Far` twin (3 bytes, no
+    /// prefix) instead of `Wide` + the base (4 bytes). Default off: today's bytes.
+    pub fn set_far_jumps(&mut self, on: bool) {
+        self.far_jumps = on;
     }
 
     /// (ABI 5.) Sets the mapped-parameter list ([`MappedParameters`]): for formal parameter
@@ -647,6 +656,11 @@ impl FunctionBuilder {
         if let Some(e) = self.error {
             return Err(e);
         }
+        // ABI 8: only this function makes `Far` twins (check fix B5: they have no emitter).
+        debug_assert!(
+            self.insns.iter().all(|i| i.opcode.near_form() == i.opcode),
+            "a Far twin in the instruction list"
+        );
         let n = self.insns.len();
         // Jump targets as instruction indices; check directions.
         let mut targets: Vec<Option<u32>> = vec![None; n];
@@ -709,6 +723,21 @@ impl FunctionBuilder {
         }
         // Scales: start from what the non-jump operands need, then grow jumps to a fixpoint.
         // Sizes only grow, so distances only grow, so the loop ends and every scale is minimal.
+        // ABI 8, `far_jumps` on: a jump with a `Far` twin at scale `Wide` is the twin (Near 2
+        // bytes -> Far 3 -> ExtraWide 6); the forms still only grow.
+        let twin = |i: usize, scale: OperandScale| -> Option<Opcode> {
+            if self.far_jumps && scale == OperandScale::Wide {
+                self.insns[i].opcode.far_twin()
+            } else {
+                None
+            }
+        };
+        let size = |i: usize, scale: OperandScale| -> u64 {
+            match twin(i, scale) {
+                Some(t) => t.info().size(OperandScale::Single) as u64,
+                None => self.insns[i].opcode.info().size(scale) as u64,
+            }
+        };
         let mut scales: Vec<OperandScale> = self
             .insns
             .iter()
@@ -730,7 +759,7 @@ impl FunctionBuilder {
         let mut offsets = vec![0u64; n + 1];
         loop {
             for i in 0..n {
-                offsets[i + 1] = offsets[i] + self.insns[i].opcode.info().size(scales[i]) as u64;
+                offsets[i + 1] = offsets[i] + size(i, scales[i]);
             }
             let mut changed = false;
             for i in 0..n {
@@ -754,12 +783,15 @@ impl FunctionBuilder {
         // Encode.
         let mut code = Vec::with_capacity(code_len as usize);
         for (i, insn) in self.insns.iter().enumerate() {
-            let scale = scales[i];
+            let (opcode, scale) = match twin(i, scales[i]) {
+                Some(t) => (t, OperandScale::Single),
+                None => (insn.opcode, scales[i]),
+            };
             if let Some(p) = Opcode::prefix_for(scale) {
                 code.push(p as u8);
             }
-            code.push(insn.opcode as u8);
-            for (k, spec) in insn.opcode.info().operands.iter().enumerate() {
+            code.push(opcode as u8);
+            for (k, spec) in opcode.info().operands.iter().enumerate() {
                 let v = match insn.operands[k] {
                     Pending::Value(v) => v,
                     Pending::List { first, .. } => first,
@@ -1325,6 +1357,124 @@ mod tests {
         let jl = insns.last().unwrap();
         assert_eq!(jl.opcode, Opcode::JumpLoop);
         assert_eq!(jl.jump_target(), Some(insns[152].offset));
+    }
+
+    /// One `JumpIfTrue` over `body` one-byte instructions to a `Return`: its (opcode, scale,
+    /// encoded offset). The offset counts the jump itself (instruction start to target).
+    fn one_jump(body: u32, far: bool) -> (Opcode, OperandScale, u32) {
+        let mut b = entry(0);
+        b.set_far_jumps(far);
+        let l = b.new_label();
+        b.jump_if_true(l);
+        for _ in 0..body {
+            b.lda_zero();
+        }
+        b.bind(l);
+        b.return_();
+        let code = b.finish().unwrap();
+        let insn = Instructions::new(code.bytecode()).next().unwrap().unwrap();
+        let off = insn.jump_target().unwrap() - insn.offset;
+        assert_eq!(insn.unsigned(0), off);
+        (insn.opcode, insn.scale, off)
+    }
+
+    /// T1 (ABI 8): the form edges. With `far_jumps` on, a forward jump is Near while its offset
+    /// is <= 255, Far from 256 to 65,535 and ExtraWide from 65,536; off, Wide takes the Far
+    /// range. The offset counts the jump, so at the edge each form needs one byte more than
+    /// the smaller one: body 253 = Near 255; 254 = Near 256, so Far 257 (Wide 258); 65,532 =
+    /// Far 65,535 (Wide 65,536, so ExtraWide); 65,533 = Far 65,536, so ExtraWide.
+    #[test]
+    fn far_jump_relaxation_edges() {
+        use OperandScale::{ExtraWide, Single, Wide};
+        let (t, b) = (Opcode::JumpIfTrueFar, Opcode::JumpIfTrue);
+        assert_eq!(one_jump(253, true), (b, Single, 255));
+        assert_eq!(one_jump(254, true), (t, Single, 257));
+        assert_eq!(one_jump(65_532, true), (t, Single, 65_535));
+        assert_eq!(one_jump(65_533, true), (b, ExtraWide, 65_539));
+        assert_eq!(one_jump(253, false), (b, Single, 255));
+        assert_eq!(one_jump(254, false), (b, Wide, 258));
+        assert_eq!(one_jump(65_531, false), (b, Wide, 65_535));
+        assert_eq!(one_jump(65_532, false), (b, ExtraWide, 65_538));
+        assert_eq!(one_jump(65_533, false), (b, ExtraWide, 65_539));
+    }
+
+    /// T1 (ABI 8): a jump that grows pushes a second one over 255. `Jump` A at 0 targets the
+    /// instruction after 251 bytes past `Jump` B; B targets 3 bytes later. B needs 256 as
+    /// Near, so it grows, and then A needs 256 as Near too: both are Far (on) or Wide (off).
+    #[test]
+    fn far_jump_growth_pushes_a_second_jump() {
+        for far in [false, true] {
+            let mut b = entry(0);
+            b.set_far_jumps(far);
+            let (la, lb) = (b.new_label(), b.new_label());
+            b.jump(la);
+            b.jump(lb);
+            for _ in 0..251 {
+                b.lda_zero();
+            }
+            b.bind(la);
+            for _ in 0..3 {
+                b.lda_zero();
+            }
+            b.bind(lb);
+            b.return_();
+            let code = b.finish().unwrap();
+            let insns: Vec<_> = Instructions::new(code.bytecode())
+                .map(|i| i.unwrap())
+                .collect();
+            let (a, bj) = (insns[0], insns[1]);
+            assert_eq!(a.jump_target(), Some(insns[253].offset));
+            assert_eq!(bj.jump_target(), Some(insns[256].offset));
+            if far {
+                assert_eq!((a.opcode, a.size()), (Opcode::JumpFar, 3));
+                assert_eq!((bj.opcode, bj.size()), (Opcode::JumpFar, 3));
+                assert_eq!(a.unsigned(0), 3 + 3 + 251);
+            } else {
+                assert_eq!((a.opcode, a.scale), (Opcode::Jump, OperandScale::Wide));
+                assert_eq!((bj.opcode, bj.scale), (Opcode::Jump, OperandScale::Wide));
+                assert_eq!(a.unsigned(0), 4 + 4 + 251);
+            }
+            assert!(
+                insns
+                    .iter()
+                    .all(|i| i.scale == OperandScale::Single || i.opcode == Opcode::Jump)
+            );
+        }
+    }
+
+    /// T1 (ABI 8): with `far_jumps` off the builder output is the same as before the flag
+    /// existed; JumpLoop and JumpIfForInDone keep the scale rule (they have no twin).
+    #[test]
+    fn far_jumps_leave_jump_loop_and_for_in_done() {
+        for far in [false, true] {
+            let mut b = entry(0);
+            b.set_far_jumps(far);
+            let (i, n) = (b.new_register(), b.new_register());
+            let done = b.new_label();
+            let header = b.bound_label();
+            b.jump_if_for_in_done(done, i, n);
+            for _ in 0..300 {
+                b.lda_zero();
+            }
+            let slot = b.feedback_slot(FeedbackSlotKind::JumpLoop);
+            b.jump_loop(header, 0, slot);
+            b.bind(done);
+            b.return_();
+            let code = b.finish().unwrap();
+            let insns: Vec<_> = Instructions::new(code.bytecode())
+                .map(|i| i.unwrap())
+                .collect();
+            assert_eq!(
+                (insns[0].opcode, insns[0].scale),
+                (Opcode::JumpIfForInDone, OperandScale::Wide)
+            );
+            let jl = insns[301];
+            assert_eq!(
+                (jl.opcode, jl.scale),
+                (Opcode::JumpLoop, OperandScale::Wide)
+            );
+            assert_eq!(jl.jump_target(), Some(0));
+        }
     }
 
     #[test]
