@@ -79,17 +79,40 @@ pub(crate) fn stack_address() -> usize {
 }
 
 /// The limit of a stack of `stack_bytes` whose job starts at `sp_entry`: `stack_bytes - RED` of
-/// room above it. Never 0 (0 means "no limit").
-const fn limit_below(sp_entry: usize, stack_bytes: usize) -> usize {
+/// room above it. `None` when that room reaches address 0: the stack is not where its requested
+/// size says (a port where the requested size is not the real stack). Never `Some(0)` (0 means
+/// "no limit").
+const fn limit_below(sp_entry: usize, stack_bytes: usize) -> Option<usize> {
     let room = stack_bytes.saturating_sub(RED);
-    let limit = sp_entry.saturating_sub(room);
-    if limit == 0 { 1 } else { limit }
+    match sp_entry.checked_sub(room) {
+        Some(0) | None => None,
+        limit => limit,
+    }
+}
+
+/// The limit of a thread whose job starts at `sp_entry` ([`limit_below`]), or the fail-closed
+/// limit `usize::MAX` (every check stops, every backstop fires) when it has none.
+const fn thread_limit_at(sp_entry: usize, stack_bytes: usize) -> usize {
+    match limit_below(sp_entry, stack_bytes) {
+        Some(limit) => limit,
+        None => usize::MAX,
+    }
+}
+
+/// The limit of an inline job that starts at `sp_entry` on a caller stack whose lowest address
+/// is `low` (DES section 7): the line of a worker of `WORKER_STACK_BYTES`, if it is RED above
+/// `low`. `None`: the job hops to the worker.
+const fn inline_limit(sp_entry: usize, low: usize) -> Option<usize> {
+    match limit_below(sp_entry, WORKER_STACK_BYTES) {
+        Some(limit) if limit >= low.saturating_add(RED) => Some(limit),
+        _ => None,
+    }
 }
 
 /// The worker thread start (worker.rs): the limit of this thread, from its own requested stack
 /// size. A nested job on the thread keeps it.
 pub(crate) fn start_thread(stack_bytes: usize) {
-    LIMIT.with(|l| l.set(limit_below(stack_address(), stack_bytes)));
+    LIMIT.with(|l| l.set(thread_limit_at(stack_address(), stack_bytes)));
 }
 
 /// The stack limit of this thread, 0 when none is set.
@@ -111,7 +134,7 @@ impl LimitScope {
     /// thread): without it, every parse there stops at its first site.
     #[cfg(test)]
     pub(crate) fn of(stack_bytes: usize) -> Self {
-        Self::set(limit_below(stack_address(), stack_bytes))
+        Self::set(thread_limit_at(stack_address(), stack_bytes))
     }
 
     /// Test only: a limit `room` bytes below this point, to reach the backstops of the passes on
@@ -294,12 +317,11 @@ where
     match stack {
         Stack::Worker(stack_bytes) => worker::run(stack_bytes, job),
         Stack::Inline { low } => {
-            if thread_limit() == 0 {
-                let limit = limit_below(stack_address(), WORKER_STACK_BYTES);
-                if limit >= low.saturating_add(RED) {
-                    let _scope = LimitScope::set(limit);
-                    return Ok(job());
-                }
+            if thread_limit() == 0
+                && let Some(limit) = inline_limit(stack_address(), low)
+            {
+                let _scope = LimitScope::set(limit);
+                return Ok(job());
             }
             worker::run(WORKER_STACK_BYTES, job)
         }
@@ -543,6 +565,32 @@ mod tests {
         );
         // The budget is a share of the reservation without RED (T-BUDGET).
         assert_eq!(BUDGET_BYTES + RED, WORKER_STACK_BYTES);
+    }
+
+    /// Review V2: a limit whose room reaches below address 0 fails closed on a thread (not the
+    /// limit 1, which no check ever reaches), and the inline path hops to the worker.
+    #[test]
+    fn a_limit_below_address_0_fails_closed() {
+        let room = WORKER_STACK_BYTES - RED;
+        assert_eq!(thread_limit_at(1_000, WORKER_STACK_BYTES), usize::MAX);
+        assert_eq!(thread_limit_at(room, WORKER_STACK_BYTES), usize::MAX);
+        assert_eq!(thread_limit_at(room + 5, WORKER_STACK_BYTES), 5);
+        assert_eq!(limit_below(1_000, WORKER_STACK_BYTES), None);
+        assert_eq!(limit_below(room, WORKER_STACK_BYTES), None);
+        assert_eq!(limit_below(room + 5, WORKER_STACK_BYTES), Some(5));
+        assert_eq!(inline_limit(1_000, 0), None);
+        assert_eq!(inline_limit(room + 5, 0), None, "below low + RED");
+        assert_eq!(inline_limit(room + RED, 0), Some(RED));
+        // A thread with the fail-closed limit: its first site stops, a backstop fires.
+        let _scope = LimitScope::set(thread_limit_at(1_000, WORKER_STACK_BYTES));
+        let allocator = oxc_allocator::Allocator::default();
+        let result = crate::regex_check::parse(&allocator, "[[0]]", oxc_span::SourceType::script());
+        assert!(
+            matches!(result, Err(crate::regex_check::Stopped::StackLimit(_))),
+            "{:?}",
+            result.err()
+        );
+        assert!(below_limit() && backstop(0));
     }
 
     /// The child env var of the layer-1 tests (depth_tests.rs uses it with its own test names).
