@@ -893,7 +893,8 @@ fn pure_member_chains_never_abort() {
 
 /// T-PASS: the walks after the parse stop on a thread smaller than the budget.
 /// (1) The backstops of the ep9 walks, with a limit 32 KiB below the walk on the real worker:
-/// layer 2 and BytecodeGen give StackLimit; the scope pass gives its layer-3 RangeError
+/// the layer-2 walk (`check_ast_depth`) stops by its backstop; layer 2 and BytecodeGen give
+/// StackLimit; the scope pass gives its layer-3 RangeError
 /// (scope/mod.rs maps its stop to TooDeep(Pass)). The `rewrite_completion` backstop has its own
 /// test in eval.rs.
 /// (2) In a child, on the 4 MiB worker, an input inside the caps whose parse is a loop (a member
@@ -958,6 +959,15 @@ fn passes_stop_on_a_small_stack() {
         let opts = SourceOpts::script(Strictness::Sloppy);
         let allocator = Allocator::default();
         let program = parse(&allocator, &src, opts).expect("parses on the real worker");
+        // The layer-2 walk itself (review V9): its backstop stops it (`stack_limit`). Through
+        // `check_depth` the run-time budget check gives the same word without the backstop.
+        let backstop = {
+            let _tight = crate::l1::LimitScope::room(32 << 10);
+            match crate::depth::check_ast_depth(&program, AST_CAP) {
+                Err(deep) if deep.stack_limit => "stack_limit".to_owned(),
+                other => format!("{:?}", other.map_err(|d| d.stack_limit)),
+            }
+        };
         let layer2 = {
             let _tight = crate::l1::LimitScope::room(32 << 10);
             word(&crate::check_depth(&program, &src).map_err(CompileError::Range))
@@ -982,9 +992,10 @@ fn passes_stop_on_a_small_stack() {
                 crate::CompileOptions::default(),
             ))
         };
-        (layer2, scope, codegen)
+        (layer2, scope, codegen, backstop)
     })
     .unwrap();
+    assert_eq!(kinds.3, "stack_limit", "the layer-2 walk backstop");
     assert_eq!(kinds.0, STACK_LIMIT, "layer 2");
     assert_eq!(kinds.1, "Range(TooDeep(Pass))", "scope pass");
     assert_eq!(kinds.2, STACK_LIMIT, "BytecodeGen");
