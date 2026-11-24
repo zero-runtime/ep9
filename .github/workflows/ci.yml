@@ -1399,13 +1399,11 @@ jobs:
       - name: bench pins
         if: ${{ steps.mode.outputs.on == 'true' }}
         run: bash scripts/sync-bench.sh bench-v8v7 bench-octane
-      # Each tree with its own toolchain file and its own regress and icu4x forks (the
-      # setup-rust steps, per tree). Each binary's build line must name its commit, clean
-      # (bench-set.mjs checks it). Each side has its own target dir and its own jitless target
-      # dir (MC-w36-4; route BENCH-STALE-HEAD: with one shared dir, a head crate whose files are
-      # older than the base artifacts was fresh to cargo, so the head binary kept base code).
-      # The head rebuild guard (bench-set.mjs --rebuild-guard) reads the head builds' JSON
-      # messages: each package that differs from base must have been compiled for head.
+      # Each tree with its own toolchain file and its own regress and icu4x forks (the setup-rust
+      # steps, per tree); each build line must name its commit, clean (bench-set.mjs checks it). Own
+      # target dirs per side and build (MC-w36-4; route BENCH-STALE-HEAD); the head rebuild guard
+      # (bench-set.mjs --rebuild-guard): each head package that differs from base was compiled for head.
+      # Route BENCH-TREE-NEST: the trees build outside this checkout (cargo reads each parent dir's config).
       - name: build ep9 at base and head
         if: ${{ steps.mode.outputs.on == 'true' }}
         env:
@@ -1413,6 +1411,8 @@ jobs:
         run: |
           set -euo pipefail
           retry() { "$@" || { echo "::warning::$* failed; one retry in 20 s"; sleep 20; "$@"; }; }
+          # BENCH-TREE-NEST: no parent dir of a tree is this checkout; binaries and logs stay in $BENCH_DIR.
+          mkdir -p "$RUNNER_TEMP/bench" && mv bench/base bench/head "$RUNNER_TEMP/bench/" && cd "$RUNNER_TEMP"
           for side in base head; do
             target="$BENCH_DIR/target-$side" jitless="$BENCH_DIR/target-jitless-$side"
             pushd "bench/$side" > /dev/null
@@ -1422,16 +1422,21 @@ jobs:
             retry bash scripts/sync-regress.sh
             if [ -f scripts/sync-icu4x.sh ]; then retry bash scripts/sync-icu4x.sh; fi
             if [ -f scripts/sync-oxc.sh ]; then retry bash scripts/sync-oxc.sh; fi
-            cargo build --release --locked -p ep9_cli --target-dir "$target" --message-format=json-render-diagnostics > "$BENCH_DIR/build-$side.jsonl"
-            cargo build --release --locked -p ep9_cli --no-default-features --target-dir "$jitless" --message-format=json-render-diagnostics > "$BENCH_DIR/build-jitless-$side.jsonl"
+            { cargo build -v --release --locked -p ep9_cli --target-dir "$target" --message-format=json-render-diagnostics 2>&1 >&3 | tee "$BENCH_DIR/build-$side.err" >&2; } 3> "$BENCH_DIR/build-$side.jsonl"
+            { cargo build -v --release --locked -p ep9_cli --no-default-features --target-dir "$jitless" --message-format=json-render-diagnostics 2>&1 >&3 | tee "$BENCH_DIR/build-jitless-$side.err" >&2; } 3> "$BENCH_DIR/build-jitless-$side.jsonl"
             popd > /dev/null
-            cp "$target/release/ep9" "bench/ep9-$side"
-            cp "$jitless/release/ep9" "bench/ep9-jitless-$side"
-            "bench/ep9-$side" --version
-            "bench/ep9-jitless-$side" --version
+            cp "$target/release/ep9" "$BENCH_DIR/ep9-$side"
+            cp "$jitless/release/ep9" "$BENCH_DIR/ep9-jitless-$side"
+            "$BENCH_DIR/ep9-$side" --version
+            "$BENCH_DIR/ep9-jitless-$side" --version
+            # BENCH-TREE-NEST: how often the rustc line of the ep9 binary names the alignment flag.
+            for b in build build-jitless; do
+              n="$(grep -m1 -e '--crate-name ep9 ' "$BENCH_DIR/$b-$side.err" | grep -o -e '-align-all-functions=' | wc -l || true)"
+              echo "align-all-functions $side $b: $((n))" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
           done
           for b in build build-jitless; do
-            node .github/scripts/bench-set.mjs --rebuild-guard --base-tree bench/base --head-tree bench/head --cargo-json "bench/$b-head.jsonl"
+            node "$GITHUB_WORKSPACE/.github/scripts/bench-set.mjs" --rebuild-guard --base-tree bench/base --head-tree bench/head --cargo-json "$BENCH_DIR/$b-head.jsonl"
           done
       - name: count
         id: count

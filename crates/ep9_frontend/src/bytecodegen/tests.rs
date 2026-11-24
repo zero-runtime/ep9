@@ -1716,14 +1716,49 @@ fn t1_labels(f: &ep9_bytecode::Function, code: &[T1Insn]) -> std::collections::B
     out
 }
 
-/// The source offset that covers `off` (`BC/positions.rs` `position_at`: the last entry at or
-/// before it).
-fn t1_covering(f: &ep9_bytecode::Function, off: u32) -> Option<u32> {
-    f.positions
-        .iter()
-        .take_while(|p| p.bytecode_offset <= off)
-        .last()
-        .map(|p| p.source_offset)
+/// For each instruction of `code` (the decoded `f`), the source offset that covers it
+/// (`BC/positions.rs` `position_at`: the last entry at or before it; the last entry of the
+/// longest prefix of `f.positions` whose entries are at or before the offset). One forward
+/// pass: the offsets of `code` grow, so each prefix holds the one before it.
+fn t1_covering(f: &ep9_bytecode::Function, code: &[T1Insn]) -> Vec<Option<u32>> {
+    let mut n = 0;
+    code.iter()
+        .map(|x| {
+            while f
+                .positions
+                .get(n)
+                .is_some_and(|p| p.bytecode_offset <= x.off)
+            {
+                n += 1;
+            }
+            n.checked_sub(1).map(|k| f.positions[k].source_offset)
+        })
+        .collect()
+}
+
+/// The code offsets of the position entries of a function, built once per function.
+struct T1Entries {
+    /// Of the statement entries.
+    stmt: std::collections::HashSet<u32>,
+    /// Of the expression entries.
+    expr: std::collections::HashSet<u32>,
+    /// Of all entries.
+    all: std::collections::HashSet<u32>,
+}
+
+fn t1_entries(f: &ep9_bytecode::Function) -> T1Entries {
+    let of = |stmt: Option<bool>| {
+        f.positions
+            .iter()
+            .filter(|p| stmt.is_none_or(|s| p.is_statement == s))
+            .map(|p| p.bytecode_offset)
+            .collect()
+    };
+    T1Entries {
+        stmt: of(Some(true)),
+        expr: of(Some(false)),
+        all: of(None),
+    }
 }
 
 /// Why the load at `code[k]` is not dead (rule L1, with L2: `Mov` instructions may come first),
@@ -1732,19 +1767,16 @@ fn t1_covering(f: &ep9_bytecode::Function, off: u32) -> Option<u32> {
 /// owed load there; the load is still dead: a handler gets the exception in the accumulator),
 /// and so is a `Mov` run before the write (rule O2 emits the owed load before an emitted `Mov`). A label or a
 /// statement entry is a reason on every instruction of the scan with `o7`, and only on
-/// `code[k + 1]` without it.
+/// `code[k + 1]` without it. `entries`: [`t1_entries`] of `f`.
 fn t1_dead_after(
     f: &ep9_bytecode::Function,
     code: &[T1Insn],
     k: usize,
     labels: &std::collections::BTreeSet<u32>,
+    entries: &T1Entries,
     o7: bool,
 ) -> Result<usize, &'static str> {
-    let stmt_at = |off: u32| {
-        f.positions
-            .iter()
-            .any(|p| p.bytecode_offset == off && p.is_statement)
-    };
+    let stmt_at = |off: u32| entries.stmt.contains(&off);
     let mut n = k + 1;
     loop {
         let Some(x) = code.get(n) else {
@@ -1789,12 +1821,12 @@ fn t1_dead_after(
 
 /// O9, O6: `code[n]` is an `Ldar` from a register that the arm does not owe (`deferred`), with
 /// no position entry, and the next instruction is a flush (a jump, a switch, `Debugger`, a
-/// generator instruction, or a label).
+/// generator instruction, or a label). `entries`: [`t1_entries`] of the function.
 fn t1_anchor(
-    f: &ep9_bytecode::Function,
     code: &[T1Insn],
     n: usize,
     labels: &std::collections::BTreeSet<u32>,
+    entries: &T1Entries,
     deferred: impl Fn(ep9_bytecode::Register) -> bool,
 ) -> bool {
     let Some(x) = code.get(n) else { return false };
@@ -1803,7 +1835,7 @@ fn t1_anchor(
     };
     let flags = next.op.info().flags;
     x.ldar.is_some_and(deferred)
-        && !f.positions.iter().any(|p| p.bytecode_offset == x.off)
+        && !entries.all.contains(&x.off)
         && (labels.contains(&next.off)
             || next.op == Opcode::Debugger
             || flags.contains(OpcodeFlags::JUMP)
@@ -1866,19 +1898,11 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
         let mut diff = |d: String| rep.differences.push(format!("f{fi}: {d}"));
         let (a0, an) = (t1_decode(f0), t1_decode(fnn));
         let labels0 = t1_labels(f0, &a0);
-        let stmt0 = |off: u32| {
-            f0.positions
-                .iter()
-                .any(|p| p.bytecode_offset == off && p.is_statement)
-        };
+        let (e0, en) = (t1_entries(f0), t1_entries(fnn));
+        let stmt0 = |off: u32| e0.stmt.contains(&off);
         // Arm 2 emits a binding `Ldar` that has an expression entry in place (O2 does not owe
         // it), so T1 does not align it as a dropped load.
-        let expr0 = |off: u32| {
-            arm2 && f0
-                .positions
-                .iter()
-                .any(|p| p.bytecode_offset == off && !p.is_statement)
-        };
+        let expr0 = |off: u32| arm2 && e0.expr.contains(&off);
         // Alignment: map[i] = the index in `an` of `a0[i]`, None for a dropped load.
         let mut map: Vec<Option<usize>> = Vec::with_capacity(a0.len());
         let mut j = 0;
@@ -1901,7 +1925,7 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
                     .map(|ii| {
                         let ok = a0[ii].ldar.is_some_and(load)
                             && (!arm1 || stmt0(a0[ii].off))
-                            && t1_dead_after(f0, &a0, ii, &labels0, false).is_ok();
+                            && t1_dead_after(f0, &a0, ii, &labels0, &e0, false).is_ok();
                         usize::from(!ok)
                     })
                     .collect();
@@ -1966,7 +1990,7 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
                             x.off
                         ));
                     }
-                    if let Err(why) = t1_dead_after(f0, &a0, i, &labels0, false) {
+                    if let Err(why) = t1_dead_after(f0, &a0, i, &labels0, &e0, false) {
                         diff(format!(
                             "@{} Ldar {r} is gone and is not dead ({why})",
                             x.off
@@ -2010,6 +2034,7 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
             let i = index0[&off];
             map[i..].iter().find_map(|m| *m).map_or(lenn, |j| an[j].off)
         };
+        let (cov0, covn) = (t1_covering(f0, &a0), t1_covering(fnn, &an));
         for (i, x) in a0.iter().enumerate() {
             let Some(j) = map[i] else { continue };
             let y = &an[j];
@@ -2027,13 +2052,10 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
                 diff(format!("@{}: jump table differs", x.off));
             }
             // INV-1.
-            if t1_covering(f0, x.off) != t1_covering(fnn, y.off) {
+            if cov0[i] != covn[j] {
                 diff(format!(
                     "@{} {}: source offset {:?} -> {:?} (INV-1)",
-                    x.off,
-                    x.text,
-                    t1_covering(f0, x.off),
-                    t1_covering(fnn, y.off)
+                    x.off, x.text, cov0[i], covn[j]
                 ));
             }
         }
@@ -2097,19 +2119,14 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
                 }
             }
             for (k, y) in an.iter().enumerate() {
-                if y.ldar.is_some_and(load)
-                    && fnn
-                        .positions
-                        .iter()
-                        .any(|p| p.bytecode_offset == y.off && p.is_statement)
-                {
+                if y.ldar.is_some_and(load) && en.stmt.contains(&y.off) {
                     let mark = if back[k].is_some_and(|i| stmt0(a0[i].off)) {
                         "S>"
                     } else {
                         "-"
                     };
-                    let next =
-                        t1_dead_after(fnn, &an, k, &labels, true).map_or_else(|e| e, |_| "dead");
+                    let next = t1_dead_after(fnn, &an, k, &labels, &en, true)
+                        .map_or_else(|e| e, |_| "dead");
                     let in_range = fnn
                         .handlers
                         .iter()
@@ -2121,30 +2138,32 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
                 }
                 let stmt = back[k].is_some_and(|i| stmt0(a0[i].off));
                 match y.ldar {
-                    Some(r) if load(r) && stmt => match t1_dead_after(fnn, &an, k, &labels, true) {
-                        // O9: the anchor of a statement whose owed load a deferred transfer
-                        // replaced; the flush after it materializes that transfer (`p, this;
-                        // debugger;`, as in arm 0).
-                        Ok(n)
-                            if t1_anchor(fnn, &an, n, &labels, |s| {
-                                s == ep9_bytecode::Register::RECEIVER || !load(s)
-                            }) =>
-                        {
-                            rep.kept.push(format!("f{fi} @{} Ldar {r}: anchor", y.off));
+                    Some(r) if load(r) && stmt => {
+                        match t1_dead_after(fnn, &an, k, &labels, &en, true) {
+                            // O9: the anchor of a statement whose owed load a deferred transfer
+                            // replaced; the flush after it materializes that transfer (`p, this;
+                            // debugger;`, as in arm 0).
+                            Ok(n)
+                                if t1_anchor(&an, n, &labels, &en, |s| {
+                                    s == ep9_bytecode::Register::RECEIVER || !load(s)
+                                }) =>
+                            {
+                                rep.kept.push(format!("f{fi} @{} Ldar {r}: anchor", y.off));
+                            }
+                            Ok(_) => diff(format!("@{} S> Ldar {r} is dead and is kept", y.off)),
+                            Err(why @ ("handler range" | "statement" | "label" | "mov")) => {
+                                rep.kept.push(format!("f{fi} @{} Ldar {r}: {why}", y.off));
+                            }
+                            Err(_) => {}
                         }
-                        Ok(_) => diff(format!("@{} S> Ldar {r} is dead and is kept", y.off)),
-                        Err(why @ ("handler range" | "statement" | "label" | "mov")) => {
-                            rep.kept.push(format!("f{fi} @{} Ldar {r}: {why}", y.off));
-                        }
-                        Err(_) => {}
-                    },
+                    }
                     // Arm 2 does not owe a binding `Ldar` that has an expression entry: it is
                     // emitted in place, as in arm 0, so that the next instruction keeps its
                     // source offset (INV-1).
                     Some(r)
                         if load(r)
                             && back[k].is_some_and(|i| expr0(a0[i].off))
-                            && t1_dead_after(fnn, &an, k, &labels, true) == Ok(k + 1) =>
+                            && t1_dead_after(fnn, &an, k, &labels, &en, true) == Ok(k + 1) =>
                     {
                         rep.kept.push(format!("f{fi} @{} Ldar {r}: expr", y.off));
                     }
@@ -2157,7 +2176,7 @@ pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) ->
                         if arm2
                             && r != ep9_bytecode::Register::RECEIVER
                             && load(r)
-                            && t1_dead_after(fnn, &an, k, &labels, true) == Ok(k + 1) =>
+                            && t1_dead_after(fnn, &an, k, &labels, &en, true) == Ok(k + 1) =>
                     {
                         diff(format!("@{} Ldar {r} is dead and is kept", y.off));
                     }
@@ -2804,11 +2823,13 @@ fn star_dst_compare(
         }
         let (fe, map) = star_dst_expand(fnn);
         let (x0, xe) = (t1_decode(f0), t1_decode(&fe));
+        // The offsets of a decoded function grow, so a binary search finds the one index that
+        // the linear search found.
         let index = |code: &[T1Insn], f: &ep9_bytecode::Function, off: u32| -> Option<usize> {
             if off as usize == f.bytecode.len() {
                 Some(code.len())
             } else {
-                code.iter().position(|i| i.off == off)
+                code.binary_search_by_key(&off, |i| i.off).ok()
             }
         };
         // (a) the instruction list, jumps and tables by target index.
@@ -2886,6 +2907,7 @@ fn star_dst_compare(
         }
         // (d) nothing is on the `Star` of a fused pair in arm 0.
         let labels = t1_labels(f0, &x0);
+        let e0 = t1_entries(f0);
         for &k in &fused_at {
             let Some(star) = x0.get(map[k] + 1) else {
                 continue;
@@ -2896,7 +2918,7 @@ fn star_dst_compare(
                     star.off
                 )));
             }
-            if f0.positions.iter().any(|p| p.bytecode_offset == star.off) {
+            if e0.all.contains(&star.off) {
                 dd.push(tag(format!(
                     "a position entry is on the Star at {} (INV-S2)",
                     star.off
@@ -2916,7 +2938,7 @@ fn star_dst_compare(
             if next != Opcode::Star || !star_family_load(load, family) || fused_pairs.contains(&j) {
                 continue;
             }
-            let why = if f0.positions.iter().any(|p| p.bytecode_offset == star_off) {
+            let why = if e0.all.contains(&star_off) {
                 "position"
             } else if s0 != OperandScale::Single || s1 != OperandScale::Single {
                 "scale"

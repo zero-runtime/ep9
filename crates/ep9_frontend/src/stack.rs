@@ -19,7 +19,7 @@
 //!
 //! | Bytes per unit | debug | release | worst form |
 //! |---|---|---|---|
-//! | oxc_parser, per pre-scan unit | 6,480 | 1,600 | debug: `spread-args` (macOS arm64, Linux arm64); release: `bracket-function` and `function-body-list-first` (Windows x86-64) |
+//! | oxc_parser, per pre-scan unit | 6,480 | 1,600 | debug: `spread-args` (macOS arm64, Linux arm64); release: `bracket-function` and `function-body-list-first` (Windows x86-64); T-A of CI runs 45405314681 and 45432455679 (the worker parse call) |
 //! | oxc regex parser, per group | 16,864 | 784 | `regex-named-group` (debug: macOS arm64, Linux arm64; release: Windows x86-64); weighted 4 units, `prescan::REGEX_WEIGHT` |
 //! | layer-2 depth pass, per AST level | 992 | 112 | debug: `bracket-array`; release: `class-heritage` (Windows x86-64) |
 //! | oxc_semantic, per AST level | 1,600 | 368 | debug: `bracket-array`; release: `class-heritage` (Windows x86-64) |
