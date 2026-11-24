@@ -80,7 +80,7 @@ byte_enum! {
         /// Named property load.
         ///
         /// - Opcodes: 0x21 `GetNamedProperty`, 0x22 `GetNamedPropertyFromSuper` (keyed on the
-        ///   lookup-start object), and the `load_slot` of 0x8f `GetIterator`.
+        ///   lookup-start object), 0x9e `GetNamedPropertyStar`, the `load_slot` of 0x8f `GetIterator`.
         /// - Runtime record: property IC.
         /// - Fact record: `PropertyFacts`: IC state, up to 4 cases (receiver `ShapeDesc`,
         ///   `Access`), value `TypeSet`.

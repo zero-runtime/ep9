@@ -1,6 +1,6 @@
 # iter-for-in: script (sloppy)
 # | function f(o) { var r = []; for (var k in o) r.push(k); for (let j in o) (() => j)(); for (o.p in o) ; }
-; ep9 bytecode, ABI 6
+; ep9 bytecode, ABI 7
 unit kind=script strict=false ts=none source_len=104 source=embedded hints=none
 source_hash=57889cda1f591c9d7d9f9edff58137c1bedd08e8d886fea5ed8ddddcfb4f089e
 strings (4):
@@ -36,74 +36,70 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
       5 E 0 (1:1)
      15 E 0 (1:1)
 function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] params=1 length=1 regs=11 range=0..104
-  code (161 bytes):
+  code (154 bytes):
       0 S> CreateEmptyArrayLiteral s0                   ; 6e 00
       2    Star r0                                      ; 0c 00
       4 S> Ldar a0                                      ; 0b fe
-      6    JumpIfUndefinedOrNull @54                    ; 87 30
+      6    JumpIfUndefinedOrNull @49                    ; 87 2b
       8 E> ToObject r2                                  ; 5b 02
      10 E> ForInEnumerate r2                            ; 8b 02
      12    ForInPrepare r3-r5, s1                       ; 8c 03 01
      15    LdaZero                                      ; 03
      16    Star r6                                      ; 0c 06
-     18    JumpIfForInDone @54, r6, r5                  ; 89 24 06 05
+     18    JumpIfForInDone @49, r6, r5                  ; 89 1f 06 05
      22 E> ForInNext r2, r6, r3-r4, s1                  ; 8d 02 06 03 01
-     27    JumpIfUndefined @48                          ; 85 15
+     27    JumpIfUndefined @43                          ; 85 10
      29    Star r1                                      ; 0c 01
      31    Star r7                                      ; 0c 07
-     33 S> Ldar r0                                      ; 0b 00
-     35 E> GetNamedProperty r0, k0, s2  ; k0 = String str2 "push" ; 21 00 00 02
-     39    Star r8                                      ; 0c 08
-     41    Ldar r1                                      ; 0b 01
-     43 E> CallProperty1 r8, r0, r1, s3                 ; 61 08 00 01 03
-     48    ForInStep r6                                 ; 8e 06
-     50    JumpLoop @18, [0], s4                        ; 7d 20 00 04
-     54 S> CreateBlockContext k1  ; k1 = Scope scope3   ; 76 01
-     56    PushContext r8                               ; 13 08
-     58    LdaTheHole                                   ; 07
-     59    StaCurrentContextSlot [0]                    ; 1b 00
-     61    Ldar a0                                      ; 0b fe
-     63    PopContext r8                                ; 14 08
-     65    JumpIfUndefinedOrNull @118                   ; 87 35
-     67 E> ToObject r2                                  ; 5b 02
-     69 E> ForInEnumerate r2                            ; 8b 02
-     71    ForInPrepare r3-r5, s5                       ; 8c 03 05
-     74    LdaZero                                      ; 03
-     75    Star r6                                      ; 0c 06
-     77    JumpIfForInDone @118, r6, r5                 ; 89 29 06 05
-     81 E> ForInNext r2, r6, r3-r4, s5                  ; 8d 02 06 03 05
-     86    JumpIfUndefined @112                         ; 85 1a
-     88    Star r7                                      ; 0c 07
-     90 E> CreateBlockContext k1  ; k1 = Scope scope3   ; 76 01
-     92    PushContext r9                               ; 13 09
-     94    LdaTheHole                                   ; 07
-     95    StaCurrentContextSlot [0]                    ; 1b 00
-     97    Ldar r7                                      ; 0b 07
-     99    StaCurrentContextSlot [0]                    ; 1b 00
-    101 S> CreateClosure k2, s6, #0x00  ; k2 = Function f2 ; 74 02 06 00
-    105    Star r10                                     ; 0c 0a
-    107 E> CallUndefinedReceiver0 r10, s7               ; 64 0a 07
-    110    PopContext r9                                ; 14 09
-    112    ForInStep r6                                 ; 8e 06
-    114    JumpLoop @77, [0], s8                        ; 7d 25 00 08
-    118 S> Ldar a0                                      ; 0b fe
-    120    JumpIfUndefinedOrNull @159                   ; 87 27
-    122 E> ToObject r2                                  ; 5b 02
-    124 E> ForInEnumerate r2                            ; 8b 02
-    126    ForInPrepare r3-r5, s9                       ; 8c 03 09
-    129    LdaZero                                      ; 03
-    130    Star r6                                      ; 0c 06
-    132    JumpIfForInDone @159, r6, r5                 ; 89 1b 06 05
-    136 E> ForInNext r2, r6, r3-r4, s9                  ; 8d 02 06 03 09
-    141    JumpIfUndefined @153                         ; 85 0c
-    143    Star r7                                      ; 0c 07
-    145    Ldar a0                                      ; 0b fe
-    147    Ldar r7                                      ; 0b 07
-    149 E> SetNamedProperty a0, k3, s10  ; k3 = String str3 "p" ; 24 fe 03 0a
-    153    ForInStep r6                                 ; 8e 06
-    155    JumpLoop @132, [0], s11                      ; 7d 17 00 0b
-    159    LdaUndefined                                 ; 05
-    160    Return                                       ; 92
+     33 S> GetNamedPropertyStar r0, k0, s2, r8  ; k0 = String str2 "push" ; 9e 00 00 02 08
+     38 E> CallProperty1 r8, r0, r1, s3                 ; 61 08 00 01 03
+     43    ForInStep r6                                 ; 8e 06
+     45    JumpLoop @18, [0], s4                        ; 7d 1b 00 04
+     49 S> CreateBlockContext k1  ; k1 = Scope scope3   ; 76 01
+     51    PushContext r8                               ; 13 08
+     53    LdaTheHole                                   ; 07
+     54    StaCurrentContextSlot [0]                    ; 1b 00
+     56    Ldar a0                                      ; 0b fe
+     58    PopContext r8                                ; 14 08
+     60    JumpIfUndefinedOrNull @113                   ; 87 35
+     62 E> ToObject r2                                  ; 5b 02
+     64 E> ForInEnumerate r2                            ; 8b 02
+     66    ForInPrepare r3-r5, s5                       ; 8c 03 05
+     69    LdaZero                                      ; 03
+     70    Star r6                                      ; 0c 06
+     72    JumpIfForInDone @113, r6, r5                 ; 89 29 06 05
+     76 E> ForInNext r2, r6, r3-r4, s5                  ; 8d 02 06 03 05
+     81    JumpIfUndefined @107                         ; 85 1a
+     83    Star r7                                      ; 0c 07
+     85 E> CreateBlockContext k1  ; k1 = Scope scope3   ; 76 01
+     87    PushContext r9                               ; 13 09
+     89    LdaTheHole                                   ; 07
+     90    StaCurrentContextSlot [0]                    ; 1b 00
+     92    Ldar r7                                      ; 0b 07
+     94    StaCurrentContextSlot [0]                    ; 1b 00
+     96 S> CreateClosure k2, s6, #0x00  ; k2 = Function f2 ; 74 02 06 00
+    100    Star r10                                     ; 0c 0a
+    102 E> CallUndefinedReceiver0 r10, s7               ; 64 0a 07
+    105    PopContext r9                                ; 14 09
+    107    ForInStep r6                                 ; 8e 06
+    109    JumpLoop @72, [0], s8                        ; 7d 25 00 08
+    113 S> Ldar a0                                      ; 0b fe
+    115    JumpIfUndefinedOrNull @152                   ; 87 25
+    117 E> ToObject r2                                  ; 5b 02
+    119 E> ForInEnumerate r2                            ; 8b 02
+    121    ForInPrepare r3-r5, s9                       ; 8c 03 09
+    124    LdaZero                                      ; 03
+    125    Star r6                                      ; 0c 06
+    127    JumpIfForInDone @152, r6, r5                 ; 89 19 06 05
+    131 E> ForInNext r2, r6, r3-r4, s9                  ; 8d 02 06 03 09
+    136    JumpIfUndefined @146                         ; 85 0a
+    138    Star r7                                      ; 0c 07
+    140    Ldar r7                                      ; 0b 07
+    142 E> SetNamedProperty a0, k3, s10  ; k3 = String str3 "p" ; 24 fe 03 0a
+    146    ForInStep r6                                 ; 8e 06
+    148    JumpLoop @127, [0], s11                      ; 7d 15 00 0b
+    152    LdaUndefined                                 ; 05
+    153    Return                                       ; 92
   constants (4):
       0 String str2 "push"
       1 Scope scope3
@@ -123,27 +119,26 @@ function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] p
      10 StoreNamed
      11 JumpLoop
   handlers (0):
-  positions (20):
+  positions (19):
       0 S 20 (1:21)
       4 S 28 (1:29)
       8 E 42 (1:43)
      10 E 28 (1:29)
      22 E 28 (1:29)
-     33 S 45 (1:46)
-     35 E 47 (1:48)
-     43 E 47 (1:48)
-     54 S 56 (1:57)
-     67 E 70 (1:71)
-     69 E 56 (1:57)
-     81 E 56 (1:57)
-     90 E 56 (1:57)
-    101 S 73 (1:74)
-    107 E 73 (1:74)
-    118 S 86 (1:87)
-    122 E 98 (1:99)
-    124 E 86 (1:87)
-    136 E 86 (1:87)
-    149 E 91 (1:92)
+     33 S 47 (1:48)
+     38 E 47 (1:48)
+     49 S 56 (1:57)
+     62 E 70 (1:71)
+     64 E 56 (1:57)
+     76 E 56 (1:57)
+     85 E 56 (1:57)
+     96 S 73 (1:74)
+    102 E 73 (1:74)
+    113 S 86 (1:87)
+    117 E 98 (1:99)
+    119 E 86 (1:87)
+    131 E 86 (1:87)
+    142 E 91 (1:92)
 function f2 arrow name=- parent=f1 outer_scope=scope3 flags=[simple-params] params=0 length=0 regs=0 range=74..81
   code (5 bytes):
       0 S> LdaCurrentContextSlot [0]                    ; 18 00

@@ -1,6 +1,6 @@
 # Research artifacts
 
-These are the research harnesses that the plan uses again, the decision inputs that later steps need, and the raw evidence of three rounds (`vm-lessons/`, `x86-ts-time/`, `m2-stuck/`). All other harnesses stayed in a session scratchpad and were not kept. The reports in `../` describe their results.
+These are the research harnesses that the plan uses again, the decision inputs that later steps need, and the raw evidence of four rounds (`vm-lessons/`, `x86-ts-time/`, `m2-stuck/`, `m2-month11-levers/`). All other harnesses stayed in a session scratchpad and were not kept. The reports in `../` describe their results.
 
 | Directory | What it does | Used by |
 |---|---|---|
@@ -11,6 +11,7 @@ These are the research harnesses that the plan uses again, the decision inputs t
 | `vm-lessons/` | Raw findings, per-system lessons and verify verdicts of the 2026-11-18 VM-lessons round (.NET, Kotlin, Dart; `findings.json`). See [vm-lessons/README.md](vm-lessons/README.md) | [../19-vm-aot-jit-lessons.md](../19-vm-aot-jit-lessons.md) Appendix A; the LRN-* follow-ups of R19 |
 | `x86-ts-time/` | The measured numbers of the 2026-11-19 x86 TS time round: the need per x86 TS cell, the Ir-to-time factor, real counters, the alignment A/B, the dead `Ldar` count, upstream cites and the lever sums (`findings.json`), and the month-10 reads (`month10.json`, 2026-11-21). See [x86-ts-time/README.md](x86-ts-time/README.md) | [../21-m2-x86-ts-time.md](../21-m2-x86-ts-time.md); plan v15 (DL M10-PLAN-D52) |
 | `m2-stuck/` | The numbers of the 2026-11-21 "why M2 is stuck" round: the ranked causes and verdicts, the cycle buckets against node, the box-neutral TS series, the month-10 lever ledger, the per-host TS cells, the gate and process costs, the orchestrator decisions D1-D7 and the X1 and X2 experiment numbers (`findings.json`). See [m2-stuck/README.md](m2-stuck/README.md) | [../22-m2-stuck-causes.md](../22-m2-stuck-causes.md); plan v16 |
+| `m2-month11-levers/` | The numbers of the 2026-11-24 month-11 lever round: the lever reads predicted against measured, the time per 1% of instructions and the cycles per removed unit, the Path B series, the cycle map that is left, the candidate sums, the parser debug-stack measurement, the process numbers and the R22 addendum (`findings.json` and 3 TSV tables). See [m2-month11-levers/README.md](m2-month11-levers/README.md) | [../23-m2-month11-levers.md](../23-m2-month11-levers.md); plan v17 |
 
 ## Build
 

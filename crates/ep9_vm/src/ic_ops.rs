@@ -132,7 +132,9 @@ impl Operation {
         use Operation as P;
         let bin = |op, imm| Some(P::Binary { op, imm });
         match op {
-            O::GetNamedProperty | O::GetNamedPropertyFromSuper => Some(P::LoadNamed),
+            O::GetNamedProperty | O::GetNamedPropertyFromSuper | O::GetNamedPropertyStar => {
+                Some(P::LoadNamed)
+            }
             O::SetNamedProperty => Some(P::StoreNamed),
             O::DefineNamedOwnProperty => Some(P::DefineNamed),
             O::LdaGlobal | O::LdaGlobalInsideTypeof => Some(P::LoadGlobal),

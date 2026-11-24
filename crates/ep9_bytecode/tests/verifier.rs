@@ -1130,3 +1130,74 @@ fn jump_offsets_are_unsigned_as_the_interpreter_reads_them() {
     assert_eq!(target(&code, 0), Some(0x8000_0000));
     assert_eq!(err(with_code(&code)), VerifyErrorKind::Jump(0));
 }
+
+// ---- ABI 7: the fused Star opcodes (STAR-DST probe) ----
+
+/// T7: the 3 fused opcodes take the rules of their operand kinds (the verifier is generic per
+/// kind): the load operands as in the load, and `dst` as the operand of `Star` (a register
+/// of the frame). f1 has r0..r2, a0..a1, k0 "x", k1 2.5, s0 LoadNamed, s1 BinaryOp and a
+/// largest scope of 2 slots.
+#[test]
+fn star_dst_opcode_rules() {
+    let reg = |v: i8| v as u8;
+    let named = O::GetNamedPropertyStar as u8;
+    // GetNamedPropertyStar r0, k0, s0, r1 (and dst = a1, dst = the object register).
+    verify(with_code(&[named, 0, 0, 0, 1, RET])).unwrap();
+    verify(with_code(&[named, 0, 0, 0, reg(-3), RET])).unwrap();
+    verify(with_code(&[named, 0, 0, 0, 0, RET])).unwrap();
+    assert_eq!(
+        err(with_code(&[named, 3, 0, 0, 1, RET])),
+        VerifyErrorKind::Register(0)
+    );
+    assert_eq!(
+        err(with_code(&[named, 0, 1, 0, 1, RET])),
+        VerifyErrorKind::ConstantOperand(1)
+    );
+    assert_eq!(
+        err(with_code(&[named, 0, 0, 1, 1, RET])),
+        VerifyErrorKind::FeedbackSlot(2)
+    );
+    assert_eq!(
+        err(with_code(&[named, 0, 0, 0, 3, RET])),
+        VerifyErrorKind::Register(3)
+    );
+    assert_eq!(
+        err(with_code(&[named, 0, 0, 0, reg(-4), RET])),
+        VerifyErrorKind::Register(3)
+    );
+    assert_eq!(
+        err(with_code(&[named, 0, 0, 0])),
+        VerifyErrorKind::Decode(DecodeError::Truncated(O::GetNamedPropertyStar))
+    );
+    // LdaCurrentContextSlotStar [1], r2.
+    let current = O::LdaCurrentContextSlotStar as u8;
+    verify(with_code(&[current, 1, 2, RET])).unwrap();
+    assert_eq!(
+        err(with_code(&[current, 2, 2, RET])),
+        VerifyErrorKind::Context(0)
+    );
+    assert_eq!(
+        err(with_code(&[current, 1, 3, RET])),
+        VerifyErrorKind::Register(1)
+    );
+    // LdaContextSlotStar r0, [1], depth 0, r2.
+    let outer = O::LdaContextSlotStar as u8;
+    verify(with_code(&[outer, 0, 1, 0, 2, RET])).unwrap();
+    assert_eq!(
+        err(with_code(&[outer, 3, 1, 0, 2, RET])),
+        VerifyErrorKind::Register(0)
+    );
+    assert_eq!(
+        err(with_code(&[outer, 0, 2, 0, 2, RET])),
+        err(with_code(&[O::LdaContextSlot as u8, 0, 2, 0, RET]))
+    );
+    assert_eq!(
+        err(with_code(&[outer, 0, 1, 0, 3, RET])),
+        VerifyErrorKind::Register(3)
+    );
+    // A prefix must be minimal, as for any opcode: Wide with one-byte values is refused.
+    assert_eq!(
+        err(with_code(&[O::Wide as u8, current, 1, 0, 2, 0, RET])),
+        VerifyErrorKind::NonMinimalScale
+    );
+}

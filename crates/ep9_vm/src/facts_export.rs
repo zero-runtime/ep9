@@ -273,6 +273,7 @@ fn slot_uses(fi: &FunctionInfo, code: &[u8], n: usize) -> Vec<SlotUse> {
         match insn.opcode {
             Opcode::GetNamedProperty
             | Opcode::GetNamedPropertyFromSuper
+            | Opcode::GetNamedPropertyStar
             | Opcode::SetNamedProperty
             | Opcode::DefineNamedOwnProperty
             | Opcode::LdaGlobal

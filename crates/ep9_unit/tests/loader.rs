@@ -325,8 +325,8 @@ fn the_object_model_is_the_same_with_and_without_a_loaded_unit() {
 // ---- M8-P4 A2-GATE: unit class constructors compiled from JS (MC-w29-8 step 2) --------------
 //
 // ```text
-// CLASSES --ep9_frontend--> B, D: `Ldar a0; CallUndefinedReceiver0 a0 (offset 2); ...`
-// text: a counting frame stub per function (count += 1; return call_any(cx, fp, 2, 0)),
+// CLASSES --ep9_frontend--> B, D: `CallUndefinedReceiver0 a0 (offset 0); ...`
+// text: a counting frame stub per function (count += 1; return call_any(cx, fp, CALL_AT, 0)),
 //   unwind form 1 of the host --TestUnit::encode--> unit bytes --check--> Load
 //   --Cx::run_script_installing_unit_code--> B and D installed (AotBaseline)
 // each case: the same script with no install and with the unit code: the same result, and
@@ -356,7 +356,7 @@ fn compile_src(src: &str) -> VerifiedUnit {
 }
 
 /// The bytecode offset of the one call of `B` and of `D` (the offset the frame stub passes).
-const CALL_AT: u32 = 2;
+const CALL_AT: u32 = 0;
 
 /// The opcodes of function `f` of `cu`, with their offsets.
 fn opcodes(cu: &CompiledUnit, f: u32) -> Vec<(u32, ep9_bytecode::Opcode)> {
@@ -588,15 +588,22 @@ fn class_isolate(counters: Option<&'static [AtomicU64; 2]>) -> Isolate {
         use ep9_bytecode::Opcode as O;
         let cu = unit.unit();
         let head = |name| opcodes(cu, index(cu, name))[..3].to_vec();
-        let want = |third| {
-            vec![
-                (0, O::Ldar),
+        assert_eq!(
+            head("B"),
+            [
                 (CALL_AT, O::CallUndefinedReceiver0),
-                (5, third),
+                (3, O::Return),
+                (4, O::LdaUndefined)
             ]
-        };
-        assert_eq!(head("B"), want(O::Return));
-        assert_eq!(head("D"), want(O::JumpIfUndefined));
+        );
+        assert_eq!(
+            head("D"),
+            [
+                (CALL_AT, O::CallUndefinedReceiver0),
+                (3, O::JumpIfUndefined),
+                (5, O::Return)
+            ]
+        );
     }
     let rows = iso
         .with_cx(|cx| {

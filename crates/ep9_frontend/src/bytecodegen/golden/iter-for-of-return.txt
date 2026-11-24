@@ -1,6 +1,6 @@
 # iter-for-of-return: script (sloppy)
 # | function f(a) { for (var x of a) return x; }
-; ep9 bytecode, ABI 6
+; ep9 bytecode, ABI 7
 unit kind=script strict=false ts=none source_len=44 source=embedded hints=none
 source_hash=6619225b317bc0e811e3300a749179feb8fc5b9ed01693cd040a9889b260671b
 strings (5):
@@ -34,74 +34,70 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
       5 E 0 (1:1)
      15 E 0 (1:1)
 function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] params=1 length=1 regs=12 range=0..44
-  code (151 bytes):
-      0 S> Ldar a0                                      ; 0b fe
-      2 E> GetIterator a0, s0, s1                       ; 8f fe 00 01
-      6    Star r1                                      ; 0c 01
-      8 E> GetNamedProperty r1, k0, s2  ; k0 = String str1 "next" ; 21 01 00 02
-     12    Star r2                                      ; 0c 02
-     14    LdaCurrentContext                            ; 15
-     15    Mov a0, r5                                   ; 0d fe 05
-     18    Star r7                                      ; 0c 07
-     20    LdaTrue                                      ; 08
-     21    Star r3                                      ; 0c 03
-     23 E> CallProperty0 r2, r1, s3                     ; 60 02 01 03
-     27    Star r4                                      ; 0c 04
-     29    JumpIfJSReceiver @36                         ; 88 07
-     31 E> CallRuntime ThrowIteratorResultNotAnObject, r4 ; 68 01 00 04 01
-     36 E> GetNamedProperty r4, k1, s4  ; k1 = String str2 "done" ; 21 04 01 04
-     40    JumpIfToBooleanTrue @69                      ; 81 1d
-     42 E> GetNamedProperty r4, k2, s5  ; k2 = String str3 "value" ; 21 04 02 05
-     46    Star r4                                      ; 0c 04
-     48    LdaFalse                                     ; 09
-     49    Star r3                                      ; 0c 03
-     51    Mov r4, r0                                   ; 0d 04 00
-     54 S> Ldar r0                                      ; 0b 00
-     56    LdaSmi [1]                                   ; 04 01
-     58    Mov r0, r6                                   ; 0d 00 06
-     61    Star r5                                      ; 0c 05
-     63    Jump @80                                     ; 7e 11
-     65    JumpLoop @20, [0], s6                        ; 7d 2d 00 06
-     69    LdaSmi [-1]                                  ; 04 ff
-     71    Star r5                                      ; 0c 05
-     73    Jump @80                                     ; 7e 07
-     75    Star r6                                      ; 0c 06
-     77    LdaZero                                      ; 03
-     78    Star r5                                      ; 0c 05
-     80    LdaTheHole                                   ; 07
-     81    SetPendingMessage                            ; 93
-     82    Star r8                                      ; 0c 08
-     84    Ldar r3                                      ; 0b 03
-     86    JumpIfTrue @133                              ; 7f 2f
-     88    LdaZero                                      ; 03
-     89    TestReferenceEqual r5                        ; 51 05
-     91    JumpIfTrue @116                              ; 7f 19
-     93 E> GetNamedProperty r1, k3, s7  ; k3 = String str4 "return" ; 21 01 03 07
-     97    JumpIfUndefinedOrNull @133                   ; 87 24
-     99    Star r9                                      ; 0c 09
-    101 E> CallProperty0 r9, r1, s8                     ; 60 09 01 08
-    105    JumpIfJSReceiver @133                        ; 88 1c
-    107    Star r10                                     ; 0c 0a
-    109 E> CallRuntime ThrowIteratorResultNotAnObject, r10 ; 68 01 00 0a 01
-    114    Jump @133                                    ; 7e 13
-    116    LdaCurrentContext                            ; 15
-    117    Star r11                                     ; 0c 0b
-    119 E> GetNamedProperty r1, k3, s7  ; k3 = String str4 "return" ; 21 01 03 07
-    123    JumpIfUndefinedOrNull @133                   ; 87 0a
-    125    Star r9                                      ; 0c 09
-    127 E> CallProperty0 r9, r1, s8                     ; 60 09 01 08
-    131    Jump @133                                    ; 7e 02
-    133    Ldar r8                                      ; 0b 08
-    135    SetPendingMessage                            ; 93
-    136    Ldar r5                                      ; 0b 05
-    138    SwitchOnSmi k4, [0]  ; k4 = JumpTable [+5, +8] ; 8a 04 00
-    141    Jump @149                                    ; 7e 08
-    143    Ldar r6                                      ; 0b 06
-    145 E> ReThrow                                      ; 91
-    146    Ldar r6                                      ; 0b 06
-    148    Return                                       ; 92
-    149    LdaUndefined                                 ; 05
-    150    Return                                       ; 92
+  code (145 bytes):
+      0 S> GetIterator a0, s0, s1                       ; 8f fe 00 01
+      4    Star r1                                      ; 0c 01
+      6 E> GetNamedPropertyStar r1, k0, s2, r2  ; k0 = String str1 "next" ; 9e 01 00 02 02
+     11    LdaCurrentContext                            ; 15
+     12    Mov a0, r5                                   ; 0d fe 05
+     15    Star r7                                      ; 0c 07
+     17    LdaTrue                                      ; 08
+     18    Star r3                                      ; 0c 03
+     20 E> CallProperty0 r2, r1, s3                     ; 60 02 01 03
+     24    Star r4                                      ; 0c 04
+     26    JumpIfJSReceiver @33                         ; 88 07
+     28 E> CallRuntime ThrowIteratorResultNotAnObject, r4 ; 68 01 00 04 01
+     33 E> GetNamedProperty r4, k1, s4  ; k1 = String str2 "done" ; 21 04 01 04
+     37    JumpIfToBooleanTrue @63                      ; 81 1a
+     39 E> GetNamedPropertyStar r4, k2, s5, r4  ; k2 = String str3 "value" ; 9e 04 02 05 04
+     44    LdaFalse                                     ; 09
+     45    Star r3                                      ; 0c 03
+     47    Mov r4, r0                                   ; 0d 04 00
+     50 S> LdaSmi [1]                                   ; 04 01
+     52    Mov r0, r6                                   ; 0d 00 06
+     55    Star r5                                      ; 0c 05
+     57    Jump @74                                     ; 7e 11
+     59    JumpLoop @17, [0], s6                        ; 7d 2a 00 06
+     63    LdaSmi [-1]                                  ; 04 ff
+     65    Star r5                                      ; 0c 05
+     67    Jump @74                                     ; 7e 07
+     69    Star r6                                      ; 0c 06
+     71    LdaZero                                      ; 03
+     72    Star r5                                      ; 0c 05
+     74    LdaTheHole                                   ; 07
+     75    SetPendingMessage                            ; 93
+     76    Star r8                                      ; 0c 08
+     78    Ldar r3                                      ; 0b 03
+     80    JumpIfTrue @127                              ; 7f 2f
+     82    LdaZero                                      ; 03
+     83    TestReferenceEqual r5                        ; 51 05
+     85    JumpIfTrue @110                              ; 7f 19
+     87 E> GetNamedProperty r1, k3, s7  ; k3 = String str4 "return" ; 21 01 03 07
+     91    JumpIfUndefinedOrNull @127                   ; 87 24
+     93    Star r9                                      ; 0c 09
+     95 E> CallProperty0 r9, r1, s8                     ; 60 09 01 08
+     99    JumpIfJSReceiver @127                        ; 88 1c
+    101    Star r10                                     ; 0c 0a
+    103 E> CallRuntime ThrowIteratorResultNotAnObject, r10 ; 68 01 00 0a 01
+    108    Jump @127                                    ; 7e 13
+    110    LdaCurrentContext                            ; 15
+    111    Star r11                                     ; 0c 0b
+    113 E> GetNamedProperty r1, k3, s7  ; k3 = String str4 "return" ; 21 01 03 07
+    117    JumpIfUndefinedOrNull @127                   ; 87 0a
+    119    Star r9                                      ; 0c 09
+    121 E> CallProperty0 r9, r1, s8                     ; 60 09 01 08
+    125    Jump @127                                    ; 7e 02
+    127    Ldar r8                                      ; 0b 08
+    129    SetPendingMessage                            ; 93
+    130    Ldar r5                                      ; 0b 05
+    132    SwitchOnSmi k4, [0]  ; k4 = JumpTable [+5, +8] ; 8a 04 00
+    135    Jump @143                                    ; 7e 08
+    137    Ldar r6                                      ; 0b 06
+    139 E> ReThrow                                      ; 91
+    140    Ldar r6                                      ; 0b 06
+    142    Return                                       ; 92
+    143    LdaUndefined                                 ; 05
+    144    Return                                       ; 92
   constants (5):
       0 String str1 "next"
       1 String str2 "done"
@@ -119,20 +115,19 @@ function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] p
       7 LoadNamed
       8 Call
   handlers (2):
-        [15, 69) -> @75 context=r7 uncaught
-        [117, 131) -> @133 context=r11 caught
-  positions (14):
-      0 S 16 (1:17)
-      2 E 30 (1:31)
-      8 E 16 (1:17)
-     23 E 16 (1:17)
-     31 E 16 (1:17)
-     36 E 16 (1:17)
-     42 E 16 (1:17)
-     54 S 33 (1:34)
-     93 E 16 (1:17)
-    101 E 16 (1:17)
-    109 E 16 (1:17)
-    119 E 16 (1:17)
-    127 E 16 (1:17)
-    145 E 16 (1:17)
+        [12, 63) -> @69 context=r7 uncaught
+        [111, 125) -> @127 context=r11 caught
+  positions (13):
+      0 S 30 (1:31)
+      6 E 16 (1:17)
+     20 E 16 (1:17)
+     28 E 16 (1:17)
+     33 E 16 (1:17)
+     39 E 16 (1:17)
+     50 S 33 (1:34)
+     87 E 16 (1:17)
+     95 E 16 (1:17)
+    103 E 16 (1:17)
+    113 E 16 (1:17)
+    121 E 16 (1:17)
+    139 E 16 (1:17)

@@ -785,6 +785,20 @@ fn statement_positions(f: &ep9_bytecode::Function) -> Vec<u32> {
         .collect()
 }
 
+/// Guard v2 (LDAR-ELIDE): the same number of statement entries, and each optimized one has the
+/// plain statement offset or the offset of a plain entry before the next plain statement entry.
+fn statements_moved_inside(fp: &ep9_bytecode::Function, fo: &ep9_bytecode::Function) -> bool {
+    let sp: Vec<usize> = (0..fp.positions.len())
+        .filter(|&k| fp.positions[k].is_statement)
+        .collect();
+    let so = statement_positions(fo);
+    sp.len() == so.len()
+        && sp.iter().zip(&so).enumerate().all(|(n, (&k, &o))| {
+            let end = sp.get(n + 1).copied().unwrap_or(fp.positions.len());
+            fp.positions[k..end].iter().any(|e| e.source_offset == o)
+        })
+}
+
 /// Constants equal, except jump tables (they hold code offsets).
 fn same_constants(a: &[ep9_bytecode::Constant], b: &[ep9_bytecode::Constant]) -> bool {
     use ep9_bytecode::Constant;
@@ -795,18 +809,28 @@ fn same_constants(a: &[ep9_bytecode::Constant], b: &[ep9_bytecode::Constant]) ->
         })
 }
 
-/// The checks of one source text: the plain and the optimized unit have the same binding
-/// loads and stores (H24 R4), the same other instructions in the same order, the same
-/// statement positions (H24 R5) and the same side tables except code offsets.
+/// The checks of one source text (guard v2: plain against the merged mode): the plain and the
+/// optimized unit have the same binding loads and stores, except the dead loads that T1 proves
+/// (H24 R4), the same other instructions in the same order, the same statement entries, each
+/// inside its statement (H24 R5), and the same side tables except code offsets.
 pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
     let (plain, opt, named) = match super::compile_both(src, opts) {
         Ok(t) => t,
         Err(e) => return vec![format!("compile: {e}")],
     };
-    let (p, o) = (plain.unit(), opt.unit());
+    // STAR-DST (rule O13): the optimized unit through the expansion, so a fused instruction
+    // equals its pair (the default fuses the set; the expansion gives each pair back).
+    let opt = star_dst_expand_unit(opt.unit());
+    let (p, o) = (plain.unit(), &opt);
     let mut out = Vec::new();
+    // Guard v2 (LDAR-ELIDE, M11-P0): plain against the merged mode. A binding load may be
+    // missing only if T1 (arm 0 against the merged mode) proves it dead, and a statement entry
+    // may move inside its statement.
+    let t1 = ldar_elision_differences(src, opts, super::regopt::DEFAULT);
+    out.extend(t1.differences.iter().map(|d| format!("LDAR-ELIDE T1: {d}")));
     for (i, (fp, fo)) in p.functions.iter().zip(&o.functions).enumerate() {
         let n = named[i];
+        let mut dead: Vec<String> = t1.dropped.get(i).cloned().unwrap_or_default();
         let (ap, ao) = (binding_accesses(fp, n), binding_accesses(fo, n));
         // Stores and variable accesses are the same.
         let fixed = |v: &[String]| -> Vec<String> {
@@ -821,8 +845,9 @@ pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
                 "f{i}: binding stores or variable accesses differ (H24 R4)"
             ));
         }
-        // Each `Ldar` and `Mov` from a binding stays (regopt O2). The optimizer may add more:
-        // it reads a binding that holds a temporary's value (O4, O5).
+        // Each `Mov` from a binding, and each `Ldar` from one that T1 does not prove dead, stays
+        // (regopt O2). The optimizer may add more: it reads a binding that holds a temporary's
+        // value (O4, O5).
         let mut extra: Vec<&String> = ao.iter().collect();
         for a in ap
             .iter()
@@ -832,14 +857,20 @@ pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
                 Some(at) => {
                     extra.remove(at);
                 }
-                None => out.push(format!("f{i}: a binding load is gone (H24 R4): {a}")),
+                None => match dead.iter().position(|x| x == a) {
+                    // T1 proved this load dead (LDAR-ELIDE O2).
+                    Some(at) => {
+                        dead.remove(at);
+                    }
+                    None => out.push(format!("f{i}: a binding load is gone (H24 R4): {a}")),
+                },
             }
         }
         if non_transfers(fp) != non_transfers(fo) {
             out.push(format!("f{i}: instructions other than transfers differ"));
         }
-        if statement_positions(fp) != statement_positions(fo) {
-            out.push(format!("f{i}: statement positions differ"));
+        if !statements_moved_inside(fp, fo) {
+            out.push(format!("f{i}: statement positions differ (guard v2)"));
         }
         if fp.register_count != fo.register_count
             || !same_constants(&fp.constants, &fo.constants)
@@ -864,9 +895,10 @@ pub(crate) fn regopt_differences(src: &str, opts: SourceOpts) -> Vec<String> {
     out
 }
 
-/// V12-D46 guard: every golden case (the H24 R4 goldens among them, for example `var-closure`
-/// and `assign-const`) keeps every binding load and store of its source with the register
-/// optimizer, and the optimizer changes only transfers.
+/// V12-D46 guard, v2 (guard v2: plain against the merged mode, M11-P0): every golden case (the
+/// H24 R4 goldens among them, for example `var-closure` and `assign-const`) keeps every binding
+/// store and every binding load whose value is read with the register optimizer, and the
+/// optimizer changes only transfers.
 #[test]
 fn register_optimizer_keeps_binding_loads_and_stores() {
     let mut failures = Vec::new();
@@ -1030,6 +1062,53 @@ fn golden_cases_have_a_consistent_context_chain() {
         }
     }
     assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
+/// The context check reads the 2 fused context loads (STAR-DST, rule O13): a 2-hop closure
+/// case with the slot operand of its first `LdaContextSlotStar` and of its first
+/// `LdaCurrentContextSlotStar` set to slot 5, which their target scopes (1 slot each) do not
+/// have. `big` has 8 context slots, so the verifier keeps the unit; the check reports each.
+#[test]
+fn context_check_reads_the_fused_context_loads() {
+    let src = "function big() { var v0 = 0, v1 = 1, v2 = 2, v3 = 3, v4 = 4, v5 = 5, v6 = 6, \
+               v7 = 7; return function () { return v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7; }; }\n\
+               function outer() { var a = 1; function mid() { var m = 2; function deep() { \
+               var w = 3; function z() { return w; } var t = a; var u = w; \
+               return t + u + m + z(); } return deep; } return mid; }";
+    let vu = compile_case(Sloppy, src).unwrap();
+    assert!(super::ctx_check::context_errors(&vu).is_empty());
+    let mut u = vu.unit().clone();
+    let want = ep9_bytecode::UnitString::new("deep");
+    let deep = (0..u.functions.len())
+        .find(|&f| u.functions[f].name.is_some_and(|n| *u.string(n) == want))
+        .expect("deep");
+    let code = &mut u.functions[deep].bytecode;
+    // (opcode, the byte offset of its slot operand)
+    let mut patched = Vec::new();
+    for (op, slot_at) in [
+        (Opcode::LdaContextSlotStar, 2),
+        (Opcode::LdaCurrentContextSlotStar, 1),
+    ] {
+        let at = ep9_bytecode::Instructions::new(code)
+            .map(|i| i.expect("decodes"))
+            .find(|i| i.opcode == op)
+            .map(|i| i.offset)
+            .unwrap_or_else(|| panic!("a {op:?} in deep"));
+        let k = at as usize + slot_at;
+        assert_eq!(code[k], 0, "{op:?}: slot 0 (a one-byte operand)");
+        code[k] = 5;
+        patched.push((op, at));
+    }
+    let vu = ep9_bytecode::verify(u).expect("slot 5 is in the verifier range");
+    let errors = super::ctx_check::context_errors(&vu);
+    for (op, at) in patched {
+        let head = format!("f{deep} @{at} {op:?}: slot 5 not in scope");
+        assert!(
+            errors.iter().any(|e| e.starts_with(&head)),
+            "{head}: {errors:?}"
+        );
+    }
+    assert_eq!(errors.len(), 2, "{errors:?}");
 }
 
 /// IteratorClose with a throw completion keeps the original exception even when the
@@ -1331,4 +1410,1908 @@ fn synthetic_class_bindings_live_in_the_class_context() {
         ]
     );
     assert!(class.needs_context);
+}
+
+// ---- LDAR-ELIDE: dead binding `Ldar` (regopt rules O2, O9, O12; merged as arm 2, M11-P0) ----
+
+use super::regopt::Mode as Arm;
+
+/// The 15 stack-trace cases of the design (`t3.js`; the offsets of the expected texts below are
+/// offsets in this text).
+const LDAR_T3: &str = r#""use strict";
+function show(tag, f) { try { f(); print(tag, "no throw"); } catch (e) { var s = String(e && e.stack).split("\n"); print(tag, "|", s[0], "|", s[1], "|", s[2]); } }
+function c1() {
+  this.a;
+}
+function c2() {
+  return this.a.b;
+}
+function c3() {
+  this.m(1);
+}
+function c4() {
+  this.a = 1;
+}
+function c5() {
+  var k = 1;
+  this
+    .a;
+}
+function c6() {
+  try { this.a; } finally { k6 = 1; }
+}
+var k6;
+function c7(p) {
+  p.x;
+}
+function c8(p) {
+  p.m();
+}
+class G { get g() { throw new Error("getter"); } c9() { this.g; } c10() { let v = this.g + 1; return v; } c11(p) { p; this.g; } }
+function* c12() { this.a; yield 1; }
+function c13(p) { if (p) { this.q.r = 2; } }
+function c14(p) { for (var i = 0; i < 1; i++) this.a; }
+function c15(p) { p.x = this; this.a; }
+show("c1 this.a; (this undefined)", c1);
+show("c2 return this.a.b", c2);
+show("c3 this.m(1)", c3);
+show("c4 this.a = 1", c4);
+show("c5 this\\n.a", c5);
+show("c6 try this.a", c6);
+show("c7 p.x; (param)", c7);
+show("c8 p.m(); (param)", c8);
+show("c9 this.g getter", () => new G().c9());
+show("c10 let v = this.g + 1", () => new G().c10());
+show("c11 p; this.g;", () => new G().c11(1));
+show("c12 generator this.a", () => c12().next());
+show("c13 this.q.r = 2", () => c13.call({}, 1));
+show("c14 loop this.a", c14);
+show("c15 p.x = this; this.a", () => c15({}));
+"#;
+
+/// Route LDAR-A1-MOV-TEXT (reduced from lebab f3179): an owed `Ldar i` comes before a `Mov`
+/// that the replay makes for an operand (the key of `u[e++] = i`), and the next instruction
+/// (`SetKeyedProperty`) reads the accumulator. Rule O2 emits the owed load before that `Mov`.
+const LDAR_MOV: &str = "function mv(n, i) { var e = 0, u = []; i && (u[e++] = i); return u; }";
+
+/// One unit per arm, from one scope analysis.
+fn arm_units(src: &str, opts: SourceOpts, arms: &[Arm]) -> Vec<VerifiedUnit> {
+    super::compile_modes(src, opts, arms)
+        .unwrap_or_else(|e| panic!("{e}"))
+        .0
+}
+
+/// The code lines and the position entries of the function named `name`, one per line, with
+/// no byte column and no constant comment ("0 S> GetNamedProperty <this>, k0, s0", then
+/// "| 0 S 201 (4:8)").
+fn arm_listing(unit: &VerifiedUnit, name: &str) -> String {
+    let text = ep9_bytecode::disassemble(unit.unit());
+    let head = format!("name=\"{name}\" ");
+    let body = text
+        .split("\nfunction ")
+        .find(|f| f.lines().next().is_some_and(|l| l.contains(&head)))
+        .unwrap_or_else(|| panic!("no function {name}"));
+    let mut out = Vec::new();
+    let mut section = "";
+    for line in body.lines().skip(1) {
+        let t = line.trim();
+        if !line.starts_with("    ") {
+            section = t.split(' ').next().unwrap_or("");
+            continue;
+        }
+        let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        match section {
+            "code" => {
+                let t = t.rsplit_once(" ; ").map_or(t, |(a, _)| a);
+                let t = t.split_once("  ;").map_or(t, |(a, _)| a);
+                out.push(words(t));
+            }
+            "positions" => out.push(format!("| {}", words(t))),
+            _ => {}
+        }
+    }
+    out.join("\n")
+}
+
+/// S1b: the expected texts of the design (section 3.2), positions too. Arm 2 gives the same
+/// text for these functions (they have no other dead binding load), except that arm 2 (the
+/// default) has rule O13 (STAR-DST): it fuses the `GetNamedProperty` + `Star r0` pair of c8.
+#[test]
+fn ldar_elide_expected_texts() {
+    let strict = SourceOpts::script(Strictness::Strict);
+    let units = arm_units(LDAR_T3, strict, &[Arm::Arm1, Arm::Arm2]);
+    let cases: &[(&str, &str)] = &[
+        (
+            "c1",
+            "0 S> GetNamedProperty <this>, k0, s0\n4 LdaUndefined\n5 Return\n| 0 S 201 (4:8)",
+        ),
+        (
+            "c4",
+            "0 S> LdaSmi [1]\n2 E> SetNamedProperty <this>, k0, s0\n6 LdaUndefined\n7 Return\n\
+             | 0 S 292 (13:3)\n| 2 E 292 (13:3)",
+        ),
+        (
+            "c5",
+            "0 S> LdaSmi [1]\n2 Star r0\n4 S> GetNamedProperty <this>, k0, s0\n8 LdaUndefined\n\
+             9 Return\n| 0 S 328 (16:7)\n| 4 S 347 (18:6)",
+        ),
+        (
+            "c7",
+            "0 S> GetNamedProperty a0, k0, s0\n4 LdaUndefined\n5 Return\n| 0 S 435 (25:3)",
+        ),
+        (
+            "c8",
+            "0 S> GetNamedProperty a0, k0, s0\n4 Star r0\n6 E> CallProperty0 r0, a0, s1\n\
+             10 LdaUndefined\n11 Return\n| 0 S 463 (28:5)\n| 6 E 463 (28:5)",
+        ),
+        (
+            "c11",
+            "0 S> Ldar a0\n2 S> GetNamedProperty <this>, k0, s0\n6 LdaUndefined\n7 Return\n\
+             | 0 S 585 (30:116)\n| 2 S 593 (30:124)",
+        ),
+        (
+            "c15",
+            "0 S> Ldar <this>\n2 E> SetNamedProperty a0, k0, s0\n\
+             6 S> GetNamedProperty <this>, k1, s1\n10 LdaUndefined\n11 Return\n\
+             | 0 S 756 (34:19)\n| 2 E 756 (34:19)\n| 6 S 773 (34:36)",
+        ),
+    ];
+    // Arm 2, c8: the fused pair at offset 0; the offsets after it are 1 less.
+    let c8_fused = "0 S> GetNamedPropertyStar a0, k0, s0, r0\n5 E> CallProperty0 r0, a0, s1\n\
+                    9 LdaUndefined\n10 Return\n| 0 S 463 (28:5)\n| 5 E 463 (28:5)";
+    let mut failures = Vec::new();
+    for (arm, unit) in ["arm 1", "arm 2"].iter().zip(&units) {
+        for &(name, want) in cases {
+            let want = if (*arm, name) == ("arm 2", "c8") {
+                c8_fused
+            } else {
+                want
+            };
+            let got = arm_listing(unit, name);
+            if got != want {
+                failures.push(format!("{arm} {name}:\n{got}\n-- want --\n{want}"));
+            }
+        }
+        // c6: a throwing instruction inside a handler range keeps the load (O7).
+        let c6 = arm_listing(unit, "c6");
+        if !c6.contains("3 S> Ldar <this>\n5 E> GetNamedProperty <this>, k0, s0") {
+            failures.push(format!("{arm} c6:\n{c6}"));
+        }
+    }
+    let sloppy = SourceOpts::script(Strictness::Sloppy);
+    let extra = "function c16(p) { this.a = p; }\nfunction r1() { return this; }\n\
+                 function x1() { var x; x = this; return x; }\nfunction q1(p, q) { p, this; q; }";
+    let units = arm_units(extra, sloppy, &[Arm::Arm1, Arm::Arm2]);
+    let cases: &[(&str, &str)] = &[
+        (
+            "c16",
+            "0 S> Ldar a0\n2 E> SetNamedProperty <this>, k0, s0\n6 LdaUndefined\n7 Return\n\
+             | 0 S 18 (1:19)\n| 2 E 18 (1:19)",
+        ),
+        (
+            "r1",
+            "0 S> Ldar <this>\n2 Return\n3 LdaUndefined\n4 Return\n| 0 S 48 (2:17)",
+        ),
+        (
+            "x1",
+            "0 S> Ldar <this>\n2 Star r0\n4 S> Ldar r0\n6 Return\n7 LdaUndefined\n8 Return\n\
+             | 0 S 86 (3:24)\n| 4 S 96 (3:34)",
+        ),
+        (
+            "q1",
+            "0 S> Ldar a0\n2 S> LdaUndefined\n3 Return\n| 0 S 128 (4:21)\n| 2 S 137 (4:30)",
+        ),
+    ];
+    for (arm, unit) in ["arm 1", "arm 2"].iter().zip(&units) {
+        for &(name, want) in cases {
+            let got = arm_listing(unit, name);
+            if got != want {
+                failures.push(format!("{arm} {name}:\n{got}\n-- want --\n{want}"));
+            }
+        }
+    }
+    // The Mov case (O2): arm 1 does not owe `Ldar a1` (no statement position) and emits it in
+    // place; arm 2 owes it and emits it before `Mov r4, r3`. Arm 2 also drops the dead binding
+    // load `Ldar r1` (the object, class B-N).
+    let units = arm_units(LDAR_MOV, sloppy, &[Arm::Arm1, Arm::Arm2]);
+    let head =
+        "0 S> LdaZero\n1 Star r0\n3 S> CreateEmptyArrayLiteral s0\n5 Star r1\n7 S> Ldar a1\n";
+    let want1 = format!(
+        "{head}9 JumpIfToBooleanFalse @34\n11 Ldar r1\n13 Ldar r0\n15 E> ToNumeric s1\n\
+         17 Star r4\n19 E> Inc s1\n21 Star r0\n23 Ldar a1\n25 Mov r4, r3\n\
+         28 E> SetKeyedProperty r1, r3, s2\n32 Ldar a1\n34 S> Ldar r1\n36 Return\n\
+         37 LdaUndefined\n38 Return\n| 0 S 24 (1:25)\n| 3 S 31 (1:32)\n| 7 S 39 (1:40)\n\
+         | 15 E 47 (1:48)\n| 19 E 47 (1:48)\n| 28 E 45 (1:46)\n| 34 S 58 (1:59)"
+    );
+    let want2 = format!(
+        "{head}9 JumpIfToBooleanFalse @32\n11 Ldar r0\n13 E> ToNumeric s1\n15 Star r4\n\
+         17 E> Inc s1\n19 Star r0\n21 Ldar a1\n23 Mov r4, r3\n\
+         26 E> SetKeyedProperty r1, r3, s2\n30 Ldar a1\n32 S> Ldar r1\n34 Return\n\
+         35 LdaUndefined\n36 Return\n| 0 S 24 (1:25)\n| 3 S 31 (1:32)\n| 7 S 39 (1:40)\n\
+         | 13 E 47 (1:48)\n| 17 E 47 (1:48)\n| 26 E 45 (1:46)\n| 32 S 58 (1:59)"
+    );
+    for ((arm, unit), want) in ["arm 1", "arm 2"].iter().zip(&units).zip([want1, want2]) {
+        let got = arm_listing(unit, "mv");
+        if got != want {
+            failures.push(format!("{arm} mv:\n{got}\n-- want --\n{want}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// The default is arm 2 (M11-P0, DL M11-P0-LDAR-VERDICT): every golden case gives the same
+/// bytes through [`compile_case`] and in arm 2. Arm 0 is the test-only reference of T1: the
+/// m10-p5 bytecode (the octane-typescript dump sha256 288c4ded...).
+#[test]
+fn ldar_elide_default_is_arm2() {
+    for &(name, mode, src) in CASES {
+        let a2 = arm_units(src, mode.opts(), &[Arm::Arm2]);
+        let default = compile_case(mode, src).unwrap();
+        assert_eq!(a2[0].to_bytes(), default.to_bytes(), "{name}");
+    }
+}
+
+/// One decoded instruction for T1.
+struct T1Insn {
+    off: u32,
+    op: Opcode,
+    /// The opcode and every operand other than a jump operand.
+    text: String,
+    target: Option<u32>,
+    /// The targets of a jump table (a `SWITCH` opcode), in table order.
+    table: Vec<u32>,
+    ldar: Option<ep9_bytecode::Register>,
+}
+
+fn t1_decode(f: &ep9_bytecode::Function) -> Vec<T1Insn> {
+    use ep9_bytecode::{Constant, OperandKind as K};
+    let mut out = Vec::new();
+    for insn in ep9_bytecode::Instructions::new(&f.bytecode) {
+        let insn = insn.expect("verified code decodes");
+        let mut text = format!("{:?}", insn.opcode);
+        let mut table = Vec::new();
+        for k in 0..insn.operand_count() {
+            if !matches!(insn.operand_kind(k), K::JumpFwd | K::JumpBack) {
+                write!(text, " {}", insn.operand(k)).unwrap();
+            }
+            if insn.opcode.info().flags.contains(OpcodeFlags::SWITCH)
+                && insn.operand_kind(k) == K::Const
+                && let Some(Constant::JumpTable(t)) = f.constants.get(insn.operand(k) as usize)
+            {
+                table.extend(t.iter().map(|e| insn.offset + e));
+            }
+        }
+        out.push(T1Insn {
+            off: insn.offset,
+            op: insn.opcode,
+            text,
+            target: insn.jump_target(),
+            table,
+            ldar: (insn.opcode == Opcode::Ldar).then(|| insn.register(0)),
+        });
+    }
+    out
+}
+
+/// Offsets that a jump, a jump table, a handler target or a handler-range edge names.
+fn t1_labels(f: &ep9_bytecode::Function, code: &[T1Insn]) -> std::collections::BTreeSet<u32> {
+    use ep9_bytecode::{Constant, OperandKind as K};
+    let mut out: std::collections::BTreeSet<u32> = code.iter().filter_map(|i| i.target).collect();
+    for h in &f.handlers {
+        out.extend([h.start, h.end, h.target]);
+    }
+    for insn in ep9_bytecode::Instructions::new(&f.bytecode) {
+        let insn = insn.expect("verified code decodes");
+        if !insn.opcode.info().flags.contains(OpcodeFlags::SWITCH) {
+            continue;
+        }
+        for k in 0..insn.operand_count() {
+            if insn.operand_kind(k) == K::Const
+                && let Some(Constant::JumpTable(t)) = f.constants.get(insn.operand(k) as usize)
+            {
+                out.extend(t.iter().map(|e| insn.offset + e));
+            }
+        }
+    }
+    out
+}
+
+/// The source offset that covers `off` (`BC/positions.rs` `position_at`: the last entry at or
+/// before it).
+fn t1_covering(f: &ep9_bytecode::Function, off: u32) -> Option<u32> {
+    f.positions
+        .iter()
+        .take_while(|p| p.bytecode_offset <= off)
+        .last()
+        .map(|p| p.source_offset)
+}
+
+/// Why the load at `code[k]` is not dead (rule L1, with L2: `Mov` instructions may come first),
+/// or `Ok(n)`: `code[n]` writes the accumulator and does not read it. With `o7` (a load that
+/// the arm kept), a throwing `code[n]` inside a handler range is a reason too (rule O2 emits the
+/// owed load there; the load is still dead: a handler gets the exception in the accumulator),
+/// and so is a `Mov` run before the write (rule O2 emits the owed load before an emitted `Mov`). A label or a
+/// statement entry is a reason on every instruction of the scan with `o7`, and only on
+/// `code[k + 1]` without it.
+fn t1_dead_after(
+    f: &ep9_bytecode::Function,
+    code: &[T1Insn],
+    k: usize,
+    labels: &std::collections::BTreeSet<u32>,
+    o7: bool,
+) -> Result<usize, &'static str> {
+    let stmt_at = |off: u32| {
+        f.positions
+            .iter()
+            .any(|p| p.bytecode_offset == off && p.is_statement)
+    };
+    let mut n = k + 1;
+    loop {
+        let Some(x) = code.get(n) else {
+            return Err("function end");
+        };
+        let info = x.op.info();
+        let write_only = info.acc.writes()
+            && !info.acc.reads()
+            && !info.flags.contains(OpcodeFlags::JUMP)
+            && !info.flags.contains(OpcodeFlags::SWITCH)
+            && !info.flags.contains(OpcodeFlags::GENERATOR)
+            && x.op != Opcode::Debugger;
+        if x.op != Opcode::Mov && !write_only {
+            return Err("live");
+        }
+        // A label or a statement entry on the next instruction settles an owed load (O2, O9).
+        // After a `Mov` run (L2) a deferred transfer replaced the load, so without `o7` the
+        // test is liveness only: the load is dead even when the write is at a label or a
+        // statement entry.
+        let first = n == k + 1 || o7;
+        if first && labels.contains(&x.off) {
+            return Err("label");
+        }
+        if first && stmt_at(x.off) {
+            return Err("statement");
+        }
+        if x.op == Opcode::Mov {
+            n += 1;
+            continue;
+        }
+        let in_range = f.handlers.iter().any(|h| h.start <= x.off && x.off < h.end);
+        if o7 && info.flags.contains(OpcodeFlags::THROWS) && in_range {
+            return Err("handler range");
+        }
+        if o7 && n > k + 1 {
+            // L2: dead, but O2 emits the owed load before the emitted `Mov`.
+            return Err("mov");
+        }
+        return Ok(n);
+    }
+}
+
+/// O9, O6: `code[n]` is an `Ldar` from a register that the arm does not owe (`deferred`), with
+/// no position entry, and the next instruction is a flush (a jump, a switch, `Debugger`, a
+/// generator instruction, or a label).
+fn t1_anchor(
+    f: &ep9_bytecode::Function,
+    code: &[T1Insn],
+    n: usize,
+    labels: &std::collections::BTreeSet<u32>,
+    deferred: impl Fn(ep9_bytecode::Register) -> bool,
+) -> bool {
+    let Some(x) = code.get(n) else { return false };
+    let Some(next) = code.get(n + 1) else {
+        return false;
+    };
+    let flags = next.op.info().flags;
+    x.ldar.is_some_and(deferred)
+        && !f.positions.iter().any(|p| p.bytecode_offset == x.off)
+        && (labels.contains(&next.off)
+            || next.op == Opcode::Debugger
+            || flags.contains(OpcodeFlags::JUMP)
+            || flags.contains(OpcodeFlags::SWITCH)
+            || flags.contains(OpcodeFlags::GENERATOR))
+}
+
+/// The result of [`ldar_elision_differences`].
+#[derive(Default)]
+pub(crate) struct T1Report {
+    /// Broken invariants (INV-1, INV-2, INV-4); empty when the arm is correct.
+    pub(crate) differences: Vec<String>,
+    /// Dead statement-position loads that the arm keeps, with the reason ("handler range",
+    /// "statement", "label", "mov").
+    pub(crate) kept: Vec<String>,
+    /// Per function: the binding loads that the arm dropped ("load a0"), for guard v2.
+    pub(crate) dropped: Vec<Vec<String>>,
+    /// T9: each `S> Ldar` of the arm as "<arm-0 mark of the same instruction> | <next>": the
+    /// mark is "S>" or "-" (the load took a carried statement); next is "dead" (L1) or the
+    /// reason of [`t1_dead_after`].
+    pub(crate) statement_loads: Vec<String>,
+}
+
+/// T1, the stream differential: `src` in arm 0 and in `arm`. The only missing instructions are
+/// `Ldar` from the receiver, a parameter or a named local whose value no instruction reads
+/// (L1, L2; arm 1: only a load with a statement entry). Every other instruction, operand, jump
+/// target, constant, slot and handler range is the same (INV-4). Each kept instruction has the
+/// same covering source offset (INV-1). The statement entries are the same in count and order;
+/// the entry of a dropped load is on the next instruction, with that instruction's own arm-0
+/// offset if it had an entry, else the statement offset (INV-2).
+pub(crate) fn ldar_elision_differences(src: &str, opts: SourceOpts, arm: Arm) -> T1Report {
+    let mut rep = T1Report::default();
+    // The arm-1 rules: a T3 mutant is arm 1 with one rule broken, except mutant 10: it is arm 2
+    // with one rule broken, so the arm-2 rules judge it.
+    let arm2 = matches!(arm, Arm::Arm2 | Arm::Mutant(10));
+    let arm1 = matches!(arm, Arm::Arm1 | Arm::Mutant(_)) && !arm2;
+    let (units, named) = match super::compile_modes(src, opts, &[Arm::Arm0, arm]) {
+        Ok(t) => t,
+        Err(e) => {
+            rep.differences.push(format!("compile: {e}"));
+            return rep;
+        }
+    };
+    // STAR-DST (rule O13): the arm through the expansion (a fused instruction equals its pair;
+    // the arm-2 default fuses the set; the expansion gives each pair back).
+    let expanded = star_dst_expand_unit(units[1].unit());
+    let (u0, un) = (units[0].unit(), &expanded);
+    if u0.functions.len() != un.functions.len() {
+        rep.differences.push("function counts differ".into());
+        return rep;
+    }
+    for (fi, (f0, fnn)) in u0.functions.iter().zip(&un.functions).enumerate() {
+        let n_named = named[fi];
+        let load = |r: ep9_bytecode::Register| {
+            r == ep9_bytecode::Register::RECEIVER
+                || r.parameter_index().is_some()
+                || r.local_index().is_some_and(|i| i < n_named)
+        };
+        let mut dropped = Vec::new();
+        let mut diff = |d: String| rep.differences.push(format!("f{fi}: {d}"));
+        let (a0, an) = (t1_decode(f0), t1_decode(fnn));
+        let labels0 = t1_labels(f0, &a0);
+        let stmt0 = |off: u32| {
+            f0.positions
+                .iter()
+                .any(|p| p.bytecode_offset == off && p.is_statement)
+        };
+        // Arm 2 emits a binding `Ldar` that has an expression entry in place (O2 does not owe
+        // it), so T1 does not align it as a dropped load.
+        let expr0 = |off: u32| {
+            arm2 && f0
+                .positions
+                .iter()
+                .any(|p| p.bytecode_offset == off && !p.is_statement)
+        };
+        // Alignment: map[i] = the index in `an` of `a0[i]`, None for a dropped load.
+        let mut map: Vec<Option<usize>> = Vec::with_capacity(a0.len());
+        let mut j = 0;
+        let mut broken = false;
+        // A run of `Ldar` in arm 0 maps to the run of `Ldar` at `j` in the arm: the arm keeps a
+        // subsequence of the run (it drops a load that the next `Ldar` replaces; it keeps the
+        // O9 anchor and a load that a flush materializes: `p, this; debugger;` keeps both). Of
+        // the alignments, T1 takes one with the fewest drops that break a rule below, and then
+        // the one that keeps the earliest loads (an expression-position load stays in place).
+        let mut run: Vec<Option<usize>> = Vec::new();
+        let mut run_start = 0;
+        for (i, x) in a0.iter().enumerate() {
+            if x.op == Opcode::Ldar && (i == 0 || a0[i - 1].op != Opcode::Ldar) {
+                let e = a0[i..].iter().take_while(|z| z.op == Opcode::Ldar).count();
+                let f = an
+                    .get(j..)
+                    .map_or(0, |r| r.iter().take_while(|z| z.op == Opcode::Ldar).count());
+                // `bad[ii]`: dropping `a0[i + ii]` is a difference (the rules of the drop below).
+                let bad: Vec<usize> = (i..i + e)
+                    .map(|ii| {
+                        let ok = a0[ii].ldar.is_some_and(load)
+                            && (!arm1 || stmt0(a0[ii].off))
+                            && t1_dead_after(f0, &a0, ii, &labels0, false).is_ok();
+                        usize::from(!ok)
+                    })
+                    .collect();
+                // cost[ii][kk]: the fewest bad drops that align arm loads kk.. with arm-0 loads
+                // ii.. of the run (usize::MAX: none).
+                let mut cost = vec![vec![usize::MAX; f + 1]; e + 1];
+                cost[e][f] = 0;
+                for ii in (0..e).rev() {
+                    for kk in (0..=f).rev() {
+                        let drop = cost[ii + 1][kk].saturating_add(bad[ii]);
+                        let keep = if kk < f && an[j + kk].text == a0[i + ii].text {
+                            cost[ii + 1][kk + 1]
+                        } else {
+                            usize::MAX
+                        };
+                        cost[ii][kk] = drop.min(keep);
+                    }
+                }
+                run = vec![None; e];
+                run_start = i;
+                if cost[0][0] != usize::MAX {
+                    let mut kk = 0;
+                    for ii in 0..e {
+                        if kk < f
+                            && an[j + kk].text == a0[i + ii].text
+                            && cost[ii + 1][kk + 1] == cost[ii][kk]
+                        {
+                            run[ii] = Some(j + kk);
+                            kk += 1;
+                        }
+                    }
+                }
+            }
+            let in_run = x.op == Opcode::Ldar;
+            let matched = if in_run {
+                run[i - run_start] == Some(j)
+            } else {
+                an.get(j).is_some_and(|y| y.text == x.text)
+            };
+            if matched {
+                map.push(Some(j));
+                j += 1;
+                continue;
+            }
+            if in_run && run[i - run_start].is_some() {
+                // The arm has a load here that arm 0 does not have.
+                diff(format!(
+                    "instructions differ at @{} ({}) and @{} ({})",
+                    x.off,
+                    x.text,
+                    an.get(j).map_or(u32::MAX, |y| y.off),
+                    an.get(j).map_or("end", |y| y.text.as_str())
+                ));
+                broken = true;
+                break;
+            }
+            match x.ldar {
+                Some(r) if load(r) => {
+                    if arm1 && !stmt0(x.off) {
+                        diff(format!(
+                            "@{} Ldar {r} with no statement entry is gone",
+                            x.off
+                        ));
+                    }
+                    if let Err(why) = t1_dead_after(f0, &a0, i, &labels0, false) {
+                        diff(format!(
+                            "@{} Ldar {r} is gone and is not dead ({why})",
+                            x.off
+                        ));
+                    }
+                    if r != ep9_bytecode::Register::RECEIVER {
+                        dropped.push(format!("load {r}"));
+                    }
+                    map.push(None);
+                }
+                _ => {
+                    diff(format!(
+                        "instructions differ at @{} ({}) and @{} ({})",
+                        x.off,
+                        x.text,
+                        an.get(j).map_or(u32::MAX, |y| y.off),
+                        an.get(j).map_or("end", |y| y.text.as_str())
+                    ));
+                    broken = true;
+                    break;
+                }
+            }
+        }
+        if !broken && j != an.len() {
+            diff(format!("{} more instructions", an.len() - j));
+            broken = true;
+        }
+        rep.dropped.push(dropped);
+        if broken {
+            continue;
+        }
+        let len0 = f0.bytecode.len() as u32;
+        let lenn = fnn.bytecode.len() as u32;
+        let index0: std::collections::HashMap<u32, usize> =
+            a0.iter().enumerate().map(|(i, x)| (x.off, i)).collect();
+        // The offset in `an` of the instruction at (or, for a dropped load, after) `off`.
+        let map_off = |off: u32| -> u32 {
+            if off >= len0 {
+                return lenn;
+            }
+            let i = index0[&off];
+            map[i..].iter().find_map(|m| *m).map_or(lenn, |j| an[j].off)
+        };
+        for (i, x) in a0.iter().enumerate() {
+            let Some(j) = map[i] else { continue };
+            let y = &an[j];
+            if let Some(t) = x.target
+                && y.target != Some(map_off(t))
+            {
+                diff(format!("@{}: jump target differs", x.off));
+            }
+            if !x
+                .table
+                .iter()
+                .map(|&t| map_off(t))
+                .eq(y.table.iter().copied())
+            {
+                diff(format!("@{}: jump table differs", x.off));
+            }
+            // INV-1.
+            if t1_covering(f0, x.off) != t1_covering(fnn, y.off) {
+                diff(format!(
+                    "@{} {}: source offset {:?} -> {:?} (INV-1)",
+                    x.off,
+                    x.text,
+                    t1_covering(f0, x.off),
+                    t1_covering(fnn, y.off)
+                ));
+            }
+        }
+        // INV-2.
+        let s0: Vec<_> = f0.positions.iter().filter(|p| p.is_statement).collect();
+        let sn: Vec<_> = fnn.positions.iter().filter(|p| p.is_statement).collect();
+        if s0.len() != sn.len() {
+            diff(format!(
+                "statement entries {} -> {} (INV-2)",
+                s0.len(),
+                sn.len()
+            ));
+        } else {
+            for (p, q) in s0.iter().zip(&sn) {
+                let at = map_off(p.bytecode_offset);
+                let src = if map[index0[&p.bytecode_offset]].is_some() {
+                    p.source_offset
+                } else {
+                    // The entry moved to the next instruction: its own arm-0 offset, if any.
+                    let next = a0
+                        .iter()
+                        .enumerate()
+                        .skip(index0[&p.bytecode_offset] + 1)
+                        .find(|(i, _)| map[*i].is_some())
+                        .map(|(_, x)| x.off);
+                    next.and_then(|o| f0.positions.iter().find(|e| e.bytecode_offset == o))
+                        .map_or(p.source_offset, |e| e.source_offset)
+                };
+                if q.bytecode_offset != at || q.source_offset != src {
+                    diff(format!(
+                        "statement @{} {} -> @{} {} (want @{at} {src}; INV-2)",
+                        p.bytecode_offset, p.source_offset, q.bytecode_offset, q.source_offset
+                    ));
+                }
+            }
+        }
+        // INV-4: the side tables.
+        if f0.register_count != fnn.register_count
+            || !same_constants(&f0.constants, &fnn.constants)
+            || f0.feedback_slots != fnn.feedback_slots
+            || f0.handlers.len() != fnn.handlers.len()
+        {
+            diff("frame size or side tables differ".into());
+        }
+        for (h, g) in f0.handlers.iter().zip(&fnn.handlers) {
+            if (map_off(h.start), map_off(h.end), map_off(h.target)) != (g.start, g.end, g.target)
+                || h.context != g.context
+                || h.kind != g.kind
+            {
+                diff(format!("handler [{}, {}) differs", h.start, h.end));
+            }
+        }
+        // The dead statement-position loads that the arm keeps (a load that has the statement
+        // entry in arm 0 too; arm 1 moves the entry of a dropped load to a later `Ldar`).
+        if arm != Arm::Arm0 {
+            let labels = t1_labels(fnn, &an);
+            let mut back = vec![None; an.len()];
+            for (i, m) in map.iter().enumerate() {
+                if let Some(j) = m {
+                    back[*j] = Some(i);
+                }
+            }
+            for (k, y) in an.iter().enumerate() {
+                if y.ldar.is_some_and(load)
+                    && fnn
+                        .positions
+                        .iter()
+                        .any(|p| p.bytecode_offset == y.off && p.is_statement)
+                {
+                    let mark = if back[k].is_some_and(|i| stmt0(a0[i].off)) {
+                        "S>"
+                    } else {
+                        "-"
+                    };
+                    let next =
+                        t1_dead_after(fnn, &an, k, &labels, true).map_or_else(|e| e, |_| "dead");
+                    let in_range = fnn
+                        .handlers
+                        .iter()
+                        .any(|h| h.start <= y.off && y.off < h.end);
+                    rep.statement_loads.push(format!(
+                        "{mark} | {next} | {}",
+                        if in_range { "inTry" } else { "noTry" }
+                    ));
+                }
+                let stmt = back[k].is_some_and(|i| stmt0(a0[i].off));
+                match y.ldar {
+                    Some(r) if load(r) && stmt => match t1_dead_after(fnn, &an, k, &labels, true) {
+                        // O9: the anchor of a statement whose owed load a deferred transfer
+                        // replaced; the flush after it materializes that transfer (`p, this;
+                        // debugger;`, as in arm 0).
+                        Ok(n)
+                            if t1_anchor(fnn, &an, n, &labels, |s| {
+                                s == ep9_bytecode::Register::RECEIVER || !load(s)
+                            }) =>
+                        {
+                            rep.kept.push(format!("f{fi} @{} Ldar {r}: anchor", y.off));
+                        }
+                        Ok(_) => diff(format!("@{} S> Ldar {r} is dead and is kept", y.off)),
+                        Err(why @ ("handler range" | "statement" | "label" | "mov")) => {
+                            rep.kept.push(format!("f{fi} @{} Ldar {r}: {why}", y.off));
+                        }
+                        Err(_) => {}
+                    },
+                    // Arm 2 does not owe a binding `Ldar` that has an expression entry: it is
+                    // emitted in place, as in arm 0, so that the next instruction keeps its
+                    // source offset (INV-1).
+                    Some(r)
+                        if load(r)
+                            && back[k].is_some_and(|i| expr0(a0[i].off))
+                            && t1_dead_after(fnn, &an, k, &labels, true) == Ok(k + 1) =>
+                    {
+                        rep.kept.push(format!("f{fi} @{} Ldar {r}: expr", y.off));
+                    }
+                    // Arm 2 owes each other `Ldar` from a binding register (O2), also with no
+                    // statement entry, and drops it when the next instruction writes the
+                    // accumulator (L1). After a `Mov` (L2) it can stay: O2 emits an owed load
+                    // before an emitted `Mov`, and T1 cannot tell that `Mov` from one that the
+                    // replay makes for an operand of the next instruction.
+                    Some(r)
+                        if arm2
+                            && r != ep9_bytecode::Register::RECEIVER
+                            && load(r)
+                            && t1_dead_after(fnn, &an, k, &labels, true) == Ok(k + 1) =>
+                    {
+                        diff(format!("@{} Ldar {r} is dead and is kept", y.off));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    rep
+}
+
+/// T1 on the golden cases and the design cases, in arm 1 and arm 2: no difference, and each
+/// kept dead load has a reason.
+#[test]
+fn ldar_elision_differential() {
+    let mut failures = Vec::new();
+    let mut kept = 0;
+    let extra: &[(&str, Mode, &str)] = &[
+        ("t3", Strict, LDAR_T3),
+        (
+            "extra",
+            Sloppy,
+            "function c16(p) { this.a = p; } function r1() { return this; } \
+             function x1() { var x; x = this; return x; } function q1(p, q) { p, this; q; } \
+             function t1(p) { try { p; } catch (e) {} } function t2(p) { try { p; } finally {} } \
+             function t3(p, q) { p; try { q.x; } catch (e) { this.a; } }",
+        ),
+        // A deferred transfer replaces the owed load, then a `Mov`; the next write is at a
+        // statement entry (w1) or at a handler-range end (w8). The dropped load is dead.
+        (
+            "replaced",
+            Sloppy,
+            "function w1(p) { var r; r = (p, this); return r; } \
+             function w8(p) { var r; try { r = (p, this); } catch (e) {} return r; }",
+        ),
+        // O12, the throw default. u24: a load before a throw at the next statement is kept.
+        // u25: the `LdaGlobal` of a declared global has no expression position of its own; it
+        // takes the carried statement with the throw default, the offset of `g25` (INV-1).
+        (
+            "throw default",
+            Sloppy,
+            "function u24(p) { p; undefined_global_zz; } \
+             var g25; function u25() { return this === g25; }",
+        ),
+        // A dead load with no statement entry: arm 1 keeps it, arm 2 drops it.
+        ("unmarked", Sloppy, "function f(p) { return (0, p, 1); }"),
+        // A dead statement load before an emitted `Mov` (L2): O2 emits the owed load before
+        // the `Mov`, so it is kept with the reason "mov" (corpus: babel, chai, lebab).
+        (
+            "mov",
+            Sloppy,
+            "function v7() { this.a({ b: G.c.d }); this.f.g(this.h.i.j); }",
+        ),
+        // Arm 2: an owed binding load with an expression position (the spread) that a throw
+        // inside a handler range emits keeps its position (INV-1; corpus: Temporal tests).
+        (
+            "expression",
+            Sloppy,
+            "function e1(x) { try { f({ ...x }); } catch (e) {} }",
+        ),
+        // Arm 2: a dead binding load with an expression position, followed by an instruction
+        // that has no entry of its own (`LdaSmi`, `Star`). The load stays, or the next
+        // instruction gets an earlier source offset (INV-1; Codex r2).
+        (
+            "expression dead",
+            Sloppy,
+            "function e2(x) { return (0, { ...(x, 1) }) } function e3(x) { this, { ...(x, 1) }; } function e4(x, y) { return (0, { ...(x, y) }) }",
+        ),
+        // O2: an owed load before a `Mov` that the replay makes for an operand (lebab f3179).
+        ("mov operand", Sloppy, LDAR_MOV),
+        // O9, O6: the anchor `S> Ldar a0`, then a deferred `Ldar <this>` that a flush (a label,
+        // a jump, `Debugger`) materializes. Every arm keeps both loads (the same bytecode as
+        // arm 0; Codex r3).
+        (
+            "anchor",
+            Sloppy,
+            "function a1(p) { p, this; debugger; } function a2(p, q) { p, q, this; debugger; } \
+             function a3(p) { (p, this); debugger; } function a4(p) { p, this; while (g) {} } \
+             function a5(p) { p, this; do {} while (g); } function a6(p) { p, this; for (;;) {} } \
+             function a7(p) { p, this; x: { break x; } } function a8(p) { this, p, this; debugger; } \
+             function a9(p) { try { p, this; debugger; } catch (e) {} }",
+        ),
+    ];
+    for &(name, mode, src) in CASES.iter().chain(extra) {
+        for arm in [Arm::Arm1, Arm::Arm2] {
+            let r = ldar_elision_differences(src, mode.opts(), arm);
+            for d in r.differences {
+                failures.push(format!("{name} {arm:?}: {d}"));
+            }
+            kept += r.kept.len();
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(kept > 0, "the cases have a kept load (c6, c11)");
+}
+
+/// T3, the negative tests: each replay mutant breaks one rule, and T1 (or the expected text)
+/// finds it.
+#[test]
+fn ldar_elision_mutants_fail() {
+    let sloppy = SourceOpts::script(Strictness::Sloppy);
+    let strict = SourceOpts::script(Strictness::Strict);
+    let t1_fails = |m: u8, src: &str, opts: SourceOpts, needle: &str| {
+        let d = ldar_elision_differences(src, opts, Arm::Mutant(m)).differences;
+        assert!(d.iter().any(|d| d.contains(needle)), "mutant {m}: {d:?}");
+        true
+    };
+    // (a) the owed load is never emitted: `x = p` becomes `Mov a0, r0` (a live load is gone).
+    assert!(t1_fails(
+        1,
+        "function f(p) { var x; x = p; return x; } function g() { return this; }",
+        sloppy,
+        "instructions differ"
+    ));
+    // (b) policy P1 (the statement offset wins): `this.a;` reports 4:3 (INV-1).
+    assert!(t1_fails(2, LDAR_T3, strict, "INV-1"));
+    // (c) two statements share one entry: `p; this.a;` (INV-2).
+    assert!(t1_fails(3, "function f(p) { p; this.a; }", sloppy, "INV-2"));
+    // (d) the carry forces the next temporary `Star`: the expected texts fail.
+    let u = arm_units(LDAR_T3, strict, &[Arm::Mutant(4)]);
+    assert_ne!(
+        arm_listing(&u[0], "c1"),
+        "0 S> GetNamedProperty <this>, k0, s0\n4 LdaUndefined\n5 Return\n| 0 S 201 (4:8)"
+    );
+    assert_ne!(
+        arm_listing(&u[0], "c8"),
+        "0 S> GetNamedProperty a0, k0, s0\n4 Star r0\n6 E> CallProperty0 r0, a0, s1\n\
+         10 LdaUndefined\n11 Return\n| 0 S 463 (28:5)\n| 6 E 463 (28:5)"
+    );
+    // (e) the elided path clears the carry: the entry of `this.a;` is lost (INV-2).
+    assert!(t1_fails(5, "function f() { this.a; }", sloppy, "INV-2"));
+    // (f) no anchor: `p, this; q;` loses the entry of `p, this;` (INV-2).
+    assert!(t1_fails(
+        6,
+        "function f(p, q) { p, this; q; }",
+        sloppy,
+        "INV-2"
+    ));
+    // (g) the throw default of O12 is not used: a throwing instruction with no expression
+    // position of its own takes the carried statement offset; the `LdaGlobal` of `g25` reports
+    // the offset of `return` (INV-1).
+    assert!(t1_fails(
+        7,
+        "var g25; function u25() { return this === g25; }",
+        sloppy,
+        "INV-1"
+    ));
+    // (h) a jump table names its targets in the wrong order: `SwitchOnSmi` and
+    // `SwitchOnGeneratorState` resume at the wrong path.
+    assert!(t1_fails(
+        8,
+        "function* g(a) { var x = yield a; return x; }",
+        sloppy,
+        "jump table differs"
+    ));
+    // (i) arm 1 drops a dead load with no statement entry (an arm-2 rule).
+    assert!(t1_fails(
+        9,
+        "function f(p) { return (0, p, 1); }",
+        sloppy,
+        "with no statement entry is gone"
+    ));
+    // (j) arm 2 without the emit of an owed load before a `Mov` that the replay makes: `Ldar
+    // a1` comes after `Mov r4, r3`, so T1 sees a live load that is gone and a changed order
+    // (corpus: lebab f3179, babylonjs). The arm-2 rules judge mutant 10.
+    assert!(t1_fails(10, LDAR_MOV, sloppy, "is gone and is not dead"));
+    // The correct arm passes on the same sources.
+    for arm in [Arm::Arm1, Arm::Arm2] {
+        let r = ldar_elision_differences(LDAR_MOV, sloppy, arm);
+        assert!(r.differences.is_empty(), "{arm:?}: {:?}", r.differences);
+    }
+    for src in [
+        "function f(p) { return (0, p, 1); }",
+        "function* g(a) { var x = yield a; return x; }",
+        "function f(p) { var x; x = p; return x; } function g() { return this; }",
+        "function f(p) { p; this.a; }",
+        "function f() { this.a; }",
+        "function f(p, q) { p, this; q; }",
+        "var g25; function u25() { return this === g25; }",
+    ] {
+        let r = ldar_elision_differences(src, sloppy, Arm::Arm1);
+        assert!(r.differences.is_empty(), "{src}: {:?}", r.differences);
+    }
+}
+
+/// T1 on the script files named in `EP9_LDAR_T1_FILES` (`:`-separated, sloppy scripts), in arm 1
+/// and arm 2; prints the kept loads by reason. On demand:
+///
+/// ```text
+/// EP9_LDAR_T1_FILES=a.js:b.js cargo test -p ep9_frontend --release --lib ldar_elision_on_files -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "on demand: needs EP9_LDAR_T1_FILES"]
+fn ldar_elision_on_files() {
+    let files = std::env::var("EP9_LDAR_T1_FILES").unwrap_or_default();
+    let mut failures = Vec::new();
+    for path in files.split(':').filter(|p| !p.is_empty()) {
+        let src = std::fs::read_to_string(path).expect("read the file");
+        for arm in [Arm::Arm1, Arm::Arm2] {
+            let r = ldar_elision_differences(&src, SourceOpts::script(Strictness::Sloppy), arm);
+            let mut why: std::collections::BTreeMap<String, usize> = Default::default();
+            for k in &r.kept {
+                *why.entry(k.rsplit(": ").next().unwrap_or("").to_owned())
+                    .or_default() += 1;
+            }
+            let dropped: usize = r.dropped.iter().map(Vec::len).sum();
+            println!(
+                "{path} {arm:?}: {} differences, {dropped} binding loads dropped, kept {why:?}",
+                r.differences.len()
+            );
+            for k in &r.kept {
+                println!("  kept {k}");
+            }
+            let mut t9: std::collections::BTreeMap<&str, usize> = Default::default();
+            for k in &r.statement_loads {
+                *t9.entry(k.as_str()).or_default() += 1;
+            }
+            for (k, n) in t9 {
+                println!("  T9 S> Ldar {n:>6}  {k}");
+            }
+            failures.extend(
+                r.differences
+                    .into_iter()
+                    .map(|d| format!("{path} {arm:?}: {d}")),
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// T5, the statement-table cases (the stand-in for a debugger step; no debugger exists yet):
+/// each case keeps its statement entries in count and order in every arm (T1), and the literal
+/// offsets pin both statement-offset forms (the statement start, and the own offset of the
+/// instruction that took the entry).
+#[test]
+fn ldar_elision_statement_cases() {
+    let sloppy = SourceOpts::script(Strictness::Sloppy);
+    let src = "function s1(p, q) { p; this; q; }\n\
+               function s2(p, q) { p, this; q; }\n\
+               function s3(x) { this; while (x) { x = 0; } }\n\
+               function s4() { this; try { s4(); } catch (e) {} }\n\
+               function s5() { this; }\n\
+               class B {} class D extends B { constructor() { super(); this; this.a; } }\n\
+               function s7() { return () => { this.a; }; }\n\
+               function s8(p) { switch (p) { case 1: p = 2; break; case 2: return p; } }\n";
+    for arm in [Arm::Arm1, Arm::Arm2] {
+        let r = ldar_elision_differences(src, sloppy, arm);
+        assert!(r.differences.is_empty(), "{arm:?}: {:?}", r.differences);
+    }
+    let units = arm_units(src, sloppy, &[Arm::Plain, Arm::Arm0, Arm::Arm1, Arm::Arm2]);
+    let statements = |u: &VerifiedUnit| -> Vec<Vec<u32>> {
+        u.unit().functions.iter().map(statement_positions).collect()
+    };
+    for u in &units[1..] {
+        assert_eq!(
+            statements(u),
+            statements(&units[0]),
+            "statement offsets in a mode"
+        );
+    }
+    let has = |u: &VerifiedUnit, name: &str, needle: &str| arm_listing(u, name).contains(needle);
+    for (arm, u) in ["arm 1", "arm 2"].iter().zip(&units[2..]) {
+        // `p; this; q;`: 3 entries; the last one moves to the implicit return.
+        assert!(
+            has(u, "s1", "0 S> Ldar a0\n2 S> Ldar <this>\n4 S> LdaUndefined"),
+            "{arm}"
+        );
+        // `p, this; q;`: the anchor keeps the entry of `p, this;`.
+        assert!(has(u, "s2", "0 S> Ldar a0\n2 S> LdaUndefined"), "{arm}");
+        // Before a loop label, before a `try`: the load stays.
+        assert!(has(u, "s3", "0 S> Ldar <this>\n2 S> Ldar a0"), "{arm}");
+        assert!(
+            has(u, "s4", "0 S> Ldar <this>\n2 S> LdaCurrentContext"),
+            "{arm}"
+        );
+        // The last statement: the entry is on the implicit return.
+        assert!(
+            has(u, "s5", "0 S> LdaUndefined\n1 Return\n| 0 S 181 (5:17)"),
+            "{arm}"
+        );
+        // A derived constructor reads `this` with a hole check (the load is live); an arrow
+        // reads it from a context slot (no `Ldar`).
+        assert_eq!(arm_listing(u, "D"), arm_listing(&units[1], "D"), "{arm}");
+        assert!(has(
+            u,
+            "s8",
+            "0 S> LdaSmi [1]\n2 TestEqualStrict a0, s0\n5 Mov a0, r0"
+        ));
+    }
+    // The arrow function (no name): the same text in every arm.
+    let text = |u: &VerifiedUnit| ep9_bytecode::disassemble(u.unit());
+    let arrow = |t: String| {
+        t.split("\nfunction ")
+            .find(|f| f.contains(" arrow "))
+            .map(str::to_owned)
+    };
+    assert_eq!(arrow(text(&units[2])), arrow(text(&units[1])));
+    // Both statement-offset forms, with literal offsets: `p.x;` keeps the statement start
+    // (25:3, no `Ldar` today); `p.m();` and `this.a;` have the property offset (28:5, 4:8).
+    let strict = SourceOpts::script(Strictness::Strict);
+    for u in &arm_units(LDAR_T3, strict, &[Arm::Arm1, Arm::Arm2]) {
+        assert!(has(u, "c7", "| 0 S 435 (25:3)"));
+        assert!(has(u, "c8", "| 0 S 463 (28:5)"));
+        assert!(has(u, "c1", "| 0 S 201 (4:8)"));
+    }
+    // Route LDAR-T5-CARRY-PINS (IC1 finding 5): the entry of a statement whose dead load is left
+    // out goes to the next emitted instruction, which can be code of the next construct: the
+    // loop update `i++` (k1), the finally epilogue (k2), the do-while condition `++i` (k3). T1
+    // (no difference) shows that values and throw offsets do not change (INV-1, INV-4).
+    let carry = "function k1(n) { var i; for (i = 0; i < n; i++) this; }\n\
+                 function k2() { try { } finally { this; } }\n\
+                 function k3(n) { var i = 0; do this; while (++i < n); }\n";
+    for arm in [Arm::Arm1, Arm::Arm2] {
+        let r = ldar_elision_differences(carry, sloppy, arm);
+        assert!(
+            r.differences.is_empty(),
+            "carry {arm:?}: {:?}",
+            r.differences
+        );
+    }
+    let pins: &[(&str, &str)] = &[
+        (
+            "k1",
+            "0 S> LdaZero\n1 Star r0\n3 Ldar a0\n5 E> TestLessThan r0, s0\n8 JumpIfFalse @20\n\
+             10 S> Ldar r0\n12 E> Inc s1\n14 Star r0\n16 JumpLoop @3, [0], s2\n\
+             20 LdaUndefined\n21 Return\n| 0 S 24 (1:25)\n| 5 E 36 (1:37)\n\
+             | 10 S 48 (1:49)\n| 12 E 43 (1:44)",
+        ),
+        (
+            "k2",
+            "0 S> LdaCurrentContext\n1 Star r2\n3 LdaSmi [-1]\n5 Star r0\n7 Jump @14\n\
+             9 Star r1\n11 LdaZero\n12 Star r0\n14 LdaTheHole\n15 SetPendingMessage\n\
+             16 Star r3\n18 S> Ldar r3\n20 SetPendingMessage\n21 Ldar r0\n\
+             23 SwitchOnSmi k0, [0]\n26 Jump @31\n28 Ldar r1\n30 E> ReThrow\n\
+             31 LdaUndefined\n32 Return\n| 0 S 72 (2:17)\n| 18 S 90 (2:35)\n| 30 E 72 (2:17)",
+        ),
+        (
+            "k3",
+            "0 S> LdaZero\n1 Star r0\n3 S> Ldar r0\n5 E> Inc s0\n7 Star r0\n9 Ldar a0\n\
+             11 E> TestLessThan r0, s1\n14 JumpIfFalse @20\n16 JumpLoop @3, [0], s2\n\
+             20 LdaUndefined\n21 Return\n| 0 S 121 (3:22)\n| 3 S 131 (3:32)\n\
+             | 5 E 144 (3:45)\n| 11 E 144 (3:45)",
+        ),
+    ];
+    let units = arm_units(carry, sloppy, &[Arm::Arm1, Arm::Arm2]);
+    for (arm, u) in ["arm 1", "arm 2"].iter().zip(&units) {
+        for &(name, want) in pins {
+            assert_eq!(arm_listing(u, name), want, "{arm} {name}");
+        }
+    }
+}
+
+// ---- STAR-DST (rule O13, the probe; DL M11-P3-PICK): the fused `Star` ----
+
+/// The load of a fused opcode (`GetNamedPropertyStar` -> `GetNamedProperty`), or `None`.
+fn star_pair_load(op: Opcode) -> Option<Opcode> {
+    match op {
+        Opcode::GetNamedPropertyStar => Some(Opcode::GetNamedProperty),
+        Opcode::LdaCurrentContextSlotStar => Some(Opcode::LdaCurrentContextSlot),
+        Opcode::LdaContextSlotStar => Some(Opcode::LdaContextSlot),
+        _ => None,
+    }
+}
+
+/// The loads of the family of rule O13 (1: the named load; 2: also the 2 context loads).
+fn star_family_load(op: Opcode, family: u8) -> bool {
+    match op {
+        Opcode::GetNamedProperty => family >= 1,
+        Opcode::LdaCurrentContextSlot | Opcode::LdaContextSlot => family >= 2,
+        _ => false,
+    }
+}
+
+/// One instruction of an expansion: the opcode, the operand values and, for a jump, the index
+/// of its target.
+struct StarInsn {
+    op: Opcode,
+    vals: Vec<i64>,
+    target: Option<usize>,
+}
+
+/// The expansion of rule O13: `f` with each fused instruction replaced by its pair (the load
+/// with the same operands, then `Star dst`). The code is encoded again as
+/// `FunctionBuilder::finish` encodes it (each instruction at its smallest scale, jumps grown to
+/// a fixpoint), and every code offset (jumps, jump tables, handler ranges, positions) moves
+/// with its instruction. With no fused instruction, `f` itself. Returns the function and, for
+/// each instruction of `f` (and its end), its first instruction index in the expansion.
+pub(crate) fn star_dst_expand(f: &ep9_bytecode::Function) -> (ep9_bytecode::Function, Vec<usize>) {
+    use ep9_bytecode::{Constant, OperandKind as K, OperandScale};
+    let insns: Vec<ep9_bytecode::Instruction<'_>> = ep9_bytecode::Instructions::new(&f.bytecode)
+        .map(|i| i.expect("verified code decodes"))
+        .collect();
+    let mut map = Vec::with_capacity(insns.len() + 1);
+    let mut n = 0;
+    for i in &insns {
+        map.push(n);
+        n += if star_pair_load(i.opcode).is_some() {
+            2
+        } else {
+            1
+        };
+    }
+    map.push(n);
+    if n == insns.len() {
+        return (f.clone(), map);
+    }
+    let code_len = f.bytecode.len() as u32;
+    let index_of = |off: u32| -> usize {
+        if off == code_len {
+            insns.len()
+        } else {
+            insns
+                .binary_search_by_key(&off, |i| i.offset)
+                .expect("a code offset is an instruction start")
+        }
+    };
+    let new_index = |off: u32| map[index_of(off)];
+    let mut out: Vec<StarInsn> = Vec::with_capacity(n);
+    for i in &insns {
+        let vals: Vec<i64> = (0..i.operand_count()).map(|k| i.operand(k)).collect();
+        match star_pair_load(i.opcode) {
+            Some(load) => {
+                let k = vals.len() - 1;
+                out.push(StarInsn {
+                    op: load,
+                    vals: vals[..k].to_vec(),
+                    target: None,
+                });
+                out.push(StarInsn {
+                    op: Opcode::Star,
+                    vals: vec![vals[k]],
+                    target: None,
+                });
+            }
+            None => out.push(StarInsn {
+                op: i.opcode,
+                vals,
+                target: i.jump_target().map(new_index),
+            }),
+        }
+    }
+    // Scales: what the operands other than jumps need, then jumps grown to a fixpoint.
+    let jump = |k: K| matches!(k, K::JumpFwd | K::JumpBack);
+    let mut scales: Vec<OperandScale> = out
+        .iter()
+        .map(|x| {
+            let mut s = OperandScale::Single;
+            for (spec, &v) in x.op.info().operands.iter().zip(&x.vals) {
+                if spec.kind.is_scalable() && !jump(spec.kind) {
+                    s = s.max(if spec.kind.is_signed() {
+                        OperandScale::for_signed(v as i32)
+                    } else {
+                        OperandScale::for_unsigned(v as u32)
+                    });
+                }
+            }
+            s
+        })
+        .collect();
+    let mut offsets = vec![0u64; out.len() + 1];
+    loop {
+        for i in 0..out.len() {
+            offsets[i + 1] = offsets[i] + out[i].op.info().size(scales[i]) as u64;
+        }
+        let mut changed = false;
+        for i in 0..out.len() {
+            if let Some(t) = out[i].target {
+                let d = offsets[i].abs_diff(offsets[t]);
+                let need = OperandScale::for_unsigned(u32::try_from(d).unwrap_or(u32::MAX));
+                if need > scales[i] {
+                    scales[i] = need;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut code = Vec::with_capacity(offsets[out.len()] as usize);
+    for (i, x) in out.iter().enumerate() {
+        if let Some(p) = Opcode::prefix_for(scales[i]) {
+            code.push(p as u8);
+        }
+        code.push(x.op as u8);
+        for (spec, &v) in x.op.info().operands.iter().zip(&x.vals) {
+            let v = if jump(spec.kind) {
+                offsets[i].abs_diff(offsets[x.target.expect("a jump")]) as i64
+            } else {
+                v
+            };
+            code.extend_from_slice(&(v as u32).to_le_bytes()[..spec.kind.size(scales[i])]);
+        }
+    }
+    let new_off = |off: u32| offsets[new_index(off)] as u32;
+    let mut g = f.clone();
+    for i in &insns {
+        if !i.opcode.info().flags.contains(OpcodeFlags::SWITCH) {
+            continue;
+        }
+        for k in 0..i.operand_count() {
+            if i.operand_kind(k) != K::Const {
+                continue;
+            }
+            let c = i.operand(k) as usize;
+            if let Some(Constant::JumpTable(t)) = f.constants.get(c) {
+                let base = new_off(i.offset);
+                let entries: Vec<u32> = t.iter().map(|e| new_off(i.offset + e) - base).collect();
+                g.constants[c] = Constant::JumpTable(entries.into());
+            }
+        }
+    }
+    for h in &mut g.handlers {
+        (h.start, h.end, h.target) = (new_off(h.start), new_off(h.end), new_off(h.target));
+    }
+    for p in &mut g.positions {
+        p.bytecode_offset = new_off(p.bytecode_offset);
+    }
+    g.bytecode = code;
+    (g, map)
+}
+
+/// `u` with every function expanded ([`star_dst_expand`]); `u` itself with no fused
+/// instruction. The H24 R4 guard and LDAR-ELIDE T1 read the optimized unit through it, so they
+/// hold with the fused default (rule O13 in [`super::regopt::DEFAULT`]; a fused instruction
+/// equals its pair).
+pub(crate) fn star_dst_expand_unit(u: &ep9_bytecode::CompiledUnit) -> ep9_bytecode::CompiledUnit {
+    let mut x = u.clone();
+    for f in &mut x.functions {
+        *f = star_dst_expand(f).0;
+    }
+    x
+}
+
+/// The result of [`star_dst_differences`].
+#[derive(Default)]
+pub(crate) struct StarReport {
+    /// Broken invariants (INV-S1, INV-S2, INV-S4, INV-S7, the family); empty when the arm is
+    /// correct.
+    pub(crate) differences: Vec<String>,
+    /// The fused instructions of the arm, per opcode name.
+    pub(crate) fused: std::collections::BTreeMap<&'static str, usize>,
+    /// The arm-0 pairs of the family (a load, then `Star`) that the arm did not fuse, per
+    /// reason: "position" (an entry on the `Star`), "scale" (an operand above one byte),
+    /// "other" (a label on the `Star`: B2).
+    pub(crate) missed: std::collections::BTreeMap<&'static str, usize>,
+}
+
+/// The family of rule O13 of a T1 arm.
+fn star_family(arm: Arm) -> u8 {
+    match arm {
+        Arm::Fuse(f) => f,
+        Arm::Mutant(20) => 1,
+        Arm::Mutant(_) => 2,
+        _ => 0,
+    }
+}
+
+/// T1 of STAR-DST: `src` with rule O13 off (`Mode::Fuse(0)`, the merged LDAR mode) and in
+/// `arm` (`Mode::Fuse(1)`, `Mode::Fuse(2)` or a T2 mutant).
+pub(crate) fn star_dst_differences(src: &str, opts: SourceOpts, arm: Arm) -> StarReport {
+    match super::compile_modes(src, opts, &[Arm::Fuse(0), arm]) {
+        Ok((units, _)) => star_dst_compare(units[0].unit(), units[1].unit(), star_family(arm)),
+        Err(e) => StarReport {
+            differences: vec![format!("compile: {e}")],
+            ..StarReport::default()
+        },
+    }
+}
+
+/// T1 of STAR-DST: `Mode::Fuse(0)` (no fuse) against [`super::regopt::DEFAULT`] (the merged
+/// form: rule O13 for family 2), both from one scope analysis (the corpus job and
+/// [`star_dst_on_files`]). Arm 1 (family 1) is not shipped, so only the default is compared
+/// here; one entry.
+pub(crate) fn star_dst_both(src: &str, opts: SourceOpts) -> Vec<(Arm, StarReport)> {
+    let arms = [Arm::Fuse(0), super::regopt::DEFAULT];
+    let rep = match super::compile_modes(src, opts, &arms) {
+        Ok((units, _)) => star_dst_compare(units[0].unit(), units[1].unit(), 2),
+        Err(e) => StarReport {
+            differences: vec![format!("compile: {e}")],
+            ..StarReport::default()
+        },
+    };
+    vec![(arms[1], rep)]
+}
+
+/// The checks of T1: arm 0 (`u0`) against an arm with the family `family` (`un`). Every fused
+/// instruction expands to its pair, and then (a) the instruction list is the arm-0 list (jumps
+/// by target index), (b) the jump targets, the jump-table targets in order, the handler ranges
+/// and targets, the constants, the feedback slots, the frame size and the mapped-parameter list
+/// are equal (INV-S1), (c) the position entries are the arm-0 entries: a fused instruction has
+/// the entry of its load, the `Star` of the pair has none (INV-S4), (d) no label, jump target,
+/// table entry, handler-range edge or position entry is on that `Star` (INV-S2), (e) no fused
+/// instruction has a prefix, and the arm has no more prefixed instructions than arm 0
+/// (INV-S7), (f) a family-1 arm has no context form; and the expanded bytes are the arm-0
+/// bytes. (g) counts the arm-0 pairs of the family that the arm did not fuse, by reason.
+fn star_dst_compare(
+    u0: &ep9_bytecode::CompiledUnit,
+    un: &ep9_bytecode::CompiledUnit,
+    family: u8,
+) -> StarReport {
+    use ep9_bytecode::OperandScale;
+    let mut rep = StarReport::default();
+    if u0.functions.len() != un.functions.len() {
+        rep.differences.push("function counts differ".into());
+        return rep;
+    }
+    let decode = |f: &ep9_bytecode::Function| -> Vec<(u32, Opcode, OperandScale)> {
+        ep9_bytecode::Instructions::new(&f.bytecode)
+            .map(|i| {
+                let i = i.expect("verified code decodes");
+                (i.offset, i.opcode, i.scale)
+            })
+            .collect()
+    };
+    for (fi, (f0, fnn)) in u0.functions.iter().zip(&un.functions).enumerate() {
+        let tag = |d: String| format!("f{fi}: {d}");
+        let mut dd: Vec<String> = Vec::new();
+        let (c0, cn) = (decode(f0), decode(fnn));
+        // (e), (f): the fused instructions of the arm.
+        let mut fused_at = Vec::new();
+        for (k, &(off, op, scale)) in cn.iter().enumerate() {
+            let Some(load) = star_pair_load(op) else {
+                continue;
+            };
+            fused_at.push(k);
+            *rep.fused.entry(op.name()).or_default() += 1;
+            if scale != OperandScale::Single {
+                dd.push(tag(format!("{op:?} at {off} has a prefix (INV-S7)")));
+            }
+            if !star_family_load(load, family) {
+                dd.push(tag(format!("{op:?} at {off} is not in family {family}")));
+            }
+        }
+        let prefixed = |c: &[(u32, Opcode, OperandScale)]| {
+            c.iter().filter(|x| x.2 != OperandScale::Single).count()
+        };
+        if prefixed(&cn) > prefixed(&c0) {
+            dd.push(tag(format!(
+                "more prefixed instructions ({} > {}, INV-S7)",
+                prefixed(&cn),
+                prefixed(&c0)
+            )));
+        }
+        let (fe, map) = star_dst_expand(fnn);
+        let (x0, xe) = (t1_decode(f0), t1_decode(&fe));
+        let index = |code: &[T1Insn], f: &ep9_bytecode::Function, off: u32| -> Option<usize> {
+            if off as usize == f.bytecode.len() {
+                Some(code.len())
+            } else {
+                code.iter().position(|i| i.off == off)
+            }
+        };
+        // (a) the instruction list, jumps and tables by target index.
+        let listing = |code: &[T1Insn], f: &ep9_bytecode::Function| -> Vec<String> {
+            code.iter()
+                .map(|i| {
+                    let t: Vec<Option<usize>> =
+                        i.table.iter().map(|&o| index(code, f, o)).collect();
+                    format!(
+                        "{} -> {:?} {t:?}",
+                        i.text,
+                        i.target.map(|o| index(code, f, o))
+                    )
+                })
+                .collect()
+        };
+        let (l0, le) = (listing(&x0, f0), listing(&xe, &fe));
+        if l0 != le {
+            let at = l0
+                .iter()
+                .zip(&le)
+                .position(|(a, b)| a != b)
+                .unwrap_or(l0.len().min(le.len()));
+            dd.push(tag(format!(
+                "instructions differ at {at} (INV-S1): arm 0 {:?}, expanded {:?}",
+                l0.get(at),
+                le.get(at)
+            )));
+        }
+        // (b) the side tables.
+        let handlers = |code: &[T1Insn], f: &ep9_bytecode::Function| -> Vec<String> {
+            f.handlers
+                .iter()
+                .map(|h| {
+                    format!(
+                        "{:?} {:?} {:?} {:?} {:?}",
+                        index(code, f, h.start),
+                        index(code, f, h.end),
+                        index(code, f, h.target),
+                        h.context,
+                        h.kind
+                    )
+                })
+                .collect()
+        };
+        if handlers(&x0, f0) != handlers(&xe, &fe) {
+            dd.push(tag("handler ranges differ (INV-S1)".into()));
+        }
+        if !same_constants(&f0.constants, &fe.constants) {
+            dd.push(tag("constants differ (INV-S1)".into()));
+        }
+        if f0.feedback_slots != fnn.feedback_slots {
+            dd.push(tag("feedback slots differ (INV-S1, D2)".into()));
+        }
+        if f0.register_count != fnn.register_count || f0.mapped_parameters != fnn.mapped_parameters
+        {
+            dd.push(tag("frame size or mapped parameters differ (INV-S1)".into()));
+        }
+        // (c) the position entries by instruction index.
+        let entries = |code: &[T1Insn], f: &ep9_bytecode::Function| -> Vec<String> {
+            f.positions
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{:?} {} {}",
+                        index(code, f, p.bytecode_offset),
+                        p.source_offset,
+                        p.is_statement
+                    )
+                })
+                .collect()
+        };
+        if entries(&x0, f0) != entries(&xe, &fe) {
+            dd.push(tag("position entries differ (INV-S4)".into()));
+        }
+        // (d) nothing is on the `Star` of a fused pair in arm 0.
+        let labels = t1_labels(f0, &x0);
+        for &k in &fused_at {
+            let Some(star) = x0.get(map[k] + 1) else {
+                continue;
+            };
+            if labels.contains(&star.off) {
+                dd.push(tag(format!(
+                    "a label is on the Star at {} (INV-S2)",
+                    star.off
+                )));
+            }
+            if f0.positions.iter().any(|p| p.bytecode_offset == star.off) {
+                dd.push(tag(format!(
+                    "a position entry is on the Star at {} (INV-S2)",
+                    star.off
+                )));
+            }
+        }
+        // The expanded function is the arm-0 function, byte for byte.
+        if dd.is_empty() && fe != *f0 {
+            dd.push(tag("the expansion differs from arm 0 (INV-S1)".into()));
+        }
+        rep.differences.extend(dd);
+        // (g) the arm-0 pairs of the family that the arm did not fuse.
+        let fused_pairs: std::collections::BTreeSet<usize> =
+            fused_at.iter().map(|&k| map[k]).collect();
+        for j in 0..c0.len().saturating_sub(1) {
+            let ((_, load, s0), (star_off, next, s1)) = (c0[j], c0[j + 1]);
+            if next != Opcode::Star || !star_family_load(load, family) || fused_pairs.contains(&j) {
+                continue;
+            }
+            let why = if f0.positions.iter().any(|p| p.bytecode_offset == star_off) {
+                "position"
+            } else if s0 != OperandScale::Single || s1 != OperandScale::Single {
+                "scale"
+            } else {
+                "other"
+            };
+            *rep.missed.entry(why).or_default() += 1;
+        }
+    }
+    rep
+}
+
+/// The STAR-DST cases of the design (PK section 4.2 tests (2), (3), (5); SD section 10): named
+/// loads into temporaries and bindings, chains, context loads at depth 0, 1 and 2, loads at a
+/// label, a statement position, inside handler ranges, a generator, and a wide frame.
+const STAR_CASES: &[(&str, Mode, &str)] = &[
+    (
+        "named",
+        Sloppy,
+        "function n1(a) { var x = a.b; return x; } function n2(a) { return a.b.c.d; } \
+         function n3() { return this.a + this.b; } function n4(a) { f(a.b); } \
+         function n5(a, b) { b = a.x; return b; } function n6(a) { return a.p ? a.q : a.r; }",
+    ),
+    (
+        "contexts",
+        Sloppy,
+        "function c1() { var o = 1; function g() { var t = o; return t; } return g; } \
+         function c2() { var o = 1; function m() { var w = 2; \
+         function d() { var t = o; var u = w; return t + u; } return d; } return m; } \
+         function c3() { var o = null; return function () { return o.p; }; }",
+    ),
+    (
+        "positions",
+        Sloppy,
+        "function p1(a) { var x = a.b;\n var y = a.c; return x + y; } \
+         function p2(a) { a.b;\n var y = a; return y; } function p3(a, q) { q = a.b; q.c; }",
+    ),
+    (
+        "handlers",
+        Sloppy,
+        "function h1(a) { try { var x = a.b; return x; } catch (e) { return e.m; } } \
+         function h2(a) { var x; try { x = a.b; } finally { x = a.c; } return x; } \
+         function h3(a) { for (var k of a.list) { var v = k.p; } return v; }",
+    ),
+    (
+        "generator",
+        Sloppy,
+        "function* g1(a) { var x = a.b; yield x.c; return a.d; } \
+         async function g2(a) { var x = await a.b; return x.c; }",
+    ),
+];
+
+/// A function with 300 named locals: the loads into `v299` need a `Wide` `Star` (B4).
+fn star_wide_case() -> String {
+    let mut s = String::from("function w(a) { ");
+    for i in 0..300 {
+        s.push_str(&format!("var v{i} = a.p{i}; "));
+    }
+    s.push_str("return v299 + v0; }");
+    s
+}
+
+/// T1 of STAR-DST on every golden case, the LDAR-ELIDE cases, the STAR-DST cases and a wide
+/// frame, in the default (the merged form): no difference. The cases fuse each of the 3
+/// opcodes, and keep pairs for the reasons "position" (B3) and "scale" (B4).
+#[test]
+fn star_dst_differential() {
+    let mut failures = Vec::new();
+    let mut fused: std::collections::BTreeMap<&str, usize> = Default::default();
+    let mut missed: std::collections::BTreeMap<&str, usize> = Default::default();
+    let wide = star_wide_case();
+    let extra: Vec<(&str, Mode, &str)> = vec![
+        ("t3", Strict, LDAR_T3),
+        ("mov", Sloppy, LDAR_MOV),
+        ("wide", Sloppy, &wide),
+    ];
+    for &(name, mode, src) in CASES.iter().chain(STAR_CASES).chain(&extra) {
+        for (arm, r) in star_dst_both(src, mode.opts()) {
+            for d in r.differences {
+                failures.push(format!("{name} {arm:?}: {d}"));
+            }
+            for (k, n) in r.fused {
+                *fused.entry(k).or_default() += n;
+            }
+            for (k, n) in r.missed {
+                *missed.entry(k).or_default() += n;
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // The exact counts: each of the 3 opcodes fuses, and a pair that is not fused has a
+    // reason. B4 keeps the pairs of the wide frame ("scale"); B2 keeps a pair at a label
+    // ("other"). No pair of these cases has a position entry on its `Star` (the
+    // octane-typescript dump has none either). A lost fusion moves a pair from `fused` to
+    // "other", so both counts are pinned: a change of the cases or of codegen updates them.
+    let want: std::collections::BTreeMap<&str, usize> = [
+        ("GetNamedPropertyStar", 245),
+        ("LdaContextSlotStar", 1),
+        ("LdaCurrentContextSlotStar", 46),
+    ]
+    .into();
+    assert_eq!(fused, want, "the fused instructions");
+    let want: std::collections::BTreeMap<&str, usize> = [("other", 1), ("scale", 172)].into();
+    assert_eq!(missed, want, "the pairs that are not fused, per reason");
+}
+
+/// A named load whose `dst` is its object register (`p = p.x`; the goldens hold 31 lines of the
+/// form `GetNamedPropertyStar rN, k, s, rN`): the default fuses it, with the object and `dst`
+/// the same register, and its expansion is the arm-0 pair (no difference, no pair left).
+#[test]
+fn star_dst_aliased_load_is_fused() {
+    let src = "function a(p) { p = p.x; return p; }";
+    let sloppy = SourceOpts::script(Strictness::Sloppy);
+    let units = arm_units(src, sloppy, &[super::regopt::DEFAULT]);
+    let text = arm_listing(&units[0], "a");
+    assert!(
+        text.contains("GetNamedPropertyStar a0, k0, s0, a0\n"),
+        "{text}"
+    );
+    let (_, rep) = star_dst_both(src, sloppy).remove(0);
+    assert!(rep.differences.is_empty(), "{:?}", rep.differences);
+    let want: std::collections::BTreeMap<&str, usize> = [("GetNamedPropertyStar", 1)].into();
+    assert_eq!(rep.fused, want, "{text}");
+    assert!(rep.missed.is_empty(), "{:?}\n{text}", rep.missed);
+}
+
+/// A wide load: 300 names come first, so `a.q` has a name constant past 255 and its `Star`
+/// a one-byte `dst` (`x` is r0).
+fn star_wide_load_case() -> String {
+    let mut s = String::from("function w(a) { var x; f(");
+    for i in 0..300 {
+        s.push_str(&format!("a.p{i}, "));
+    }
+    s.push_str("0); x = a.q; return x; }");
+    s
+}
+
+/// A script unit of one function made by the register optimizer in `mode` (STAR-DST T2 at the
+/// replay level): r0 and r1 are bindings, `body` emits the code, then `LdaUndefined`,
+/// `Return`.
+fn star_emitted(
+    mode: Arm,
+    body: impl FnOnce(&mut super::regopt::Emitter),
+) -> ep9_bytecode::CompiledUnit {
+    use ep9_bytecode::{CodeKind, FunctionId, FunctionMeta, UnitBuilder, UnitOptions};
+    let src = "0123456789";
+    let mut e = super::regopt::Emitter::new(
+        FunctionMeta::entry(CodeKind::Script, false, src.len() as u32),
+        2,
+        mode,
+    );
+    body(&mut e);
+    e.lda_undefined().return_();
+    let code = e.finish().unwrap_or_else(|err| panic!("{err}"));
+    let mut u = UnitBuilder::new(
+        src,
+        UnitOptions {
+            code_kind: CodeKind::Script,
+            strict: false,
+            typescript: None,
+            engine_build_id: [0; 16],
+            embed_source: false,
+        },
+    );
+    u.set_function(FunctionId(0), code);
+    u.finish()
+        .unwrap_or_else(|err| panic!("{err}"))
+        .into_inner()
+}
+
+/// The T2 replay cases: (name, body).
+type StarBody = fn(&mut super::regopt::Emitter);
+
+fn star_bodies() -> Vec<(&'static str, StarBody)> {
+    use ep9_bytecode::{FeedbackSlotKind, HandlerKind, Register};
+    fn load(e: &mut super::regopt::Emitter) {
+        let k = e.string_constant("b");
+        let s = e.feedback_slot(FeedbackSlotKind::LoadNamed);
+        e.get_named_property(Register::RECEIVER, k, s);
+    }
+    vec![
+        // A handler-range start between the load and its `Star` (SC a3).
+        ("range start", |e| {
+            let (start, end, target, done) =
+                (e.new_label(), e.new_label(), e.new_label(), e.new_label());
+            let ctx = Register::local(1);
+            e.lda_current_context().star(ctx);
+            load(e);
+            e.bind(start);
+            e.star(Register::local(0));
+            load(e);
+            e.bind(end);
+            e.jump(done);
+            e.bind(target);
+            e.bind(done);
+            e.add_handler(start, end, target, ctx, HandlerKind::Caught);
+        }),
+        // A handler-range end between the load and its `Star`.
+        ("range end", |e| {
+            let (start, end, target, done) =
+                (e.new_label(), e.new_label(), e.new_label(), e.new_label());
+            let ctx = Register::local(1);
+            e.lda_current_context().star(ctx);
+            e.bind(start);
+            load(e);
+            e.bind(end);
+            e.star(Register::local(0));
+            e.jump(done);
+            e.bind(target);
+            e.bind(done);
+            e.add_handler(start, end, target, ctx, HandlerKind::Caught);
+        }),
+        // A statement position between the load and its `Star` into a temporary: the transfer
+        // is emitted with the entry (O9).
+        ("statement", |e| {
+            let t = e.new_register();
+            load(e);
+            e.set_statement_position(5);
+            e.star(t);
+            e.lda_smi(1);
+            e.ldar(t);
+            e.star(Register::local(0));
+        }),
+        // A carried statement position: the owed `Ldar r1` of a statement after the load.
+        ("carried", |e| {
+            let t = e.new_register();
+            load(e);
+            e.star(t);
+            e.set_statement_position(5);
+            e.ldar(Register::local(1));
+            e.star(Register::local(0));
+            e.ldar(t);
+            e.star(Register::local(1));
+        }),
+    ]
+}
+
+/// `function f(a, p) { var u; u = (a.b, p); return u; }`: the dead load `a.b`, then the owed
+/// `Ldar p`, which rule O2 emits before the `Star u` (PK section 4.2 test (3)).
+const STAR_OWED: &str = "function f(a, p) { var u; u = (a.b, p); return u; }";
+
+/// T2 of STAR-DST: each mutant (`Mode::Mutant(11..=20)`) breaks one rule of O13, and T1 finds
+/// it with its own reason. The correct arms pass on the same inputs.
+#[test]
+fn star_dst_mutants_fail() {
+    let sloppy = SourceOpts::script(Strictness::Sloppy);
+    let strict = SourceOpts::script(Strictness::Strict);
+    let wide = star_wide_case();
+    let wide_load = star_wide_load_case();
+    let fails = |m: u8, src: &str, opts: SourceOpts, needle: &str| {
+        let d = star_dst_differences(src, opts, Arm::Mutant(m)).differences;
+        assert!(d.iter().any(|d| d.contains(needle)), "mutant {m}: {d:?}");
+    };
+    let bodies = star_bodies();
+    let body = |name: &str| bodies.iter().find(|b| b.0 == name).expect("a body").1;
+    let replay_fails = |m: u8, name: &str, needle: &str| {
+        let b = body(name);
+        let (u0, un) = (
+            star_emitted(Arm::Fuse(0), b),
+            star_emitted(Arm::Mutant(m), b),
+        );
+        let d = star_dst_compare(&u0, &un, star_family(Arm::Mutant(m))).differences;
+        assert!(
+            d.iter().any(|d| d.contains(needle)),
+            "mutant {m} {name}: {d:?}"
+        );
+    };
+    // 11: B2 is not tested: the fuse crosses a jump target (t3: the loop of c14).
+    fails(11, LDAR_T3, strict, "a label is on the Star");
+    // 12, 13: B2 is not tested at a handler-range start or end (SC a3): the range moves.
+    replay_fails(12, "range start", "handler ranges differ");
+    replay_fails(13, "range end", "handler ranges differ");
+    // 14: B3 is not tested: the statement entry of the `Star` goes to the next instruction.
+    replay_fails(14, "statement", "position entries differ");
+    // 15, 16: B4 is not tested for the load (a name constant past 255) or for `dst` (a local
+    // past r127): the fused instruction has a prefix.
+    fails(15, &wide_load, sloppy, "has a prefix (INV-S7)");
+    fails(16, &wide, sloppy, "has a prefix (INV-S7)");
+    // 17: a carried statement position forced onto each `Star` (PK test (2), replay level):
+    // B3 keeps every pair, with the entry on the `Star`; T1 sees the added entries.
+    for src in [STAR_OWED, wide.as_str()] {
+        fails(17, src, sloppy, "position entries differ");
+        let r = star_dst_differences(src, sloppy, Arm::Mutant(17));
+        assert!(r.fused.is_empty(), "mutant 17 fused {:?}", r.fused);
+    }
+    // 18: the owed `Ldar` after the fused instruction (the O2 order; PK test (3)): `u` gets
+    // `a.b`, not `p`.
+    fails(18, STAR_OWED, sloppy, "instructions differ");
+    // 19: the fused instruction stores to another register.
+    fails(19, &wide, sloppy, "instructions differ");
+    // 20: family 1 fuses a context load.
+    fails(
+        20,
+        "function c1() { var o = 1; function g() { var t = o; return t; } return g; }",
+        sloppy,
+        "is not in family 1",
+    );
+    // The correct arms pass on the same inputs, and fuse there.
+    for src in [LDAR_T3, STAR_OWED, wide.as_str(), wide_load.as_str()] {
+        for (arm, r) in star_dst_both(src, strict) {
+            assert!(r.differences.is_empty(), "{arm:?}: {:?}", r.differences);
+        }
+    }
+    for (name, b) in &bodies {
+        let u0 = star_emitted(Arm::Fuse(0), *b);
+        for f in [1, 2] {
+            let r = star_dst_compare(&u0, &star_emitted(Arm::Fuse(f), *b), f);
+            assert!(
+                r.differences.is_empty(),
+                "{name} family {f}: {:?}",
+                r.differences
+            );
+        }
+    }
+}
+
+/// PK section 4.2 tests (2), (3) and (5) at the front end: a statement position on the `Star`
+/// (replay level) keeps the pair with the entry on the `Star`; an owed `Ldar` between the load
+/// and the `Star` keeps the pair; `f(a.b)` with the fused load keeps the position entry (the
+/// throw location) of the load.
+#[test]
+fn star_dst_keeps_the_pair_for_a_position_and_an_owed_load() {
+    let sloppy = SourceOpts::script(Strictness::Sloppy);
+    // (2): the statement body (B3): the pair, with the statement entry on the `Star`.
+    let bodies = star_bodies();
+    let stmt = bodies.iter().find(|b| b.0 == "statement").unwrap().1;
+    let u = star_emitted(Arm::Fuse(2), stmt);
+    let f = &u.functions[0];
+    let star = ep9_bytecode::Instructions::new(&f.bytecode)
+        .map(Result::unwrap)
+        .find(|i| i.opcode == Opcode::Star)
+        .expect("the Star stays");
+    assert!(
+        f.positions
+            .iter()
+            .any(|p| p.bytecode_offset == star.offset && p.is_statement),
+        "{}",
+        ep9_bytecode::disassemble(&u)
+    );
+    // (3): the owed `Ldar a1` between the load and `Star r0`.
+    let units = arm_units(STAR_OWED, sloppy, &[Arm::Fuse(2)]);
+    let text = arm_listing(&units[0], "f");
+    assert!(
+        text.contains("GetNamedProperty a0, k0, s0\n4 Ldar a1\n6 Star r0\n")
+            && !text.contains("PropertyStar"),
+        "{text}"
+    );
+    // (5): `f(a.b)`: the fused load has the entry of the arm-0 load.
+    let src = "function d1(a) { f(a.b); }";
+    let units = arm_units(src, sloppy, &[Arm::Fuse(0), Arm::Fuse(2)]);
+    let (t0, t2) = (arm_listing(&units[0], "d1"), arm_listing(&units[1], "d1"));
+    assert!(
+        t2.contains("5 E> GetNamedPropertyStar a0, k1, s1, r1\n"),
+        "{t2}"
+    );
+    let entries = |t: &str| {
+        t.lines()
+            .filter(|l| l.starts_with('|'))
+            .map(|l| l.split_whitespace().skip(2).collect::<Vec<_>>().join(" "))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(entries(&t0), entries(&t2), "{t0}\n--\n{t2}");
+    assert!(
+        star_dst_differences(src, sloppy, Arm::Fuse(2))
+            .differences
+            .is_empty()
+    );
+}
+
+/// T1 of STAR-DST on the script files named in `EP9_STAR_DST_FILES` (`:`-separated, sloppy
+/// scripts), in the default; prints the fused sites and the pairs kept by reason. On demand:
+///
+/// ```text
+/// EP9_STAR_DST_FILES=a.js:b.js cargo test -p ep9_frontend --release --lib star_dst_on_files -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "on demand: needs EP9_STAR_DST_FILES"]
+fn star_dst_on_files() {
+    let files = std::env::var("EP9_STAR_DST_FILES").unwrap_or_default();
+    let mut failures = Vec::new();
+    for path in files.split(':').filter(|p| !p.is_empty()) {
+        let src = std::fs::read_to_string(path).expect("read the file");
+        for (arm, r) in star_dst_both(&src, SourceOpts::script(Strictness::Sloppy)) {
+            println!(
+                "{path} {arm:?}: {} differences, fused {:?}, kept pairs {:?}",
+                r.differences.len(),
+                r.fused,
+                r.missed
+            );
+            failures.extend(
+                r.differences
+                    .into_iter()
+                    .map(|d| format!("{path} {arm:?}: {d}")),
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

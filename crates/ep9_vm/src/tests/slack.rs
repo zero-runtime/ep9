@@ -518,3 +518,79 @@ fn a_constructor_never_reads_another_constructors_scan() {
         assert_eq!(s.last, (1, 1), "{label}");
     }
 }
+
+// ---- the fused named load (STAR-DST probe, ABI 7; SC b6) ---------------------------------------
+
+/// The names the scan gives for `code` (the list, not only the count).
+fn scan_names(code: &FunctionCode) -> Option<Vec<u32>> {
+    let mut names = [0u32; MAX_NAMES];
+    slack::this_store_names(code.bytecode(), &mut names).map(|n| names[..n].to_vec())
+}
+
+/// `GetNamedPropertyStar obj, name, slot, dst` is the pair `GetNamedProperty obj, name, slot`
+/// then `Star dst` for the scan: `this.a.b; this.x = 1` and the forms where `dst` holds `this`
+/// before the load (the store through it then is not a `this` store) give the same names for
+/// the pair unit and the fused unit.
+#[test]
+fn a_fused_named_load_scans_as_its_pair() {
+    // `fused`: the load and its `Star` as one instruction.
+    fn load_star(
+        a: &mut Asm,
+        fused: bool,
+        obj: ep9_bytecode::Register,
+        name: &str,
+        dst: ep9_bytecode::Register,
+    ) {
+        let k = a.b.string_constant(name);
+        if fused {
+            a.b.get_named_property_star(obj, k, a.named, dst);
+        } else {
+            a.b.get_named_property(obj, k, a.named).star(dst);
+        }
+    }
+    for fused in [false, true] {
+        // `this.a.b; this.x = 1`.
+        let chain = ctor("P", |a| {
+            let (this, t) = (a.b.receiver(), a.b.new_register());
+            load_star(a, fused, this, "a", t);
+            a.get_named(t, "b");
+            a.b.lda_smi(1);
+            a.set_named(this, "x");
+        });
+        // `var t = this; t = this.a; t.y = 1; this.x = 1`: the load clears `t`.
+        let cleared = ctor("P", |a| {
+            let (this, t) = (a.b.receiver(), a.b.new_register());
+            a.b.mov(this, t);
+            load_star(a, fused, this, "a", t);
+            a.b.lda_smi(1);
+            a.set_named(t, "y");
+            a.set_named(this, "x");
+        });
+        // `var t = this; t = t.a; this.x = t`: dst is the object register.
+        let same = ctor("P", |a| {
+            let (this, t) = (a.b.receiver(), a.b.new_register());
+            a.b.mov(this, t);
+            load_star(a, fused, t, "a", t);
+            a.b.ldar(t);
+            a.set_named(this, "x");
+        });
+        // `this.a` into a parameter that holds `this`: a1 = this; a1 = this.a; a1.y = 1.
+        let param = ctor("P", |a| {
+            let (this, p) = (a.b.receiver(), a.b.parameter(1));
+            a.b.mov(this, p);
+            load_star(a, fused, this, "a", p);
+            a.b.lda_smi(1);
+            a.set_named(p, "y");
+        });
+        let got: Vec<Option<Vec<u32>>> = [&chain, &cleared, &same, &param]
+            .iter()
+            .map(|c| scan_names(c))
+            .collect();
+        // The constant indices: "a" k0 (and "b" k1 in `chain`), then the stored names.
+        assert_eq!(
+            got,
+            [Some(vec![2]), Some(vec![2]), Some(vec![1]), Some(vec![])],
+            "fused {fused}"
+        );
+    }
+}

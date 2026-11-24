@@ -1,6 +1,6 @@
 # class-private-generator: script (sloppy)
 # | class A { *#g() { yield 1; } static *#h() {} t() { return this.#g(); } }
-; ep9 bytecode, ABI 6
+; ep9 bytecode, ABI 7
 unit kind=script strict=false ts=none source_len=72 source=embedded hints=none
 source_hash=73f1b60645ca07e18d9f5fdd154400a778d4e6771cf26fccfc6c7bec8126e78c
 strings (6):
@@ -19,7 +19,7 @@ scopes (7):
   scope5 function outer=scope1 flags=[strict] slots=[]
   scope6 function outer=scope1 flags=[strict] slots=[]
 function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs=8 range=0..72
-  code (120 bytes):
+  code (119 bytes):
       0 S> CallRuntime DeclareGlobals, ()               ; 68 05 00 00 00
       5 S> CreateBlockContext k0  ; k0 = Scope scope1   ; 76 00
       7    PushContext r4                               ; 13 04
@@ -52,17 +52,16 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
      84    Star r7                                      ; 0c 07
      86    Mov r0, r6                                   ; 0d 00 06
      89 E> CallRuntime SetClassFieldsInitializer, r6-r7 ; 68 18 00 06 02
-     94    LdaCurrentContextSlot [3]                    ; 18 03
-     96    Star r6                                      ; 0c 06
-     98    LdaUndefined                                 ; 05
-     99 E> DefineKeyedOwnProperty r1, r6, #0x02, s5     ; 27 01 06 02 05
-    104    PopContext r4                                ; 14 04
-    106    LdaConstant k1  ; k1 = String str0 "A"       ; 0a 01
-    108    Star r1                                      ; 0c 01
-    110    Mov r0, r2                                   ; 0d 00 02
-    113 E> CallRuntime InitializeGlobal, r1-r2          ; 68 06 00 01 02
-    118    LdaUndefined                                 ; 05
-    119    Return                                       ; 92
+     94    LdaCurrentContextSlotStar [3], r6            ; 9f 03 06
+     97    LdaUndefined                                 ; 05
+     98 E> DefineKeyedOwnProperty r1, r6, #0x02, s5     ; 27 01 06 02 05
+    103    PopContext r4                                ; 14 04
+    105    LdaConstant k1  ; k1 = String str0 "A"       ; 0a 01
+    107    Star r1                                      ; 0c 01
+    109    Mov r0, r2                                   ; 0d 00 02
+    112 E> CallRuntime InitializeGlobal, r1-r2          ; 68 06 00 01 02
+    117    LdaUndefined                                 ; 05
+    118    Return                                       ; 92
   constants (8):
       0 Scope scope1
       1 String str0 "A"
@@ -93,8 +92,8 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
      72 E 45 (1:46)
      80 E 0 (1:1)
      89 E 8 (1:9)
-     99 E 8 (1:9)
-    113 E 0 (1:1)
+     98 E 8 (1:9)
+    112 E 0 (1:1)
 function f1 class-constructor name="A" parent=f0 outer_scope=scope1 flags=[strict,simple-params] params=0 length=0 regs=2 range=0..72
   code (13 bytes):
       0 S> LdaCurrentFunction                           ; 0e
@@ -110,20 +109,19 @@ function f1 class-constructor name="A" parent=f0 outer_scope=scope1 flags=[stric
       0 S 0 (1:1)
       6 E 8 (1:9)
 function f2 class-fields-initializer name=- parent=f0 outer_scope=scope1 flags=[strict,simple-params] params=0 length=0 regs=1 range=8..72
-  code (12 bytes):
-      0 S> LdaCurrentContextSlot [2]                    ; 18 02
-      2    Star r0                                      ; 0c 00
-      4    LdaUndefined                                 ; 05
-      5 E> DefineKeyedOwnProperty <this>, r0, #0x02, s0 ; 27 ff 00 02 00
-     10    LdaUndefined                                 ; 05
-     11    Return                                       ; 92
+  code (11 bytes):
+      0 S> LdaCurrentContextSlotStar [2], r0            ; 9f 02 00
+      3    LdaUndefined                                 ; 05
+      4 E> DefineKeyedOwnProperty <this>, r0, #0x02, s0 ; 27 ff 00 02 00
+      9    LdaUndefined                                 ; 05
+     10    Return                                       ; 92
   constants (0):
   feedback (1):
       0 DefineKeyedOwn
   handlers (0):
   positions (2):
       0 S 0 (1:1)
-      5 E 8 (1:9)
+      4 E 8 (1:9)
 function f3 method name="#g" parent=f0 outer_scope=scope1 flags=[strict,generator,simple-params] params=0 length=0 regs=3 range=10..28
   code (83 bytes):
       0    LdaNewTarget                                 ; 0f
@@ -207,16 +205,14 @@ function f4 method name="#h" parent=f0 outer_scope=scope1 flags=[strict,generato
      30 E 39 (1:40)
      40 E 39 (1:40)
 function f5 method name="t" parent=f0 outer_scope=scope1 flags=[strict,simple-params] params=0 length=0 regs=2 range=45..70
-  code (18 bytes):
-      0 S> Ldar <this>                                  ; 0b ff
-      2    LdaCurrentContextSlot [2]                    ; 18 02
-      4 E> GetKeyedProperty <this>, s0                  ; 23 ff 00
-      7    LdaCurrentContextSlot [0]                    ; 18 00
-      9    Star r0                                      ; 0c 00
-     11 E> CallProperty0 r0, <this>, s1                 ; 60 00 ff 01
-     15    Return                                       ; 92
-     16    LdaUndefined                                 ; 05
-     17    Return                                       ; 92
+  code (15 bytes):
+      0 S> LdaCurrentContextSlot [2]                    ; 18 02
+      2 E> GetKeyedProperty <this>, s0                  ; 23 ff 00
+      5    LdaCurrentContextSlotStar [0], r0            ; 9f 00 00
+      8 E> CallProperty0 r0, <this>, s1                 ; 60 00 ff 01
+     12    Return                                       ; 92
+     13    LdaUndefined                                 ; 05
+     14    Return                                       ; 92
   constants (0):
   feedback (2):
       0 LoadKeyed
@@ -224,5 +220,5 @@ function f5 method name="t" parent=f0 outer_scope=scope1 flags=[strict,simple-pa
   handlers (0):
   positions (3):
       0 S 51 (1:52)
-      4 E 63 (1:64)
-     11 E 58 (1:59)
+      2 E 63 (1:64)
+      8 E 58 (1:59)

@@ -542,6 +542,21 @@ macro_rules! for_each_opcode {
             /// `CallRuntimeForPair`); acc is unchanged
             CallRuntimeForPair = 0x9d, call_runtime_for_pair, acc: None, flags: [Throws, Call],
                 operands: (id: Runtime, args: RegList, argc: RegCount, out: RegOutPair);
+
+            // ---- Fused loads with a register store (ABI 7, the STAR-DST probe) -------------
+
+            /// acc = object.name; dst = acc (one dispatch for `GetNamedProperty` then
+            /// `Star dst`). The slot is the slot of the load; an exception leaves `dst` unchanged
+            GetNamedPropertyStar = 0x9e, get_named_property_star, acc: Write, flags: [Throws],
+                operands: (object: Reg, name: Const(String), slot: Slot(LoadNamed), dst: RegOut);
+            /// acc = slot `slot_index` of the current context; dst = acc (`LdaCurrentContextSlot`
+            /// then `Star dst`)
+            LdaCurrentContextSlotStar = 0x9f, lda_current_context_slot_star, acc: Write,
+                flags: [], operands: (slot_index: CtxSlot, dst: RegOut);
+            /// acc = slot `slot_index` of the context `depth` hops out from `context`; dst = acc
+            /// (`LdaContextSlot` then `Star dst`)
+            LdaContextSlotStar = 0xa0, lda_context_slot_star, acc: Write, flags: [],
+                operands: (context: Reg, slot_index: CtxSlot, depth: CtxDepth, dst: RegOut);
         }
     };
 }
@@ -946,7 +961,7 @@ mod tests {
 
     #[test]
     fn table_is_dense_and_round_trips() {
-        assert_eq!(OPCODE_COUNT, 0x9e);
+        assert_eq!(OPCODE_COUNT, 0xa1);
         for (i, info) in OPCODES.iter().enumerate() {
             assert_eq!(info.opcode as usize, i);
             assert_eq!(Opcode::from_u8(i as u8), Some(info.opcode));

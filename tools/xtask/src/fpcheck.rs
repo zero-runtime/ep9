@@ -1243,7 +1243,7 @@ impl<'ast> Visit<'ast> for ItemSpans {
     fn visit_item_impl(&mut self, i: &'ast syn::ItemImpl) {
         let ty = i.self_ty.to_token_stream().to_string().replace(' ', "");
         let name = match &i.trait_ {
-            Some((_, t, _)) => format!(
+            Some((t, _)) => format!(
                 "<{ty} as {}>",
                 t.to_token_stream().to_string().replace(' ', "")
             ),

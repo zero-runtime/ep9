@@ -1,6 +1,6 @@
 # gen-labeled-nested-loop: script (sloppy)
 # | function* g(n) { outer: for (let i = 0; i < n; i++) { let f = () => i; while (true) { if (yield f) continue outer; break outer; } } }
-; ep9 bytecode, ABI 6
+; ep9 bytecode, ABI 7
 unit kind=script strict=false ts=none source_len=133 source=embedded hints=none
 source_hash=ecd57290d54f88bcdc57ed37e90f968f7429bbcc12241d9917350f08ccc614b0
 strings (3):
@@ -35,10 +35,10 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
       5 E 0 (1:1)
      15 E 0 (1:1)
 function f1 normal name="g" parent=f0 outer_scope=scope0 flags=[generator,simple-params] params=1 length=1 regs=5 range=0..133
-  code (165 bytes):
+  code (162 bytes):
       0    LdaNewTarget                                 ; 0f
       1    Star r1                                      ; 0c 01
-      3    SwitchOnGeneratorState r1, k0  ; k0 = JumpTable [+21, +101] ; 99 01 00
+      3    SwitchOnGeneratorState r1, k0  ; k0 = JumpTable [+21, +98] ; 99 01 00
       6    LdaCurrentFunction                           ; 0e
       7    Star r2                                      ; 0c 02
       9    Mov <this>, r3                               ; 0d ff 03
@@ -66,48 +66,46 @@ function f1 normal name="g" parent=f0 outer_scope=scope0 flags=[generator,simple
      61    PushContext r2                               ; 13 02
      63    LdaContextSlot r3, [0], [0]                  ; 16 03 00 00
      67    StaCurrentContextSlot [0]                    ; 1b 00
-     69    LdaCurrentContextSlot [0]                    ; 18 00
-     71    Star r3                                      ; 0c 03
-     73    Ldar a0                                      ; 0b fe
-     75 E> TestLessThan r3, s0                          ; 4d 03 00
-     78    JumpIfFalse @161                             ; 80 53
-     80 S> CreateClosure k3, s1, #0x00  ; k3 = Function f2 ; 74 03 01 00
-     84    Star r0                                      ; 0c 00
-     86 S> Ldar r0                                      ; 0b 00
-     88    LdaFalse                                     ; 09
-     89    Star r4                                      ; 0c 04
-     91    Mov r0, r3                                   ; 0d 00 03
-     94 E> CallRuntime CreateIterResultObject, r3-r4    ; 68 03 00 03 02
-     99 E> SuspendGenerator r1, r0-r2, [1]              ; 9a 01 00 03 01
-    104    ResumeGenerator r1, r0-r2                    ; 9b 01 00 03
-    108    Star r3                                      ; 0c 03
-    110 E> CallRuntime GeneratorGetResumeMode, r1       ; 68 14 00 01 01
-    115    SwitchOnSmi k4, [0]  ; k4 = JumpTable [+9, +6] ; 8a 04 00
+     69    LdaCurrentContextSlotStar [0], r3            ; 9f 00 03
+     72    Ldar a0                                      ; 0b fe
+     74 E> TestLessThan r3, s0                          ; 4d 03 00
+     77    JumpIfFalse @158                             ; 80 51
+     79 S> CreateClosure k3, s1, #0x00  ; k3 = Function f2 ; 74 03 01 00
+     83    Star r0                                      ; 0c 00
+     85 S> LdaFalse                                     ; 09
+     86    Star r4                                      ; 0c 04
+     88    Mov r0, r3                                   ; 0d 00 03
+     91 E> CallRuntime CreateIterResultObject, r3-r4    ; 68 03 00 03 02
+     96 E> SuspendGenerator r1, r0-r2, [1]              ; 9a 01 00 03 01
+    101    ResumeGenerator r1, r0-r2                    ; 9b 01 00 03
+    105    Star r3                                      ; 0c 03
+    107 E> CallRuntime GeneratorGetResumeMode, r1       ; 68 14 00 01 01
+    112    SwitchOnSmi k4, [0]  ; k4 = JumpTable [+9, +6] ; 8a 04 00
+    115    Ldar r3                                      ; 0b 03
+    117 E> Throw                                        ; 90
     118    Ldar r3                                      ; 0b 03
-    120 E> Throw                                        ; 90
+    120    Return                                       ; 92
     121    Ldar r3                                      ; 0b 03
-    123    Return                                       ; 92
-    124    Ldar r3                                      ; 0b 03
-    126    JumpIfToBooleanFalse @130                    ; 82 04
-    128 S> Jump @136                                    ; 7e 08
-    130 S> Jump @161                                    ; 7e 1f
-    132    JumpLoop @86, [1], s2                        ; 7d 2e 01 02
-    136    LdaCurrentContext                            ; 15
-    137    PopContext r2                                ; 14 02
-    139    Star r3                                      ; 0c 03
-    141 E> CreateBlockContext k2  ; k2 = Scope scope2   ; 76 02
-    143    PushContext r2                               ; 13 02
-    145    LdaContextSlot r3, [0], [0]                  ; 16 03 00 00
-    149    StaCurrentContextSlot [0]                    ; 1b 00
-    151    LdaCurrentContextSlot [0]                    ; 18 00
-    153 E> Inc s3                                       ; 42 03
-    155    StaCurrentContextSlot [0]                    ; 1b 00
-    157    JumpLoop @69, [0], s4                        ; 7d 58 00 04
-    161    PopContext r2                                ; 14 02
-    163    LdaUndefined                                 ; 05
-    164    Return                                       ; 92
+    123    JumpIfToBooleanFalse @127                    ; 82 04
+    125 S> Jump @133                                    ; 7e 08
+    127 S> Jump @158                                    ; 7e 1f
+    129    JumpLoop @85, [1], s2                        ; 7d 2c 01 02
+    133    LdaCurrentContext                            ; 15
+    134    PopContext r2                                ; 14 02
+    136    Star r3                                      ; 0c 03
+    138 E> CreateBlockContext k2  ; k2 = Scope scope2   ; 76 02
+    140    PushContext r2                               ; 13 02
+    142    LdaContextSlot r3, [0], [0]                  ; 16 03 00 00
+    146    StaCurrentContextSlot [0]                    ; 1b 00
+    148    LdaCurrentContextSlot [0]                    ; 18 00
+    150 E> Inc s3                                       ; 42 03
+    152    StaCurrentContextSlot [0]                    ; 1b 00
+    154    JumpLoop @69, [0], s4                        ; 7d 55 00 04
+    158    PopContext r2                                ; 14 02
+    160    LdaUndefined                                 ; 05
+    161    Return                                       ; 92
   constants (5):
-      0 JumpTable [+21, +101]
+      0 JumpTable [+21, +98]
       1 JumpTable [+9, +6]
       2 Scope scope2
       3 Function f2
@@ -127,17 +125,17 @@ function f1 normal name="g" parent=f0 outer_scope=scope0 flags=[generator,simple
      44 S 24 (1:25)
      51 S 33 (1:34)
      59 E 24 (1:25)
-     75 E 40 (1:41)
-     80 S 58 (1:59)
-     86 S 86 (1:87)
-     94 E 90 (1:91)
-     99 E 90 (1:91)
-    110 E 90 (1:91)
-    120 E 90 (1:91)
-    128 S 99 (1:100)
-    130 S 115 (1:116)
-    141 E 24 (1:25)
-    153 E 47 (1:48)
+     74 E 40 (1:41)
+     79 S 58 (1:59)
+     85 S 86 (1:87)
+     91 E 90 (1:91)
+     96 E 90 (1:91)
+    107 E 90 (1:91)
+    117 E 90 (1:91)
+    125 S 99 (1:100)
+    127 S 115 (1:116)
+    138 E 24 (1:25)
+    150 E 47 (1:48)
 function f2 arrow name="f" parent=f1 outer_scope=scope3 flags=[simple-params] params=0 length=0 regs=0 range=62..69
   code (5 bytes):
       0 S> LdaCurrentContextSlot [0]                    ; 18 00

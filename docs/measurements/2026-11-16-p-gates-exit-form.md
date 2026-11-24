@@ -19,6 +19,6 @@ This file is the M2 exit item 9 input in the form that `cargo xtask m2-exit --p-
 |---|---|---|---|---|
 | M7-P4 OXCBUMP | 2026-11-09 | oxc 0.155.0 to 0.157.0 | 0.59 agent-hours (one agent; 35.5 min wall) | 2026-11-09-p-gates.md, "P2: the bump on a clock" |
 | DEPS-BUMP-1 | 2026-11-10 to 2026-11-11 | oxc 0.157.0 to 0.158.0, plus lock-only moves (loom, generator, itoa, smallvec, syn, unicode-width, cc, memmap2) | 1.73 hours of workflow wall time (23:18 to 01:02, +08:00; 7 agents: scout, builder, checker r1-r3 with 2 fix rounds) | orchestrator log M6-ORCH-385 (start) and M6-ORCH-396 (done) |
-| DEPS-BUMP-2 | due 2026-11-24 | - | not run yet | plan v14 §9.3 |
+| DEPS-BUMP-2 | 2026-11-23 to 2026-11-24 | oxc stays at 0.158.0 (0.159.0 was built and then held for its debug parser stack; 0.160.0 held), plus lock-only moves (oxc_index, hashbrown, smallvec, cc, pin-project-lite) and syn 3 in xtask | about 1.8 hours of workflow wall time for the scout and the builder (23:24 to about 01:10, +08:00); the check rounds and the hold round are not in it | decisions-log rows DEPS-BUMP-2 and DEPS-BUMP-2-OXC-HOLD (§21.12) |
 
 **Limits.** The DEPS-BUMP-1 hours are the wall time of a workflow, not the sum of the agent hours, and they include the other crates of the bump. Two bumps are a small sample; a release that changes the AST or the `Semantic` API costs more (2026-11-09-p-gates.md). The reading is not a gate host reading and needs none (item 9 is a check of the gates, not a speed cell).

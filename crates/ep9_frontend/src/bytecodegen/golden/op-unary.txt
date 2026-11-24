@@ -1,6 +1,6 @@
 # op-unary: script (sloppy)
 # | function f(a) { return [-a, +a, ~a, !a, typeof a, void a, -1, -0]; }
-; ep9 bytecode, ABI 6
+; ep9 bytecode, ABI 7
 unit kind=script strict=false ts=none source_len=68 source=embedded hints=none
 source_hash=e318bd6f0047619fdd5519eb888630b507b19bc020ca11217c3327433a99be37
 strings (1):
@@ -29,7 +29,7 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
       5 E 0 (1:1)
      15 E 0 (1:1)
 function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] params=1 length=1 regs=2 range=0..68
-  code (80 bytes):
+  code (78 bytes):
       0 S> CreateArrayLiteral k2, s0, #0x01  ; k2 = ArrayBoilerplate [_, _, _, _, _, _, k0, k1] ; 6d 02 00 01
       4    Star r0                                      ; 0c 00
       6    LdaZero                                      ; 03
@@ -59,13 +59,12 @@ function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] p
      60 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
      64    LdaSmi [5]                                   ; 04 05
      66    Star r1                                      ; 0c 01
-     68    Ldar a0                                      ; 0b fe
-     70    LdaUndefined                                 ; 05
-     71 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
-     75    Ldar r0                                      ; 0b 00
+     68    LdaUndefined                                 ; 05
+     69 E> StaInArrayLiteral r0, r1, s1                 ; 28 00 01 01
+     73    Ldar r0                                      ; 0b 00
+     75    Return                                       ; 92
+     76    LdaUndefined                                 ; 05
      77    Return                                       ; 92
-     78    LdaUndefined                                 ; 05
-     79    Return                                       ; 92
   constants (3):
       0 Number -1.0
       1 Number -0.0
@@ -88,4 +87,4 @@ function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[simple-params] p
      37 E 23 (1:24)
      48 E 23 (1:24)
      60 E 23 (1:24)
-     71 E 23 (1:24)
+     69 E 23 (1:24)

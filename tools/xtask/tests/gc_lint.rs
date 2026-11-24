@@ -100,6 +100,12 @@ fn closure_capture_in_a_box() {
     check_case("boxed_closure.rs");
 }
 
+/// syn 3 moved the arm guard into the pattern (`Pat::Guard`): a use there still counts.
+#[test]
+fn closure_capture_in_a_match_guard() {
+    check_case("match_guard.rs");
+}
+
 /// An alias in one file (`use std::alloc::Layout as Local`) hides no `Local` in another, also
 /// when two files give one alias name different targets.
 #[test]

@@ -1,6 +1,6 @@
 # fn-params-split: script (sloppy)
 # | function f(a = () => b, b) { var b; var a; return a; }
-; ep9 bytecode, ABI 6
+; ep9 bytecode, ABI 7
 unit kind=script strict=false ts=none source_len=54 source=embedded hints=none
 source_hash=23fa606bf05c8753ef279fc8595999e40654947462509dbaeb59b57a71a78b09
 strings (3):
@@ -33,7 +33,7 @@ function f0 script name=- parent=- outer_scope=- flags=[] params=0 length=0 regs
       5 E 0 (1:1)
      15 E 0 (1:1)
 function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[] params=2 length=0 regs=5 range=0..54
-  code (44 bytes):
+  code (43 bytes):
       0 E> CreateFunctionContext k0, [1]  ; k0 = Scope scope1 ; 75 00 01
       3    PushContext r3                               ; 13 03
       5    LdaTheHole                                   ; 07
@@ -48,14 +48,13 @@ function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[] params=2 lengt
      24    Mov r4, r0                                   ; 0d 04 00
      27    Ldar a1                                      ; 0b fd
      29    StaCurrentContextSlot [0]                    ; 1b 00
-     31    LdaCurrentContextSlot [0]                    ; 18 00
-     33    Star r1                                      ; 0c 01
-     35    Ldar r0                                      ; 0b 00
-     37    Star r2                                      ; 0c 02
-     39 S> Ldar r2                                      ; 0b 02
-     41    Return                                       ; 92
-     42    LdaUndefined                                 ; 05
-     43    Return                                       ; 92
+     31    LdaCurrentContextSlotStar [0], r1            ; 9f 00 01
+     34    Ldar r0                                      ; 0b 00
+     36    Star r2                                      ; 0c 02
+     38 S> Ldar r2                                      ; 0b 02
+     40    Return                                       ; 92
+     41    LdaUndefined                                 ; 05
+     42    Return                                       ; 92
   constants (2):
       0 Scope scope1
       1 Function f2
@@ -65,7 +64,7 @@ function f1 normal name="f" parent=f0 outer_scope=scope0 flags=[] params=2 lengt
   positions (3):
       0 E 0 (1:1)
      12 E 15 (1:16)
-     39 S 43 (1:44)
+     38 S 43 (1:44)
 function f2 arrow name="a" parent=f1 outer_scope=scope1 flags=[simple-params] params=0 length=0 regs=0 range=15..22
   code (5 bytes):
       0 S> LdaCurrentContextSlot [0]                    ; 18 00
