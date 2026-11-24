@@ -299,6 +299,36 @@ fn random_mixes_near_the_caps_never_abort() {
         ("(typeof ", ")"),
         ("(async x=>", ")"),
         ("f(", ")"),
+        // The call, spread and list forms of FORMS (the stack forms): the nested item after 6
+        // list items, and before them. The switch pairs are in a function with `return`, so each
+        // pair is one expression.
+        ("f(0,0,0,0,0,0,", ")"),
+        ("f(", ",0,0,0,0,0,0)"),
+        ("a.m(0,0,0,0,0,0,", ")"),
+        ("a.m(", ",0,0,0,0,0,0)"),
+        // Parenthesized: `new f?.()` is a SyntaxError, and `new ` is a wrapper.
+        ("(f?.(0,0,0,0,0,0,", "))"),
+        ("(f?.(", ",0,0,0,0,0,0))"),
+        ("new C(0,0,0,0,0,0,", ")"),
+        ("new C(", ",0,0,0,0,0,0)"),
+        ("async(0,0,0,0,0,0,", ")"),
+        ("async(", ",0,0,0,0,0,0)"),
+        ("f(...a,...a,...a,...a,...a,...a,...", ")"),
+        ("f(...", ",...a,...a,...a,...a,...a,...a)"),
+        ("f`${0}${0}${0}${0}${0}${0}${", "}`"),
+        ("f`${", "}${0}${0}${0}${0}${0}${0}`"),
+        ("(0,0,0,0,0,0,", ")"),
+        ("(", ",0,0,0,0,0,0)"),
+        ("`${0}${0}${0}${0}${0}${0}${", "}`"),
+        ("`${", "}${0}${0}${0}${0}${0}${0}`"),
+        ("[0,0,0,0,0,0,", "]"),
+        ("[", ",0,0,0,0,0,0]"),
+        ("function(){switch(a){case 0:0;0;0;0;0;0;return ", "}}"),
+        ("function(){switch(a){case 0:return ", ";0;0;0;0;0;0;}}"),
+        ("function(){0;0;0;0;0;0;return ", "}"),
+        ("function(){return ", ";0;0;0;0;0;0;}"),
+        ("(()=>f(0,0,0,0,0,0,", "))"),
+        ("(()=>f(", ",0,0,0,0,0,0))"),
     ];
     let mut seed = 0x2545_F491_4F6C_DD1Du64;
     let mut next = move || {
