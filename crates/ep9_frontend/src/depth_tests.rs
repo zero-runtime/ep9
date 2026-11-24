@@ -417,3 +417,82 @@ stack_gate! {
     s_arrow_body_call => check_ast_form("arrow-body-call"),
     s_arrow_body_call_first => check_ast_form("arrow-body-call-first"),
 }
+
+/// T-B (plan v17 §5.2 step 4): every form with a growing estimate, at the largest n with
+/// estimate <= PRESCAN_CAP, compiles or is a TooDeep RangeError, never an abort. An abort kills
+/// the process, so each form runs in a child process (this test with the env var set).
+#[test]
+fn check_prescan_cap_form() {
+    const CHILD: &str = "EP9_PRESCAN_CAP_FORM";
+    let n_cap = |form: &Form| -> Option<usize> {
+        let (ea, eb) = linear(|n| estimate(form, n));
+        (ea > 0).then(|| usize::try_from((PRESCAN_CAP - eb) / ea).unwrap())
+    };
+    if let Some(name) = std::env::var_os(CHILD) {
+        let form = form(name.to_str().unwrap());
+        let n = n_cap(form).expect("a growing estimate");
+        let e = estimate(form, n);
+        let result = match run(form, n) {
+            Ok(()) => "Ok".to_string(),
+            Err(CompileError::Range(e)) => match e.kind {
+                RangeErrorKind::TooDeep(layer) => format!("TooDeep({layer:?})"),
+                RangeErrorKind::StackUnavailable => panic!("{}: stack unavailable: {e}", form.name),
+            },
+            Err(e) => panic!("{} n={n}: {e}", form.name),
+        };
+        println!(
+            "PRESCAN_CAP_FORM {} n {n} estimate {e} -> {result}",
+            form.name
+        );
+        return;
+    }
+    let mut flat = Vec::new();
+    let mut runs = Vec::new();
+    for form in FORMS {
+        if n_cap(form).is_some() {
+            runs.push(form);
+        } else {
+            flat.push(form.name);
+        }
+    }
+    // A few children at a time: each one parses at the pre-scan cap on its own worker stack.
+    let width = std::thread::available_parallelism().map_or(1, |n| n.get().min(4));
+    for chunk in runs.chunks(width) {
+        let children: Vec<_> = chunk
+            .iter()
+            .map(|form| {
+                let child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "depth_tests::check_prescan_cap_form",
+                        "--nocapture",
+                        "--test-threads=1",
+                    ])
+                    .env(CHILD, form.name)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                (form.name, child)
+            })
+            .collect();
+        for (name, child) in children {
+            let out = child.wait_with_output().unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // The harness prints "test ... " on the same line before the child's line.
+            let mark = format!("PRESCAN_CAP_FORM {name} ");
+            let line = stdout
+                .lines()
+                .find_map(|l| l.find(&mark).map(|at| &l[at..]));
+            assert!(
+                out.status.success()
+                    && line.is_some_and(|l| l.ends_with("-> Ok") || l.contains("-> TooDeep(")),
+                "{name}: {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            println!("{}", line.unwrap());
+        }
+    }
+    println!("PRESCAN_CAP_FORM no pre-scan cap (estimate does not grow): {flat:?}");
+}
