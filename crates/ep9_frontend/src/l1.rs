@@ -544,4 +544,89 @@ mod tests {
         // The budget is a share of the reservation without RED (T-BUDGET).
         assert_eq!(BUDGET_BYTES + RED, WORKER_STACK_BYTES);
     }
+
+    /// The child env var of the layer-1 tests (depth_tests.rs uses it with its own test names).
+    const CHILD: &str = "EP9_L1_CHILD";
+
+    /// The T-HOLES row of the regex budget edge test: its parts in tests/stack_holes.tsv.
+    const D5: &str = "D5-regex-groups-after-misread-block";
+
+    /// The D5 text at `n` groups, from the T-HOLES table (prefix, open, mid, close, suffix).
+    fn d5_text(n: usize) -> String {
+        let table = include_str!("../tests/stack_holes.tsv");
+        let row = table
+            .lines()
+            .find(|l| l.split('\t').next() == Some(D5))
+            .expect("the D5 row of the T-HOLES table");
+        let cols: Vec<&str> = row.split('\t').collect();
+        // The only escape of this row is `\n` in the prefix.
+        let prefix = cols[4].replace("\\n", "\n");
+        assert_eq!(prefix, "x={}\n{}\n/\"", "the D5 prefix");
+        let [open, mid, close, suffix] = [cols[5], cols[6], cols[7], cols[8]];
+        assert_eq!(
+            (open, mid, close, suffix),
+            ("(", "", ")", "\"/"),
+            "the D5 parts"
+        );
+        format!("{prefix}{}{mid}{}{suffix}", open.repeat(n), close.repeat(n))
+    }
+
+    /// Review V1: T-HOLES D5 (a regex whose groups the pre-scan does not see, so the regex budget
+    /// check of layer 1 is its only bound) at the edge of that check on the real worker:
+    /// N = (BUDGET_BYTES - 64 KiB) / (1.5 x REGEX_PER_GROUP) groups (11,204 debug, 83,360
+    /// release). The check passes (the regex parse then must fit) or stops: Ok or StackLimit,
+    /// never an abort. A child process runs it, so an abort fails only the child and the parent
+    /// names it. The size depends on the units of the profile, so this test is here and not in
+    /// tests/stack_holes.rs (an integration test cannot read them).
+    #[test]
+    fn a_regex_at_the_budget_edge_does_not_abort() {
+        const TEST: &str = "l1::tests::a_regex_at_the_budget_edge_does_not_abort";
+        let n = (BUDGET_BYTES - (64 << 10)) * SAFETY_DEN / (SAFETY_NUM * REGEX_PER_GROUP);
+        if std::env::var(CHILD).as_deref() == Ok("l1-regex-edge") {
+            let result = crate::compile(
+                &d5_text(n),
+                SourceOpts::script(Strictness::Sloppy),
+                CompileOptions::default(),
+            );
+            let word = match result {
+                Ok(_) => "Ok".to_owned(),
+                Err(CodegenError::Compile(e)) => match e.as_range() {
+                    Some(r) => format!("Range({:?})", r.kind),
+                    None => "Syntax".to_owned(),
+                },
+                Err(e) => format!("Other({e})"),
+            };
+            println!("L1-EDGE {D5} n {n} -> {word}");
+            return;
+        }
+        assert!(
+            std::env::var_os(CHILD).is_none(),
+            "{CHILD} is set in the parent"
+        );
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "l1-regex-edge")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let mark = format!("L1-EDGE {D5} n {n} -> ");
+        let word = stdout.lines().find_map(|l| {
+            l.find(&mark)
+                .map(|at| l[at + mark.len()..].trim().to_owned())
+        });
+        let tail: Vec<&str> = stderr.lines().rev().take(20).collect();
+        assert!(
+            out.status.success() && word.is_some(),
+            "{D5} n {n}: {:?}, no result line\nstderr tail:\n{}",
+            out.status,
+            tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+        );
+        let word = word.unwrap();
+        println!("{D5} n {n} -> {word}");
+        assert!(
+            word == "Ok" || word == "Range(StackLimit)",
+            "{D5} n {n}: {word}"
+        );
+    }
 }

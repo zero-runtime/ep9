@@ -271,10 +271,11 @@ const COVER: [(&str, Build); 4] = [
 /// On since the debug unit of `stack.rs` comes from T-A on the 4 CI targets (H01 B2).
 const T_A_ASSERT: bool = true;
 
-/// Measures every form, and fails when a slope does not fit its share of the worker stack:
-/// parse per pre-scan unit (the whole worker parse call, [`worker_parse`]); the depth pass,
-/// oxc_semantic, the scope pass and the 4 walks of the eval path per AST level, against the
-/// unit of the run-time budget check (`stack::PASS_PER_LEVEL`).
+/// Measures every form, and fails when a slope does not fit its share of the worker stack or
+/// its unit: parse per pre-scan unit (the whole worker parse call, [`worker_parse`]); a regex
+/// row per group, against the unit of the regex budget check (`stack::REGEX_PER_GROUP`); the
+/// depth pass, oxc_semantic, the scope pass and the 4 walks of the eval path per AST level,
+/// against the unit of the run-time budget check (`stack::PASS_PER_LEVEL`).
 #[test]
 #[ignore = "measurement; run on demand with --ignored --nocapture"]
 fn measure_forms() {
@@ -284,7 +285,8 @@ fn measure_forms() {
     } else {
         "release"
     };
-    let (out, over, worst, eval_out, eval_over, eval_worst, cover_out) = std::thread::Builder::new()
+    let (out, over, worst, regex_worst, eval_out, eval_over, eval_worst, cover_out) =
+        std::thread::Builder::new()
         .stack_size(2 << 30)
         .spawn(move || {
             // Layer 1: this thread's limit, as a worker has one (l1.rs).
@@ -292,6 +294,8 @@ fn measure_forms() {
             let mut over = Vec::new();
             // T-A: the worst parse slope per pre-scan unit, rounded up to a whole byte.
             let mut worst: Option<(usize, &'static str)> = None;
+            // The worst regex row, per group.
+            let mut regex_worst: Option<(usize, &'static str)> = None;
             let mut out = String::new();
             writeln!(
                 out,
@@ -321,6 +325,22 @@ fn measure_forms() {
                     let slope = b.parse.saturating_sub(a.parse).div_ceil(de as usize);
                     if worst.is_none_or(|(w, _)| slope > w) {
                         worst = Some((slope, form.name));
+                    }
+                }
+                // A regex row: n is the group or class level, the unit of the regex budget
+                // check of layer 1 (`stack::REGEX_PER_GROUP`, the worst of the 4 targets). Whole
+                // bytes (the floor), as `over_budget`: never above the "parse B/n" column.
+                if form.name.starts_with("regex-") {
+                    let group = b.parse.saturating_sub(a.parse) / dn as usize;
+                    if regex_worst.is_none_or(|(w, _)| group > w) {
+                        regex_worst = Some((group, form.name));
+                    }
+                    if group > crate::stack::REGEX_PER_GROUP {
+                        over.push(format!(
+                            "{} parse: {group} B/group > REGEX_PER_GROUP {}",
+                            form.name,
+                            crate::stack::REGEX_PER_GROUP
+                        ));
                     }
                 }
                 // Base = the stack at n2 minus the slope times the units at n2.
@@ -415,7 +435,16 @@ fn measure_forms() {
                 let level = (bytes(n2).saturating_sub(bytes(n1))) / (n2 - n1);
                 writeln!(cover_out, "T-COVER {profile} {name}: {level} B per level (parse)").unwrap();
             }
-            (out, over, worst, eval_out, eval_over, eval_worst, cover_out)
+            (
+                out,
+                over,
+                worst,
+                regex_worst,
+                eval_out,
+                eval_over,
+                eval_worst,
+                cover_out,
+            )
         })
         .unwrap()
         .join()
@@ -426,6 +455,13 @@ fn measure_forms() {
         "T-A worst {}-{} {profile}: {w} B per pre-scan unit (form {name}); budget {PARSE_UNIT_BUDGET} B",
         std::env::consts::OS,
         std::env::consts::ARCH
+    );
+    let (w, name) = regex_worst.expect("a regex form");
+    println!(
+        "T-A regex worst {}-{} {profile}: {w} B per group (form {name}); REGEX_PER_GROUP {} B",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        crate::stack::REGEX_PER_GROUP
     );
     for line in &over {
         println!("T-A over: {line}");
