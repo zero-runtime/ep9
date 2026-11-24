@@ -995,3 +995,184 @@ fn fused_loads_in_mapped_and_generator_frames_run_as_their_pairs() {
         ["1", "2", "2", "1", "1", "undefined", "undefined"]
     );
 }
+
+// ---- a JS getter on the fused named load (M12-P0, route M11-P3-STAR-JSGET) ----------------
+
+/// The metadata of a getter (a child of the script, no parameters), in the form of
+/// `tests::accessors` (`fn_meta` with `FunctionKind::Getter`).
+fn js_getter_meta() -> ep9_bytecode::FunctionMeta {
+    let mut m = meta("get", 0, 0, 0, 0);
+    m.kind = ep9_bytecode::FunctionKind::Getter;
+    m.flags = FunctionFlags::SIMPLE_PARAMETERS;
+    m
+}
+
+/// The SETUP unit of the JS receivers. It is one unit, the same in the pair run and in the
+/// fused run, so a record that names one of its functions names the same unit hash in both.
+/// Its script defines the globals:
+///
+/// - `oJs`: the own accessors `x` and `length` (`DefineAccessorInLiteral`, as in
+///   `tests::accessors`) with the getter of function 1: it calls `big()`, then the global
+///   `x_dst` on `oIn`, and returns that value plus 100 (101: not 7 and not a value of `oIn`);
+/// - `oJsThrow`: the own accessors `x` and `length` with the getter of function 2, which
+///   throws a TypeError ("js getter threw");
+/// - `big` (function 3): a frame of 300 registers that makes a new object, so GC stress
+///   collects inside the re-entry;
+/// - `x_dst` (function 4): `return a.x` with a plain load. A unit under test that defines its
+///   own `x_dst` replaces it (its script runs after this one): then the getter runs the fused
+///   `x_dst`, the same fused load, nested in the cold body of the outer one.
+fn js_setup_unit() -> VerifiedUnit {
+    let mut g = Asm::new(js_getter_meta());
+    let (c, x) = (g.b.new_register(), g.b.new_register());
+    g.lda_global("big");
+    g.b.star(c);
+    g.b.call_undefined_receiver0(c, g.call);
+    g.lda_global("x_dst");
+    g.b.star(c);
+    g.lda_global("oIn");
+    g.b.star(x);
+    g.b.call_undefined_receiver1(c, x, g.call);
+    g.b.add_smi(100, g.bin).return_();
+    let mut t = Asm::new(js_getter_meta());
+    let m = t.b.new_register_list(1);
+    t.lda_str("js getter threw");
+    t.b.star(m.get(0));
+    t.b.call_runtime(RuntimeId::ThrowTypeError, m, 1);
+    t.b.lda_undefined().return_();
+    let mut big = Asm::new(meta("big", 0, 0, 0, 0));
+    let w = big.b.new_register_list(300).get(299);
+    big.b.create_empty_object_literal().star(w);
+    big.b.ldar(w).return_();
+    let mut xd = Asm::new(meta("x_dst", 1, 0, 0, 0));
+    let p = xd.b.parameter(0);
+    xd.get_named(p, "x");
+    xd.b.return_();
+    let mut s = Asm::script(0);
+    let o = s.b.new_register();
+    let args = s.b.new_register_list(4);
+    for (name, getter) in [("oJs", 1), ("oJsThrow", 2)] {
+        s.b.create_empty_object_literal().star(o);
+        for k in ["x", "length"] {
+            s.b.mov(o, args.get(0));
+            s.lda_str(k);
+            s.b.star(args.get(1));
+            let f = s.b.function_constant(FunctionId(getter));
+            s.b.create_closure(f, s.closure, 0);
+            s.b.star(args.get(2));
+            s.b.lda_undefined().star(args.get(3));
+            s.b.call_runtime(RuntimeId::DefineAccessorInLiteral, args, 4);
+        }
+        s.b.ldar(o);
+        s.sta_global(name);
+    }
+    for (name, id) in [("big", 3), ("x_dst", 4)] {
+        let f = s.b.function_constant(FunctionId(id));
+        s.b.create_closure(f, s.closure, 0);
+        s.sta_global(name);
+    }
+    s.b.lda_undefined().return_();
+    let fns = vec![
+        s.finish(),
+        g.finish(),
+        t.finish(),
+        big.finish(),
+        xd.finish(),
+    ];
+    unit_with_scopes("", vec![], fns)
+}
+
+/// [`receivers`], then the SETUP unit ([`js_setup_unit`]): the globals `oJs`, `oJsThrow`,
+/// `big` and `x_dst` too.
+fn js_receivers(cx: &mut Cx<'_>) -> JsResult<()> {
+    receivers(cx)?;
+    cx.run_script(js_setup_unit(), "setup.js").map(|_| ())
+}
+
+/// The receivers of the JS getter tests: the getter twice (the first fill, then the cold hit
+/// of the getter case), the getter that throws, and a hit.
+const JS_RECEIVERS: &[&str] = &["oJs", "oJs", "oJsThrow", "oIn"];
+
+/// The named functions of `cases` (for `x`, then `length`) over [`JS_RECEIVERS`]. With no
+/// `dst` case the unit defines `x_dst` too (no line), so the getter of `oJs` runs a fused load
+/// nested in each form.
+fn js_unit_of(form: Form, cases: &[&str]) -> VerifiedUnit {
+    let mut defs = named_defs(form, "x", cases);
+    defs.extend(named_defs(form, "length", cases));
+    let mut calls = Vec::new();
+    for (f, _) in &defs {
+        for r in JS_RECEIVERS {
+            calls.push((f.clone(), (*r).to_owned()));
+        }
+    }
+    if !cases.contains(&"dst") {
+        defs.extend(named_defs(form, "x", &["dst"]));
+    }
+    program(vec![], defs, &calls)
+}
+
+fn js_unit(form: Form) -> VerifiedUnit {
+    js_unit_of(form, ONE_BYTE)
+}
+
+fn js_prefixed_unit(form: Form) -> VerifiedUnit {
+    js_unit_of(form, PREFIXED)
+}
+
+/// T3, a bytecode getter on the fused named load: the cold body runs JS (the getter makes a
+/// frame of 300 registers and a new object, then runs the fused `x_dst` nested) and then writes
+/// `dst` (`interp/ops.rs`, the cold arm of `GetNamedPropertyStar`: `st.set_reg(dst, v)` writes
+/// through the frame pointer after the call). Each `dst`, `acc` and `self` line and each
+/// prefixed line gives the getter's value; inside a `try` the getter that throws leaves `dst`
+/// as 7. The getter case exports as `Access::Generic` (`facts_export.rs`, `case`: the GETTER
+/// handler kind reads as the generic path; the VM writes no `Access::Getter` record).
+#[test]
+fn get_named_property_star_runs_a_js_getter_as_its_pair() {
+    let Same { out, facts, .. } = same(js_receivers, js_unit, true);
+    let n = JS_RECEIVERS.len();
+    assert_eq!(out.len(), 8 * n, "{out:?}");
+    for f in 0..8 {
+        // Functions 0-3: x_dst, x_acc, x_self, x_try; 4-7: the same for length.
+        let own = if f < 4 { "1" } else { "11" };
+        let thrown = if f % 4 == 3 {
+            "7"
+        } else {
+            "throws: js getter threw"
+        };
+        assert_eq!(
+            out[f * n..(f + 1) * n],
+            ["101", "101", thrown, own],
+            "function {f}: {out:?}"
+        );
+    }
+    // The getter case of each test function (functions 1-8) exports as the generic path.
+    let generic = facts
+        .iter()
+        .filter(|r| {
+            !r.contains("function: 0,") && r.contains("LoadNamed(") && r.contains("Generic")
+        })
+        .count();
+    assert!(
+        generic >= 8,
+        "{generic} LoadNamed records with a Generic case: {facts:#?}"
+    );
+    // The prefixed forms print what the one-byte forms print: wide, xwide and wobj as dst,
+    // wtry as try.
+    let wide = same(js_receivers, js_prefixed_unit, false).out;
+    assert_eq!(wide.len(), 8 * n, "{wide:?}");
+    for (f, one) in [
+        (0, 0),
+        (1, 0),
+        (2, 0),
+        (3, 3),
+        (4, 4),
+        (5, 4),
+        (6, 4),
+        (7, 7),
+    ] {
+        assert_eq!(
+            wide[f * n..(f + 1) * n],
+            out[one * n..(one + 1) * n],
+            "prefixed function {f}"
+        );
+    }
+}
