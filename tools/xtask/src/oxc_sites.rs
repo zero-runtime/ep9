@@ -59,8 +59,8 @@
 //! What the graph cannot see, and what the task does instead:
 //!
 //! - A call through a fn value that a struct or enum field holds (a fn pointer, a `dyn` trait
-//!   object, a type parameter with an `Fn`, `FnMut` or `FnOnce` bound, also through a type
-//!   alias): such a field fails the run (exit 2).
+//!   object, a type parameter with an `Fn`, `FnMut` or `FnOnce` bound on the struct or enum or
+//!   on an impl of it, also through a type alias): such a field fails the run (exit 2).
 //! - The body of a fn that an item macro of another crate writes: a call of such a macro whose
 //!   tokens hold `fn` fails the run (exit 2). The other item macros of other crates
 //!   (`bitflags!`, `fieldless_enum!`) write no body from the tokens of the call.
@@ -860,6 +860,18 @@ fn fn_params(g: &syn::Generics) -> BTreeSet<String> {
     out
 }
 
+/// The names of the lifetime-free parameters of `g` (type and const), in their places.
+fn param_places(g: &syn::Generics) -> Vec<String> {
+    g.params
+        .iter()
+        .filter_map(|p| match p {
+            syn::GenericParam::Type(t) => Some(t.ident.to_string()),
+            syn::GenericParam::Const(c) => Some(c.ident.to_string()),
+            syn::GenericParam::Lifetime(_) => None,
+        })
+        .collect()
+}
+
 /// Does a value of this type hold a fn value that code can call (a fn pointer, a `dyn` trait
 /// object, or a type alias in `aliases` of one)?
 fn holds_fn_value(t: &Type, aliases: &BTreeSet<String>) -> bool {
@@ -899,6 +911,11 @@ fn merge(map: &mut BTreeMap<String, Option<String>>, key: String, t: Option<Stri
     }
 }
 
+/// A struct or enum field for the fn value check: (place, type, the type parameters of the
+/// struct or enum with an `Fn` bound, the struct or enum name, its parameter places as
+/// [`param_places`] gives them).
+type FieldType = (String, Type, BTreeSet<String>, String, Vec<String>);
+
 /// Pass 1: what the sources say about types.
 #[derive(Default)]
 struct Types {
@@ -923,10 +940,12 @@ struct Types {
     /// fn or associated const key -> its type name (`Self` is the impl type).
     /// `None`: not known (two fns of the key with other return types, as for `fields`).
     rets: BTreeMap<String, Option<String>>,
-    /// Type aliases (name -> type) and the struct and enum fields (place, type, the type
-    /// parameters of the struct or enum with an `Fn` bound), for the check.
+    /// Type aliases (name -> type) and the struct and enum fields, for the check.
     aliases: Vec<(String, Type)>,
-    field_types: Vec<(String, Type, BTreeSet<String>)>,
+    field_types: Vec<FieldType>,
+    /// type name -> the places (no lifetimes) of the arguments of its self type that an impl
+    /// gives an `Fn` bound: `impl<F: Fn()> Hook<F>` gives `Hook` -> {0} (review R2 B2-2 (c)).
+    impl_fn_places: BTreeMap<String, BTreeSet<usize>>,
     /// (a name, the name of the type or trait that it stands for): each `use .. as` rename and
     /// each type alias of the sources (review R2 B2-2).
     other_names: Vec<(String, String)>,
@@ -950,9 +969,13 @@ impl Types {
                 break;
             }
         }
-        for (place, t, fn_params) in &self.field_types {
+        for (place, t, fn_params, owner, params) in &self.field_types {
             let mut names = aliases.clone();
             names.extend(fn_params.iter().cloned());
+            // An `Fn` bound on an impl of the owner, not on the owner itself.
+            for &i in self.impl_fn_places.get(owner).into_iter().flatten() {
+                names.extend(params.get(i).cloned());
+            }
             if holds_fn_value(t, &names) {
                 return Err(format!(
                     "{place}: the field holds a fn value (`{}`): a call through it is not an \
@@ -970,8 +993,10 @@ impl Types {
         Ok(())
     }
 
-    fn fields_of(&mut self, owner: &str, generics: &syn::Generics, fields: &syn::Fields) {
+    /// `owner`: the struct, or `Enum::Variant`; `ty`: the struct or enum name.
+    fn fields_of(&mut self, owner: &str, ty: &str, generics: &syn::Generics, fields: &syn::Fields) {
         let fn_params = fn_params(generics);
+        let places = param_places(generics);
         for (i, f) in fields.iter().enumerate() {
             let id = f
                 .ident
@@ -982,6 +1007,8 @@ impl Types {
                 format!("{}:{at}: {owner}.{id}", self.file),
                 f.ty.clone(),
                 fn_params.clone(),
+                ty.to_string(),
+                places.clone(),
             ));
         }
     }
@@ -990,7 +1017,8 @@ impl Types {
 impl<'ast> Visit<'ast> for Types {
     fn visit_item_struct(&mut self, s: &'ast syn::ItemStruct) {
         let generics: BTreeSet<String> = type_params(&s.generics).collect();
-        self.fields_of(&s.ident.to_string(), &s.generics, &s.fields);
+        let name = s.ident.to_string();
+        self.fields_of(&name, &name, &s.generics, &s.fields);
         let e = self.fields.entry(s.ident.to_string()).or_default();
         for f in &s.fields {
             if let Some(id) = &f.ident {
@@ -1003,7 +1031,8 @@ impl<'ast> Visit<'ast> for Types {
 
     fn visit_item_enum(&mut self, e: &'ast syn::ItemEnum) {
         for v in &e.variants {
-            self.fields_of(&format!("{}::{}", e.ident, v.ident), &e.generics, &v.fields);
+            let owner = format!("{}::{}", e.ident, v.ident);
+            self.fields_of(&owner, &e.ident.to_string(), &e.generics, &v.fields);
         }
         visit::visit_item_enum(self, e);
     }
@@ -1038,6 +1067,30 @@ impl<'ast> Visit<'ast> for Types {
             return;
         }
         let t = type_name(&i.self_ty);
+        // The arguments of the self type that this impl gives an `Fn` bound (B2-2 (c)).
+        let fns = fn_params(&i.generics);
+        if let Type::Path(p) = &*i.self_ty
+            && let Some(last) = p.path.segments.last()
+            && let syn::PathArguments::AngleBracketed(a) = &last.arguments
+        {
+            let args = a
+                .args
+                .iter()
+                .filter(|g| !matches!(g, syn::GenericArgument::Lifetime(_)));
+            for (place, g) in args.enumerate() {
+                if let syn::GenericArgument::Type(Type::Path(tp)) = g
+                    && tp
+                        .path
+                        .get_ident()
+                        .is_some_and(|id| fns.contains(&id.to_string()))
+                {
+                    self.impl_fn_places
+                        .entry(last.ident.to_string())
+                        .or_default()
+                        .insert(place);
+                }
+            }
+        }
         let generic = t
             .as_ref()
             .is_some_and(|t| i.generics.type_params().any(|p| p.ident == t.as_str()));
@@ -2431,6 +2484,30 @@ mod tests {
         );
         let ok = "struct S<G: Clone> { g: G }";
         assert!(run(&[("w.rs".into(), ok.into())], &BTreeSet::new(), &[]).is_ok());
+        // The `Fn` bound on an impl of the type (the usual form), not on the struct: the same
+        // fn value field. Lifetimes do not count in the place of a parameter, const ones do.
+        let on_impl = "struct H<'a, const N: usize, F> { r: &'a u32, f: F }
+                       impl<'a, const N: usize, F> H<'a, N, F> where F: Fn(u32) -> u32 {
+                           fn call(&self) -> u32 { (self.f)(*self.r) } }";
+        let e = run(&[("h.rs".into(), on_impl.into())], &BTreeSet::new(), &[]).unwrap_err();
+        assert!(
+            e.starts_with("h.rs:1: H.f: the field holds a fn value"),
+            "{e}"
+        );
+        let on_trait_impl =
+            "enum E<F> { A(F) } impl<F: FnOnce()> Drop for E<F> { fn drop(&mut self) {} }";
+        let e = run(
+            &[("e.rs".into(), on_trait_impl.into())],
+            &BTreeSet::new(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            e.starts_with("e.rs:1: E::A.0: the field holds a fn value"),
+            "{e}"
+        );
+        let ok = "struct H<F, G> { f: F, g: G } impl<F: Clone, G: Fn()> H<F, u32> {}";
+        assert!(run(&[("h.rs".into(), ok.into())], &BTreeSet::new(), &[]).is_ok());
     }
 
     /// Review R2 B2-4: an ALLOW entry leaves out only the edge of its own use; an entry that
