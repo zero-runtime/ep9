@@ -6,9 +6,8 @@
 //! the opcodes ep9 shares with V8. ADR H02 lists what ep9 changes: feedback-slot operands on
 //! arithmetic and compares (V8 now embeds that feedback), no `*Constant` jump variants (the
 //! builder relaxes sizes; `Far` twins hold u16), forward-only jumps except `JumpLoop`, a reserved
-//! `TailCall` (D7), generator opcodes only in generator and async functions (ABI 3),
-//! `CallRuntimeForPair` with a [`RegOutPair`](crate::OperandKind::RegOutPair) output (ABI 3), and
-//! a third prefix `Wide2` (scale `Wide`) only before the wide list (the WIDE-SET probe, F-a).
+//! `TailCall` (D7), generator opcodes only in generator and async functions (ABI 3), and
+//! `CallRuntimeForPair` with a [`RegOutPair`](crate::OperandKind::RegOutPair) output (ABI 3).
 
 /// Calls `$m!` with the full opcode list. Tokens in `[...]` are passed through first.
 ///
