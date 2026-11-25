@@ -1,9 +1,9 @@
 # ep9 fuzz targets
 
-5 cargo-fuzz targets (front end, regexp, unit loader), in their own workspace on the nightly of
-`rust-toolchain.toml` (the root `Cargo.toml` excludes `fuzz`). Plan: docs/plan/10-quality.md
-section 4 ("Front end (source -> verified bytecode)": no panics, no aborts, the bytecode
-verifier passes); budget 24 CPU-h at M1 (plan v9 V9-D24).
+6 cargo-fuzz targets (front end, the front end on a small worker, regexp, unit loader), in their own
+workspace on the nightly of `rust-toolchain.toml` (the root `Cargo.toml` excludes `fuzz`). Plan:
+docs/plan/10-quality.md section 4 ("Front end (source -> verified bytecode)": no panics, no aborts,
+the bytecode verifier passes); budget 24 CPU-h at M1 (plan v9 V9-D24).
 
 ```text
 input bytes ──> target (fuzz_targets/*.rs) ──> ep9_frontend compile entry ──> VerifiedUnit
@@ -20,6 +20,7 @@ crash = a panic or an abort anywhere (also on the front-end worker thread), an I
 | `eval_context` | `ep9_frontend::compile_eval` | bytes 0-1: EvalContext bits (see the target's doc), then the eval text |
 | `regexp` | `ep9_rx1::parse`, `ep9_frontend::check_early_errors` and `ep9_regexp::Rx0` (RX1 and the front end agree on valid or not; RX1 and RX0 agree on valid or not and the group count; RX0 exec with a poll budget; the RX1 class sets against RX0; see the target's doc) | byte 0: flags (bits 0-7 = d g i m s u v y), then the pattern text |
 | `unit_loader` | `ep9_unit::check` (H35 S4 steps 1-4), then on `Load` `ep9_bytecode::decode_unit` and `verify`, `ep9_unit::functions::decode` and `Cx::run_script_with_unit_code` in a new jitless isolate (it never installs unit code; a watchdog ends each run after 250 ms; see the target's doc). ASan runs with `detect_stack_use_after_return=0` (`common.rs`, `vm_asan_options`; route FUZZ-UL-M8P5): the ASan fake stack put a `Local` off the thread stack, so the debug on-stack check of `ep9_vm` failed a correct run. The engine and the check do not change, and the check still fails a `Local` in heap memory; only this target loses ASan's stack-use-after-return reports | a unit container with the zero bytes before its first section cut out; the target puts them back and writes this build's engine build id and the content hash before `check`. The seeds: `EP9_BLESS=1 cargo test -p ep9_unit --test fuzz_seeds` writes them; without `EP9_BLESS` that test fails when a seed would stop at the H35 S4 checks of this build (route MC-w41-8) |
+| `frontend_small_stack` | `CompileOptions::fuzz_compile_small_stack` (only in a `cfg(fuzzing)` build) on a small worker, checked against `ep9_frontend::compile` on the full worker (the same unit bytes or error), or RangeError StackLimit (see the target's doc) | byte 0: mode and goal (below 0x80: text mode, the rest is the source; 0x80 and up: form mode; goal mod 3). Form mode: bytes 1-2 (u16 LE) a row of FORMS then the `compile` rows of T-HOLES (not the `timing` rows; mod the row count), bytes 3-4 (low 15 bits) the level count, then a UTF-8 tail. The `form-*` and `hole-*` seeds hold that row index, not the row name: a row added to, removed from or moved in `crates/ep9_frontend/src/forms.rs` or `crates/ep9_frontend/tests/stack_holes.tsv` (also a row that becomes a `timing` row or stops being one) gives each later seed another row, with no error (nothing checks the seed names). After such a change, write the seeds again |
 - `dict/js.dict`: a token for every nesting form of `crates/ep9_frontend/src/forms.rs` (G6:
   the 13 M0 forms, the 7 M1 forms, the other recursive productions), then general JavaScript.
 - `seeds/<target>/`: small committed seeds: every forms.rs form at 8 levels (sloppy and strict;
