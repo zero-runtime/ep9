@@ -1,7 +1,8 @@
 //! `cargo xtask oxc-sites` (T-SITES) on the gap fixtures in `tests/oxc_sites/` (README there).
 //!
 //! Each fixture is a false PASS of the lint before route OXC-SITES-LINT-GAPS (review R2 lens B,
-//! B2-1..B2-5): an unbounded recursion that the lint read as safe. Each test runs the lint on
+//! B2-1..B2-5; the M13-P0 review round 1, A1-A5): an unbounded recursion that the lint read as
+//! safe. Each test runs the lint on
 //! one fixture dir and asserts the finding that the fixed lint gives. The fixtures are only
 //! parsed, never built.
 
@@ -126,4 +127,76 @@ fn b2_5_a_field_of_two_structs_of_one_name_fails() {
     let (code, out, _) = oxc_sites("b2_5_field_collision");
     assert_eq!(code, Some(1));
     assert_cycle(&out, &["Ctx::go", "Walker::step", "again"]);
+}
+
+/// Review A1: an implicit call into a fn of an impl of a trait of another crate in a fn that
+/// does not name the type: an index on a field, a drop of a field, a derived `Default` of a
+/// holder, and a value made in macro tokens. Each closes a cycle.
+#[test]
+fn a1_an_implicit_call_in_a_fn_that_does_not_name_the_type_fails() {
+    for (case, cycle) in [
+        ("a1_index_field", &["Tab::index", "walk"][..]),
+        ("a1_drop_field", &["Guard::drop", "parse_x"][..]),
+        ("a1_derive_default", &["Guard::drop", "parse_x"][..]),
+        ("a1_macro_tokens", &["Guard::drop", "parse_x"][..]),
+    ] {
+        let (code, out, _) = oxc_sites(case);
+        assert_eq!(code, Some(1), "{case}");
+        assert_cycle(&out, cycle);
+    }
+}
+
+/// Review A2 and A5: an `Fn` bound on a method of the impl, a trait with `Fn` as a supertrait,
+/// a parameter inside the argument of the self type, and an impl of a type alias each make a
+/// fn value field.
+#[test]
+fn a2_a5_more_fn_bound_forms_make_a_fn_value_field() {
+    for (case, at) in [
+        (
+            "a2_method_where",
+            "lib.rs:5: Hook.f: the field holds a fn value",
+        ),
+        (
+            "a2_fn_supertrait",
+            "lib.rs:7: Hook.f: the field holds a fn value",
+        ),
+        (
+            "a2_impl_wrapped",
+            "lib.rs:6: Hook.f: the field holds a fn value",
+        ),
+        (
+            "a5_alias_impl",
+            "lib.rs:5: Hook.f: the field holds a fn value",
+        ),
+    ] {
+        let (code, _, err) = oxc_sites(case);
+        assert_eq!(code, Some(2), "{case}");
+        assert!(err.contains(at), "{case}: {err}");
+    }
+}
+
+/// Review A3: an ALLOW entry holds its use only at its own count, so a second call of the same
+/// form in the fn keeps the edge.
+#[test]
+fn a3_a_second_call_of_an_allowed_form_fails() {
+    let (code, out, _) = oxc_sites("a3_allow_count");
+    assert_eq!(code, Some(1));
+    assert_cycle(&out, &["parse", "parse_regex_pattern"]);
+}
+
+/// Review A4: the gate of a site is the config of the parser R (a type argument of the type
+/// of R), not another type parameter of the fn.
+#[test]
+fn a4_a_gate_of_another_type_parameter_is_not_a_site() {
+    let (code, out, _) = oxc_sites("a4_other_param_gate");
+    assert_eq!(code, Some(1));
+    assert!(
+        has_line(
+            &out,
+            "oxc-sites: NOT A SITE FORM at lib.rs:8 in `parse_a`: ",
+            &["a type argument of the type of R"]
+        ),
+        "{out}"
+    );
+    assert_cycle(&out, &["parse_a"]);
 }
