@@ -18,12 +18,14 @@
 //!   a site = a top-level statement of a fn body in one of the 2 site forms of the patch:
 //!     `if C::CHECKS_RECURSION && !R.config.may_recurse() { return R.recursion_stopped(); }`
 //!     `if C::CHECKS_RECURSION && !R.config.may_recurse() { return Err(R.recursion_stopped_error()); }`
-//!   (R the parser: `self` or a parameter). The statements after it are behind the check, so the
-//!   node keeps only the edges of the statements before it. Any other statement that calls
+//!   (R the parser: `self` or a parameter; C a type parameter of the fn or its impl, never a
+//!   fixed config type). The statements after it are behind the check, so the node keeps only
+//!   the edges of the statements before it. Any other statement that calls
 //!   `may_recurse` is a finding: a form that does not stop (no `return`), that calls more in its
 //!   condition, or that is not at the top level of the body would cut the graph falsely
 //!   -> the site table; a cycle (a strongly connected group, or a self call) that is left is a
-//!      finding, unless its edges are in ALLOW (name noise, each with its reason)
+//!      finding, unless its edges are in ALLOW (name noise: from, to, the use that makes the
+//!      edge, and the reason; an entry that leaves out no edge is a finding)
 //! ```
 //!
 //! The lexer byte handlers (`lexer/byte_handlers.rs`) are called through a table, and the graph
@@ -45,17 +47,32 @@
 //! | a call of a macro of the sources in a body | the edges of its expansion; if it does not expand, also every fn named by an identifier of its rules |
 //! | an identifier in a macro body of another crate that does not parse as expressions | every fn named it |
 //!
+//! A type or trait T in this table is read by each of its names (review R2 B2-2): T, what T
+//! stands for (a `use X as T` rename or a `type T = X` alias of the sources, to the end of a
+//! chain), and each name that stands for T. So `R::go` with `use Tr as R` is `Tr::go`, and a
+//! parameter `p: &mut P<C>` with `type P<C> = ParserImpl<C>` has the type `ParserImpl`.
+//! A field type or a return type that two items of one name give two types (two structs `Ctx`
+//! in two modules, each with a field `inner`) is not known (review R2 B2-5): one type for both
+//! would narrow the edges of one of them to the fns of the other. Each narrowing rule has a
+//! unit test whose cycle runs only through the narrowed edge (`each_narrowing_rule_keeps_its_cycle`).
+//!
 //! What the graph cannot see, and what the task does instead:
 //!
 //! - A call through a fn value that a struct or enum field holds (a fn pointer, a `dyn` trait
-//!   object, also through a type alias): such a field fails the run (exit 2).
+//!   object, a type parameter with an `Fn`, `FnMut` or `FnOnce` bound on the struct or enum or
+//!   on an impl of it, also through a type alias): such a field fails the run (exit 2).
 //! - The body of a fn that an item macro of another crate writes: a call of such a macro whose
 //!   tokens hold `fn` fails the run (exit 2). The other item macros of other crates
 //!   (`bitflags!`, `fieldless_enum!`) write no body from the tokens of the call.
 //! - A call that the code does not write (an operator, `Drop`, `Deref`, a `for` loop, `?`,
-//!   `format!`) into a fn of an impl of a trait of another crate: no edge. Instead no fn of
-//!   such an impl may reach a site (exit 1): an input-driven recursion passes a site, so a call
-//!   that the graph cannot see cannot close a recursion through the parser.
+//!   `format!`) into a fn of an impl of a trait of another crate (an implicit callee): an edge
+//!   into it from each fn that names its self type outside a pattern (a type of the signature
+//!   or the body, a struct literal, a path `T::..`, `Self`: [`Use::Type`]), so a recursion that
+//!   such a call closes is a cycle (review R2 B2-1). The limit: a fn of the same self type gets
+//!   no such edge (the code of `T` names `T` at each `Self::A`, and at 0.158.0 those edges give
+//!   7 false cycles, `Token::fmt` and the `SourcePosition` compares among them), and code of
+//!   another crate can make and drop a value with no fn of the sources that names its type.
+//!   So also no implicit callee may reach a site (exit 1).
 //!
 //! Test code (`#[cfg(test)]` items, `#[test]` fns) is not part of the parser and is skipped.
 //!
@@ -69,7 +86,8 @@
 //!   `--edges NAME` prints each edge out of one node.
 //!
 //! Exit codes: 0 no cycle; 1 a cycle, a loop that is missing or recursive, a fn of an impl of a
-//! trait of another crate that reaches a site, or a call of `may_recurse` that is not a site form;
+//! trait of another crate that reaches a site, a call of `may_recurse` that is not a site form,
+//! or an ALLOW entry that leaves out no edge;
 //! 2 usage error, a file that does not parse,
 //! a macro call that does not expand, or a form that the graph cannot see (the list above).
 //! Paths print relative to the source dir, with `/`.
@@ -134,49 +152,62 @@ const LOOPS: &[(&str, &str)] = &[
     ),
 ];
 
+/// An ALLOW entry: (from, to, the use that makes the edge as `--explain` prints it, reason).
+type Allow = (&'static str, &'static str, &'static str, &'static str);
+
 /// Edges that are name noise (a call whose receiver type the graph cannot see, joined with a
-/// same-name fn of another type): `(from, to, reason)`. An edge here is left out of the graph.
-const ALLOW: &[(&str, &str, &str)] = &[
+/// same-name fn of another type). An entry leaves out only the edge that its own use makes
+/// (another use that makes the same edge stays), and an entry that leaves out no edge is a
+/// finding (review R2 B2-4: after a bump it can hide a new call of the same name).
+const ALLOW: &[Allow] = &[
     (
         "ParserImpl::parse_regex_pattern",
         "Parser::parse",
+        r#"Method(None, "parse")"#,
         "`LiteralParser::new(..).parse()` is the oxc_regular_expression parser (another crate)",
     ),
     (
         "ParserImpl::parse_regex_pattern",
         "ParserImpl::parse",
+        r#"Method(None, "parse")"#,
         "`LiteralParser::new(..).parse()` is the oxc_regular_expression parser (another crate)",
     ),
     (
         "parse_float_with_underscores",
         "Parser::parse",
+        r#"Method(None, "parse")"#,
         "`s.cow_replace(..).parse::<f64>()` is `str::parse` (std)",
     ),
     (
         "parse_float_with_underscores",
         "ParserImpl::parse",
+        r#"Method(None, "parse")"#,
         "`s.cow_replace(..).parse::<f64>()` is `str::parse` (std)",
     ),
     (
         "JSXClosing::dummy",
         "JSXClosing::dummy",
+        r#"Path("Dummy", "dummy")"#,
         "`Dummy::dummy(allocator)` builds the `JSXClosingFragment` field (an oxc_ast type)",
     ),
     (
         "ModifierKind::from_usize_unchecked",
         "ModifierKinds::iter",
+        r#"Method(None, "iter")"#,
         "`Self::VARIANTS.iter()` (a debug_assert) is the slice iter of the const array that the \
          `fieldless_enum!` macro (oxc_data_structures) writes",
     ),
     (
         "ModifierKind::from_usize_unchecked",
         "Modifiers::iter",
+        r#"Method(None, "iter")"#,
         "`Self::VARIANTS.iter()` (a debug_assert) is the slice iter of the const array that the \
          `fieldless_enum!` macro (oxc_data_structures) writes",
     ),
     (
         "MODIFIER_LENGTHS",
         "ModifierKind::len",
+        r#"Method(None, "len")"#,
         "the static initializer calls `ModifierKind::VARIANTS.len()` and `kind.as_str().len()`: \
          slice and str `len` (std), run once at compile time",
     ),
@@ -193,6 +224,10 @@ enum Use {
     Bare(String),
     /// A name in macro tokens.
     Any(String),
+    /// A type that the fn names outside a pattern (a type in its signature or body, a struct
+    /// literal, the type of a path): an edge to each fn of an impl of a trait of another crate
+    /// for that type (a call that the code does not write: `Drop`, `Display`, `?`, `for`).
+    Type(String),
 }
 
 #[derive(Debug, Default)]
@@ -233,6 +268,8 @@ pub(crate) struct Report {
     pub(crate) bad_checks: Vec<(String, String, usize, String)>,
     /// The graph after the cut: node -> the nodes it calls.
     pub(crate) edges: BTreeMap<String, BTreeMap<String, String>>,
+    /// (from, to, use) of each ALLOW entry that leaves out no edge.
+    pub(crate) unused_allow: Vec<(String, String, String)>,
 }
 
 impl Report {
@@ -241,6 +278,7 @@ impl Report {
             && self.loops.iter().all(|l| l.2)
             && self.implicit.is_empty()
             && self.bad_checks.is_empty()
+            && self.unused_allow.is_empty()
     }
 }
 
@@ -289,7 +327,7 @@ pub fn main(args: &[String]) -> Result<bool, String> {
         let text = fs::read_to_string(f).map_err(|e| format!("{rel}: {e}"))?;
         sources.push((rel, text));
     }
-    let r = run(&sources, &assume)?;
+    let r = run(&sources, &assume, ALLOW)?;
     print_report(&r, &src, explain);
     for name in &show {
         let found: Vec<&String> = r
@@ -361,6 +399,12 @@ fn print_report(r: &Report, src: &Path, explain: bool) {
             path.join(" -> ")
         );
     }
+    for (from, to, u) in &r.unused_allow {
+        println!(
+            "oxc-sites: UNUSED ALLOW entry: `{from}` -> `{to}` by `{u}` leaves out no edge \
+             (remove it, or fix it to the use that makes the edge now)"
+        );
+    }
     for (label, file, line, why) in &r.bad_checks {
         println!(
             "oxc-sites: NOT A SITE FORM at {file}:{line} in `{label}`: {why} (the 2 forms: \
@@ -380,10 +424,12 @@ fn print_report(r: &Report, src: &Path, explain: bool) {
     );
 }
 
-/// Builds the graph of `sources` (path, text) and finds the cycles that no site cuts.
+/// Builds the graph of `sources` (path, text) and finds the cycles that no site cuts; `allow`
+/// is [`ALLOW`] (a test gives its own entries).
 pub(crate) fn run(
     sources: &[(String, String)],
     assume: &BTreeSet<String>,
+    allow: &[Allow],
 ) -> Result<Report, String> {
     let mut asts = Vec::new();
     for (rel, text) in sources {
@@ -449,8 +495,38 @@ pub(crate) fn run(
             .map(|s| s.to_string())
             .collect()
     };
-    // A use with the type or trait `t` shown: see the module table.
-    let typed = |t: &str, n: &str| -> Vec<String> {
+    // The other names of a type or trait (review R2 B2-2): a `use .. as` rename and a type alias
+    // of the sources. `names_of(t)`: `t`, each name that `t` stands for (to the end of a chain
+    // of renames and aliases), and each name that stands for `t`.
+    let mut stands_for: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (new, old) in &types.other_names {
+        if new != old {
+            stands_for.entry(new).or_default().insert(old);
+        }
+    }
+    let chain = |t: &str| -> BTreeSet<String> {
+        let mut seen = BTreeSet::from([t.to_string()]);
+        let mut todo = vec![t.to_string()];
+        while let Some(x) = todo.pop() {
+            for y in stands_for.get(x.as_str()).into_iter().flatten() {
+                if seen.insert(y.to_string()) {
+                    todo.push(y.to_string());
+                }
+            }
+        }
+        seen
+    };
+    let names_of = |t: &str| -> BTreeSet<String> {
+        let mut names = chain(t);
+        for x in stands_for.keys() {
+            if chain(x).contains(t) {
+                names.insert(x.to_string());
+            }
+        }
+        names
+    };
+    // A use with the type or trait `t` shown, `t` by one of its names: see the module table.
+    let typed_as = |t: &str, n: &str| -> Vec<String> {
         let k = format!("{t}::{n}");
         let is_trait = types.traits.contains(t) || types.trait_fns.contains_key(t);
         if is_trait && !types.blanket.contains(n) {
@@ -479,12 +555,36 @@ pub(crate) fn run(
             Vec::new()
         }
     };
+    let typed = |t: &str, n: &str| -> Vec<String> {
+        let all: BTreeSet<String> = names_of(t).iter().flat_map(|x| typed_as(x, n)).collect();
+        all.into_iter().collect()
+    };
+    // The fns of the impls of traits of other crates, by their self type.
+    let mut implicit_by: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for k in &types.implicit {
+        if let Some((t, _)) = k.rsplit_once("::") {
+            implicit_by.entry(t).or_default().push(k.clone());
+        }
+    }
+    let implicit_of = |t: &str| -> Vec<String> {
+        let all: BTreeSet<String> = names_of(t)
+            .iter()
+            .flat_map(|x| implicit_by.get(x.as_str()).cloned().unwrap_or_default())
+            .collect();
+        all.into_iter().collect()
+    };
     let mut edges: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut places = BTreeMap::new();
+    let mut allow_used = vec![false; allow.len()];
     for f in &funcs {
         let out = edges.entry(f.key.clone()).or_default();
+        let own_type = f.key.rsplit_once("::").map(|(t, _)| t);
         for u in &f.uses {
             let to: Vec<String> = match u {
+                // Not from a fn of the same type: a method of T that names T (`Self::A`, `Self
+                // { .. }`) is the code of T itself (the limit is in the module doc).
+                Use::Type(t) if own_type == Some(t.as_str()) => Vec::new(),
+                Use::Type(t) => implicit_of(t),
                 Use::Method(Some(t), n) => typed(t, n),
                 Use::Method(None, n) => all(&methods, n),
                 Use::Path(q, n) if q.starts_with(|c: char| c.is_ascii_lowercase()) => all(&free, n),
@@ -492,9 +592,16 @@ pub(crate) fn run(
                 Use::Bare(n) => all(&free, n),
                 Use::Any(n) => all(&by_name, n),
             };
+            let text = format!("{u:?}");
             for k in to {
-                if !ALLOW.iter().any(|(a, b, _)| *a == f.key && *b == k) {
-                    out.entry(k).or_insert_with(|| format!("{u:?}"));
+                match allow
+                    .iter()
+                    .position(|(a, b, w, _)| *a == f.key && *b == k && *w == text)
+                {
+                    Some(i) => allow_used[i] = true,
+                    None => {
+                        out.entry(k).or_insert_with(|| text.clone());
+                    }
                 }
             }
         }
@@ -564,6 +671,12 @@ pub(crate) fn run(
         .collect();
     bad_checks.sort_by(|a, b| (&a.1, a.2).cmp(&(&b.1, b.2)));
     let data = funcs.iter().filter(|f| f.data).count();
+    let unused_allow = allow
+        .iter()
+        .zip(&allow_used)
+        .filter(|(_, used)| !**used)
+        .map(|((a, b, w, _), _)| (a.to_string(), b.to_string(), w.to_string()))
+        .collect();
     Ok(Report {
         files: sources.len(),
         funcs: funcs.len() - data,
@@ -576,6 +689,7 @@ pub(crate) fn run(
         implicit,
         bad_checks,
         edges,
+        unused_allow,
     })
 }
 
@@ -718,6 +832,46 @@ fn type_params(g: &syn::Generics) -> impl Iterator<Item = String> + '_ {
     g.type_params().map(|p| p.ident.to_string())
 }
 
+/// The type parameters of `g` with an `Fn`, `FnMut` or `FnOnce` bound (in the list or in the
+/// `where` clause): a value of such a type is a fn value (review R2 B2-2 (c)).
+fn fn_params(g: &syn::Generics) -> BTreeSet<String> {
+    let is_fn = |b: &syn::TypeParamBound| {
+        matches!(b, syn::TypeParamBound::Trait(t)
+        if t.path.segments.last().is_some_and(|s| {
+            matches!(s.ident.to_string().as_str(), "Fn" | "FnMut" | "FnOnce")
+        }))
+    };
+    let params: BTreeSet<String> = type_params(g).collect();
+    let mut out: BTreeSet<String> = g
+        .type_params()
+        .filter(|p| p.bounds.iter().any(is_fn))
+        .map(|p| p.ident.to_string())
+        .collect();
+    for w in g.where_clause.iter().flat_map(|w| &w.predicates) {
+        if let syn::WherePredicate::Type(pt) = w
+            && let Type::Path(tp) = &pt.bounded_ty
+            && let Some(id) = tp.path.get_ident()
+            && params.contains(&id.to_string())
+            && pt.bounds.iter().any(is_fn)
+        {
+            out.insert(id.to_string());
+        }
+    }
+    out
+}
+
+/// The names of the lifetime-free parameters of `g` (type and const), in their places.
+fn param_places(g: &syn::Generics) -> Vec<String> {
+    g.params
+        .iter()
+        .filter_map(|p| match p {
+            syn::GenericParam::Type(t) => Some(t.ident.to_string()),
+            syn::GenericParam::Const(c) => Some(c.ident.to_string()),
+            syn::GenericParam::Lifetime(_) => None,
+        })
+        .collect()
+}
+
 /// Does a value of this type hold a fn value that code can call (a fn pointer, a `dyn` trait
 /// object, or a type alias in `aliases` of one)?
 fn holds_fn_value(t: &Type, aliases: &BTreeSet<String>) -> bool {
@@ -742,13 +896,35 @@ fn holds_fn_value(t: &Type, aliases: &BTreeSet<String>) -> bool {
     }
 }
 
+/// Adds a known type (or `None`, not known) for `key`: a second type that is not the first
+/// makes it not known (review R2 B2-5: one name for two structs or two fns).
+fn merge(map: &mut BTreeMap<String, Option<String>>, key: String, t: Option<String>) {
+    match map.entry(key) {
+        std::collections::btree_map::Entry::Vacant(v) => {
+            v.insert(t);
+        }
+        std::collections::btree_map::Entry::Occupied(mut o) => {
+            if *o.get() != t {
+                o.insert(None);
+            }
+        }
+    }
+}
+
+/// A struct or enum field for the fn value check: (place, type, the type parameters of the
+/// struct or enum with an `Fn` bound, the struct or enum name, its parameter places as
+/// [`param_places`] gives them).
+type FieldType = (String, Type, BTreeSet<String>, String, Vec<String>);
+
 /// Pass 1: what the sources say about types.
 #[derive(Default)]
 struct Types {
     /// The file that is visited now.
     file: String,
     /// struct name -> field name -> field type name (not for a field of a generic type).
-    fields: BTreeMap<String, BTreeMap<String, String>>,
+    /// `None`: not known (a field of a generic type, or two structs of the name whose fields of
+    /// the name have other types: review R2 B2-5).
+    fields: BTreeMap<String, BTreeMap<String, Option<String>>>,
     /// The self type names of every impl.
     impls: BTreeSet<String>,
     /// The traits that the sources define.
@@ -762,10 +938,17 @@ struct Types {
     /// The fns of the impls of traits of other crates (filled by `check_fields`).
     implicit: Vec<String>,
     /// fn or associated const key -> its type name (`Self` is the impl type).
-    rets: BTreeMap<String, String>,
-    /// Type aliases (name -> type) and the struct and enum fields (place, type), for the check.
+    /// `None`: not known (two fns of the key with other return types, as for `fields`).
+    rets: BTreeMap<String, Option<String>>,
+    /// Type aliases (name -> type) and the struct and enum fields, for the check.
     aliases: Vec<(String, Type)>,
-    field_types: Vec<(String, Type)>,
+    field_types: Vec<FieldType>,
+    /// type name -> the places (no lifetimes) of the arguments of its self type that an impl
+    /// gives an `Fn` bound: `impl<F: Fn()> Hook<F>` gives `Hook` -> {0} (review R2 B2-2 (c)).
+    impl_fn_places: BTreeMap<String, BTreeSet<usize>>,
+    /// (a name, the name of the type or trait that it stands for): each `use .. as` rename and
+    /// each type alias of the sources (review R2 B2-2).
+    other_names: Vec<(String, String)>,
     impl_self: Vec<Option<String>>,
     /// The type parameters of each impl around the current item.
     generics: Vec<BTreeSet<String>>,
@@ -786,8 +969,14 @@ impl Types {
                 break;
             }
         }
-        for (place, t) in &self.field_types {
-            if holds_fn_value(t, &aliases) {
+        for (place, t, fn_params, owner, params) in &self.field_types {
+            let mut names = aliases.clone();
+            names.extend(fn_params.iter().cloned());
+            // An `Fn` bound on an impl of the owner, not on the owner itself.
+            for &i in self.impl_fn_places.get(owner).into_iter().flatten() {
+                names.extend(params.get(i).cloned());
+            }
+            if holds_fn_value(t, &names) {
                 return Err(format!(
                     "{place}: the field holds a fn value (`{}`): a call through it is not an \
                      edge of the graph",
@@ -804,15 +993,23 @@ impl Types {
         Ok(())
     }
 
-    fn fields_of(&mut self, owner: &str, fields: &syn::Fields) {
+    /// `owner`: the struct, or `Enum::Variant`; `ty`: the struct or enum name.
+    fn fields_of(&mut self, owner: &str, ty: &str, generics: &syn::Generics, fields: &syn::Fields) {
+        let fn_params = fn_params(generics);
+        let places = param_places(generics);
         for (i, f) in fields.iter().enumerate() {
             let id = f
                 .ident
                 .as_ref()
                 .map_or_else(|| i.to_string(), |id| id.to_string());
             let at = f.ty.span().start().line;
-            self.field_types
-                .push((format!("{}:{at}: {owner}.{id}", self.file), f.ty.clone()));
+            self.field_types.push((
+                format!("{}:{at}: {owner}.{id}", self.file),
+                f.ty.clone(),
+                fn_params.clone(),
+                ty.to_string(),
+                places.clone(),
+            ));
         }
     }
 }
@@ -820,13 +1017,13 @@ impl Types {
 impl<'ast> Visit<'ast> for Types {
     fn visit_item_struct(&mut self, s: &'ast syn::ItemStruct) {
         let generics: BTreeSet<String> = type_params(&s.generics).collect();
-        self.fields_of(&s.ident.to_string(), &s.fields);
+        let name = s.ident.to_string();
+        self.fields_of(&name, &name, &s.generics, &s.fields);
         let e = self.fields.entry(s.ident.to_string()).or_default();
         for f in &s.fields {
-            if let (Some(id), Some(t)) = (&f.ident, type_name(&f.ty))
-                && !generics.contains(&t)
-            {
-                e.insert(id.to_string(), t);
+            if let Some(id) = &f.ident {
+                let t = type_name(&f.ty).filter(|t| !generics.contains(t));
+                merge(e, id.to_string(), t);
             }
         }
         visit::visit_item_struct(self, s);
@@ -834,13 +1031,24 @@ impl<'ast> Visit<'ast> for Types {
 
     fn visit_item_enum(&mut self, e: &'ast syn::ItemEnum) {
         for v in &e.variants {
-            self.fields_of(&format!("{}::{}", e.ident, v.ident), &v.fields);
+            let owner = format!("{}::{}", e.ident, v.ident);
+            self.fields_of(&owner, &e.ident.to_string(), &e.generics, &v.fields);
         }
         visit::visit_item_enum(self, e);
     }
 
     fn visit_item_type(&mut self, t: &'ast syn::ItemType) {
         self.aliases.push((t.ident.to_string(), (*t.ty).clone()));
+        if let Some(target) = type_name(&t.ty) {
+            self.other_names.push((t.ident.to_string(), target));
+        }
+    }
+
+    fn visit_use_rename(&mut self, r: &'ast syn::UseRename) {
+        if r.rename != "_" {
+            self.other_names
+                .push((r.rename.to_string(), r.ident.to_string()));
+        }
     }
 
     fn visit_item_trait(&mut self, t: &'ast syn::ItemTrait) {
@@ -859,6 +1067,30 @@ impl<'ast> Visit<'ast> for Types {
             return;
         }
         let t = type_name(&i.self_ty);
+        // The arguments of the self type that this impl gives an `Fn` bound (B2-2 (c)).
+        let fns = fn_params(&i.generics);
+        if let Type::Path(p) = &*i.self_ty
+            && let Some(last) = p.path.segments.last()
+            && let syn::PathArguments::AngleBracketed(a) = &last.arguments
+        {
+            let args = a
+                .args
+                .iter()
+                .filter(|g| !matches!(g, syn::GenericArgument::Lifetime(_)));
+            for (place, g) in args.enumerate() {
+                if let syn::GenericArgument::Type(Type::Path(tp)) = g
+                    && tp
+                        .path
+                        .get_ident()
+                        .is_some_and(|id| fns.contains(&id.to_string()))
+                {
+                    self.impl_fn_places
+                        .entry(last.ident.to_string())
+                        .or_default()
+                        .insert(place);
+                }
+            }
+        }
         let generic = t
             .as_ref()
             .is_some_and(|t| i.generics.type_params().any(|p| p.ident == t.as_str()));
@@ -894,8 +1126,12 @@ impl<'ast> Visit<'ast> for Types {
     }
 
     fn visit_impl_item_const(&mut self, c: &'ast syn::ImplItemConst) {
-        if let (Some(Some(t)), Some(r)) = (self.impl_self.last(), type_name(&c.ty)) {
-            self.rets.insert(format!("{t}::{}", c.ident), r);
+        if let Some(Some(t)) = self.impl_self.last() {
+            merge(
+                &mut self.rets,
+                format!("{t}::{}", c.ident),
+                type_name(&c.ty),
+            );
         }
     }
 
@@ -904,13 +1140,14 @@ impl<'ast> Visit<'ast> for Types {
             self.generics.last().is_some_and(|g| g.contains(r))
                 || f.sig.generics.type_params().any(|p| p.ident == r)
         };
-        if let (Some(Some(t)), syn::ReturnType::Type(_, ty)) =
-            (self.impl_self.last(), &f.sig.output)
-            && let Some(r) = type_name(ty)
-            && !generic(&r)
-        {
-            let r = if r == "Self" { t.clone() } else { r };
-            self.rets.insert(format!("{t}::{}", f.sig.ident), r);
+        if let Some(Some(t)) = self.impl_self.last() {
+            let r = match &f.sig.output {
+                syn::ReturnType::Type(_, ty) => type_name(ty).filter(|r| !generic(r)),
+                syn::ReturnType::Default => None,
+            };
+            let r = r.map(|r| if r == "Self" { t.clone() } else { r });
+            let key = format!("{t}::{}", f.sig.ident);
+            merge(&mut self.rets, key, r);
         }
         // Local types and impls in the body.
         let saved = (
@@ -972,9 +1209,30 @@ impl Collector<'_> {
             ..Func::default()
         };
         let mut nested = Vec::new();
+        // The types of the signature (not the `self` receiver): the fn takes, makes or drops a
+        // value of each one, so they count as uses before the check.
+        let mut n = Uses {
+            self_ty: self_ty.as_deref(),
+            params: &params,
+            generics: &generics,
+            types: self.types,
+            defs: self.defs,
+            uses: &mut f.uses,
+            nested: &mut nested,
+            depth: 0,
+            in_pat: false,
+        };
+        for a in &sig.inputs {
+            if let FnArg::Typed(pt) = a {
+                n.visit_type(&pt.ty);
+            }
+        }
+        if let syn::ReturnType::Type(_, ty) = &sig.output {
+            n.visit_type(ty);
+        }
         let mut behind = BTreeSet::new();
         for stmt in &block.stmts {
-            match check_stmt(stmt) {
+            match check_stmt(stmt, &generics) {
                 Some(Ok(())) if f.check_line.is_none() => {
                     // The check is the cut: its own uses are the check and the stop.
                     f.check_line = Some(stmt.span().start().line);
@@ -998,6 +1256,7 @@ impl Collector<'_> {
                 uses,
                 nested: &mut nested,
                 depth: 0,
+                in_pat: false,
             };
             n.visit_stmt(stmt);
         }
@@ -1029,6 +1288,7 @@ impl Collector<'_> {
             uses: &mut f.uses,
             nested: &mut nested,
             depth: 0,
+            in_pat: false,
         };
         n.visit_expr(expr);
         self.out.push(f);
@@ -1131,8 +1391,9 @@ impl<'ast> Visit<'ast> for Collector<'_> {
 }
 
 /// A statement that calls [`CHECK`]: `Ok` if it is a site form, else why not. `None` if it does
-/// not call it (a nested item is its own node and is not looked at here).
-fn check_stmt(stmt: &Stmt) -> Option<Result<(), String>> {
+/// not call it (a nested item is its own node and is not looked at here). `generics`: the type
+/// parameters of the fn and its impl.
+fn check_stmt(stmt: &Stmt, generics: &BTreeSet<String>) -> Option<Result<(), String>> {
     struct Find(usize);
     impl<'ast> Visit<'ast> for Find {
         fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
@@ -1147,7 +1408,7 @@ fn check_stmt(stmt: &Stmt) -> Option<Result<(), String>> {
     f.visit_stmt(stmt);
     match f.0 {
         0 => None,
-        1 => Some(site_form(stmt)),
+        1 => Some(site_form(stmt, generics)),
         n => Some(Err(format!("{n} calls of {CHECK} in one statement"))),
     }
 }
@@ -1188,7 +1449,7 @@ fn is_call_on(e: &Expr, recv: &str, name: &str) -> bool {
 }
 
 /// Is `stmt` one of the 2 site forms of the patch (the module doc)?
-fn site_form(stmt: &Stmt) -> Result<(), String> {
+fn site_form(stmt: &Stmt, generics: &BTreeSet<String>) -> Result<(), String> {
     let Stmt::Expr(Expr::If(i), _) = stmt else {
         return Err("not an `if` statement at the top level of the body".into());
     };
@@ -1208,6 +1469,9 @@ fn site_form(stmt: &Stmt) -> Result<(), String> {
                     && segs.len() == 2
                     && segs.iter().all(|s| s.arguments.is_none())
                     && segs[1].ident == "CHECKS_RECURSION"
+                    // The config of this parser (review R2 B2-3): a type parameter of the fn or
+                    // its impl, never a fixed type (`NoTokensParserConfig` gives `false`).
+                    && generics.contains(&segs[0].ident.to_string())
             }
             _ => false,
         };
@@ -1232,7 +1496,8 @@ fn site_form(stmt: &Stmt) -> Result<(), String> {
     });
     let Some(recv) = recv else {
         return Err(format!(
-            "the condition is not `C::CHECKS_RECURSION && !R.config.{CHECK}()`"
+            "the condition is not `C::CHECKS_RECURSION && !R.config.{CHECK}()` (C a type \
+             parameter of the fn or its impl)"
         ));
     };
     // The body: one `return R.recursion_stopped()` or `return Err(R.recursion_stopped_error())`.
@@ -1269,6 +1534,8 @@ struct Uses<'n> {
     nested: &'n mut Vec<syn::Item>,
     /// The macro expansions around the current expression.
     depth: usize,
+    /// In a pattern: a path there matches a value and makes none (no [`Use::Type`]).
+    in_pat: bool,
 }
 
 impl Uses<'_> {
@@ -1292,14 +1559,14 @@ impl Uses<'_> {
                     q
                 };
                 let n = &p.path.segments[1].ident;
-                self.types.rets.get(&format!("{q}::{n}")).cloned()
+                self.types.rets.get(&format!("{q}::{n}")).cloned()?
             }
             Expr::Field(f) => {
                 let base = self.recv_type(&f.base)?;
                 let syn::Member::Named(m) = &f.member else {
                     return None;
                 };
-                self.types.fields.get(&base)?.get(&m.to_string()).cloned()
+                self.types.fields.get(&base)?.get(&m.to_string()).cloned()?
             }
             Expr::Call(c) => {
                 let Expr::Path(p) = &*c.func else {
@@ -1316,11 +1583,14 @@ impl Uses<'_> {
                     q
                 };
                 let n = &segs[segs.len() - 1].ident;
-                self.types.rets.get(&format!("{q}::{n}")).cloned()
+                self.types.rets.get(&format!("{q}::{n}")).cloned()?
             }
             Expr::MethodCall(m) => {
                 let t = self.recv_type(&m.receiver)?;
-                self.types.rets.get(&format!("{t}::{}", m.method)).cloned()
+                self.types
+                    .rets
+                    .get(&format!("{t}::{}", m.method))
+                    .cloned()?
             }
             Expr::Paren(p) => self.recv_type(&p.expr),
             Expr::Group(g) => self.recv_type(&g.expr),
@@ -1344,6 +1614,38 @@ impl<'ast> Visit<'ast> for Uses<'_> {
         let t = self.recv_type(&m.receiver);
         self.uses.insert(Use::Method(t, m.method.to_string()));
         visit::visit_expr_method_call(self, m);
+    }
+
+    fn visit_pat(&mut self, p: &'ast Pat) {
+        let saved = std::mem::replace(&mut self.in_pat, true);
+        visit::visit_pat(self, p);
+        self.in_pat = saved;
+    }
+
+    /// `let g: Guard = ..` and `|g: Guard| ..`: the type is not a pattern.
+    fn visit_pat_type(&mut self, p: &'ast syn::PatType) {
+        self.visit_pat(&p.pat);
+        let saved = std::mem::replace(&mut self.in_pat, false);
+        self.visit_type(&p.ty);
+        self.in_pat = saved;
+    }
+
+    /// Each type that a path names (`Guard { .. }`, `Guard::new`, `Vec<Guard>`, `-> Guard`):
+    /// an upper-case segment, `Self` as the impl type.
+    fn visit_path(&mut self, p: &'ast syn::Path) {
+        if !self.in_pat {
+            for s in &p.segments {
+                let id = s.ident.to_string();
+                if id == "Self" {
+                    if let Some(t) = self.self_ty {
+                        self.uses.insert(Use::Type(t.to_string()));
+                    }
+                } else if id.starts_with(|c: char| c.is_ascii_uppercase()) {
+                    self.uses.insert(Use::Type(id));
+                }
+            }
+        }
+        visit::visit_path(self, p);
     }
 
     fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
@@ -1931,7 +2233,7 @@ mod tests {
             .iter()
             .map(|(p, t)| (p.to_string(), t.to_string()))
             .collect();
-        run(&s, &BTreeSet::new()).expect("fixture parses")
+        run(&s, &BTreeSet::new(), &[]).expect("fixture parses")
     }
 
     fn keys(v: &[&str]) -> Vec<String> {
@@ -2138,6 +2440,212 @@ mod tests {
         );
     }
 
+    /// Review R2 B2-2 (a) in the lexer form: `handle_byte` calls the table by the path
+    /// `Config::byte_handlers(&self.config)`, `Config` the trait `LexerConfig` by `use .. as`
+    /// (13 files of 0.158.0 have that rename). A handler that lexes again is still a cycle.
+    #[test]
+    fn a_path_call_by_a_renamed_trait_keeps_the_byte_table() {
+        let again = LEXER
+            .replace(
+                "let byte_handlers = self.config.byte_handlers();",
+                "let byte_handlers = Config::byte_handlers(&self.config);",
+            )
+            .replace(
+                "ascii_byte_handler!(SLH(lexer) {\n            lexer.skip_comment()",
+                "ascii_byte_handler!(SLH(lexer) {\n            lexer.next_token(); lexer.skip_comment()",
+            );
+        let again = format!("use crate::lexer::LexerConfig as Config;\n{again}");
+        let r = report(&[("lexer.rs", &again)]);
+        assert_eq!(
+            r.cycles,
+            vec![keys(&[
+                "Lexer::handle_byte",
+                "Lexer::next_token",
+                "Lexer::read_next_token",
+                "NO_TOKENS",
+                "NoTokensLexerConfig::byte_handlers",
+                "SLH",
+            ])]
+        );
+        // With no rename `Config` is not known: no edge, no cycle (the form before B2-2).
+        let bare = again.replace("use crate::lexer::LexerConfig as Config;\n", "");
+        assert!(report(&[("lexer.rs", &bare)]).cycles.is_empty());
+    }
+
+    /// Review R2 B2-2 (c): a type parameter with an `Fn` bound in the `where` clause, also inside
+    /// an `Option`, is a fn value field; a parameter with another bound is not.
+    #[test]
+    fn a_field_of_an_fn_bound_parameter_fails() {
+        let src = "struct S<F, G: Clone> where F: FnMut() -> u32 { f: Option<F>, g: G }";
+        let e = run(&[("w.rs".into(), src.into())], &BTreeSet::new(), &[]).unwrap_err();
+        assert!(
+            e.starts_with("w.rs:1: S.f: the field holds a fn value"),
+            "{e}"
+        );
+        let ok = "struct S<G: Clone> { g: G }";
+        assert!(run(&[("w.rs".into(), ok.into())], &BTreeSet::new(), &[]).is_ok());
+        // The `Fn` bound on an impl of the type (the usual form), not on the struct: the same
+        // fn value field. Lifetimes do not count in the place of a parameter, const ones do.
+        let on_impl = "struct H<'a, const N: usize, F> { r: &'a u32, f: F }
+                       impl<'a, const N: usize, F> H<'a, N, F> where F: Fn(u32) -> u32 {
+                           fn call(&self) -> u32 { (self.f)(*self.r) } }";
+        let e = run(&[("h.rs".into(), on_impl.into())], &BTreeSet::new(), &[]).unwrap_err();
+        assert!(
+            e.starts_with("h.rs:1: H.f: the field holds a fn value"),
+            "{e}"
+        );
+        let on_trait_impl =
+            "enum E<F> { A(F) } impl<F: FnOnce()> Drop for E<F> { fn drop(&mut self) {} }";
+        let e = run(
+            &[("e.rs".into(), on_trait_impl.into())],
+            &BTreeSet::new(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            e.starts_with("e.rs:1: E::A.0: the field holds a fn value"),
+            "{e}"
+        );
+        let ok = "struct H<F, G> { f: F, g: G } impl<F: Clone, G: Fn()> H<F, u32> {}";
+        assert!(run(&[("h.rs".into(), ok.into())], &BTreeSet::new(), &[]).is_ok());
+    }
+
+    /// Review R2 B2-4: an ALLOW entry leaves out only the edge of its own use; an entry that
+    /// leaves out no edge is a finding.
+    #[test]
+    fn an_allow_entry_holds_only_its_own_use() {
+        const ENTRY: Allow = (
+            "JSXClosing::dummy",
+            "JSXClosing::dummy",
+            r#"Path("Dummy", "dummy")"#,
+            "the oxc_ast impl of the same name",
+        );
+        let src = "struct JSXClosing; impl Dummy for JSXClosing { fn dummy(a: u32) -> Self { CALL } }
+                   impl<C> ParserImpl<C> { fn set_pure_on_call_or_new_expr() {} fn jsx_member_expression_eq() {} }";
+        let run_with = |call: &str| {
+            let s = vec![("d.rs".to_string(), src.replace("CALL", call))];
+            run(&s, &BTreeSet::new(), &[ENTRY]).expect("fixture parses")
+        };
+        // The use of the entry: the edge is left out, and the entry is used.
+        let r = run_with("Dummy::dummy(a)");
+        assert!(r.ok(), "{:?} {:?}", r.cycles, r.unused_allow);
+        // Another use of the same edge: a cycle, and the entry is unused.
+        let r = run_with("Self::dummy(a)");
+        assert_eq!(r.cycles, vec![keys(&["JSXClosing::dummy"])]);
+        assert_eq!(
+            r.unused_allow,
+            vec![(
+                ENTRY.0.to_string(),
+                ENTRY.1.to_string(),
+                ENTRY.2.to_string()
+            )]
+        );
+        // Both uses: the edge of `Self::dummy` stays.
+        let r = run_with("{ Dummy::dummy(a); Self::dummy(a) }");
+        assert_eq!(r.cycles, vec![keys(&["JSXClosing::dummy"])]);
+        assert!(r.unused_allow.is_empty());
+    }
+
+    /// Review R2 B2-5: each rule that narrows an edge to fewer fns has a cycle that runs only
+    /// through the narrowed edge. A rule that gives a wrong type loses the edge, and its case
+    /// fails here (for example `DEREF = &[]` loses the `Box<Lexer>` case). Each case also has a
+    /// same-name fn of another type, so an edge to every fn of the name is not the only edge.
+    #[test]
+    fn each_narrowing_rule_keeps_its_cycle() {
+        const DECOY: &str = "struct Other; impl Other { fn f(&mut self) -> u32 { 0 } \
+                             fn a(&mut self) -> u32 { 0 } fn c(&mut self) -> u32 { 0 } \
+                             fn go(&mut self) -> u32 { 0 } fn step(&mut self) -> u32 { 0 } }";
+        let cases: &[(&str, &str, &[&str])] = &[
+            (
+                "a field type",
+                "struct P { lexer: Lexer } struct Lexer;
+                 impl P { fn a(&mut self) -> u32 { self.lexer.f(self) } }
+                 impl Lexer { fn f(&mut self, p: &mut P) -> u32 { p.a() } }",
+                &["Lexer::f", "P::a"],
+            ),
+            (
+                "a DEREF wrapper",
+                "struct P { lexer: Box<Lexer> } struct Lexer;
+                 impl P { fn a(&mut self) -> u32 { self.lexer.f(self) } }
+                 impl Lexer { fn f(&mut self, p: &mut P) -> u32 { p.a() } }",
+                &["Lexer::f", "P::a"],
+            ),
+            (
+                "a return type chain",
+                "struct P; struct Q;
+                 impl P { fn b(&self) -> Q { Q } fn a(&mut self) -> u32 { self.b().c(self) } }
+                 impl P { fn c(&self, p: &mut P) -> u32 { 0 } }
+                 impl Q { fn c(&self, p: &mut P) -> u32 { p.a() } }",
+                &["P::a", "Q::c"],
+            ),
+            (
+                "an associated const receiver",
+                "struct K; struct W;
+                 impl K { const ALL: W = W; fn a(&mut self) -> u32 { Self::ALL.go(self) } }
+                 impl W { fn go(&self, k: &mut K) -> u32 { k.a() } }",
+                &["K::a", "W::go"],
+            ),
+            (
+                "a qualified path",
+                "trait Walk { fn step(&mut self) -> u32; } struct A;
+                 impl Walk for A { fn step(&mut self) -> u32 { run(self) } }
+                 fn run(a: &mut A) -> u32 { <A as Walk>::step(a) }",
+                &["A::step", "run"],
+            ),
+            (
+                "a module path",
+                "mod m { pub fn down(n: u32) -> u32 { super::up(n) } }
+                 fn up(n: u32) -> u32 { m::down(n) }",
+                &["down", "up"],
+            ),
+            (
+                "a blanket impl",
+                "trait Ext { fn ext(&self) -> u32; }
+                 impl<X: AsRef<str>> Ext for X { fn ext(&self) -> u32 { look(self.as_ref()) } }
+                 fn look(s: &str) -> u32 { s.ext() }",
+                &["X::ext", "look"],
+            ),
+            (
+                "a nested fn",
+                "fn outer(n: u32) -> u32 { fn inner(n: u32) -> u32 { outer(n) } inner(n) }",
+                &["inner", "outer"],
+            ),
+        ];
+        for (rule, src, cycle) in cases {
+            let r = report(&[("n.rs", &format!("{src}\n{DECOY}"))]);
+            assert_eq!(r.cycles, vec![keys(cycle)], "{rule}");
+        }
+        // A LOOP fn on a cycle is not a loop.
+        let src = "impl<C> ParserImpl<C> { fn set_pure_on_call_or_new_expr(&mut self) { \
+                   self.set_pure_on_call_or_new_expr() } fn jsx_member_expression_eq() {} }";
+        let r = report(&[("l.rs", src)]);
+        assert_eq!(
+            r.loops
+                .iter()
+                .map(|(k, _, ok)| (label(k), *ok))
+                .collect::<Vec<_>>(),
+            vec![
+                ("set_pure_on_call_or_new_expr", false),
+                ("jsx_member_expression_eq", true)
+            ]
+        );
+    }
+
+    /// Review R2 B2-5: two fns of one key (two types of one name) with other return types:
+    /// the return type is not known, never the type of one of them.
+    #[test]
+    fn a_return_type_of_two_fns_of_one_key_is_not_known() {
+        let a = "struct Ctx; struct Walker;
+                 impl Ctx { fn inner(&self) -> Walker { Walker } fn go(&mut self) -> u32 { self.inner().step() } }
+                 impl Walker { fn step(&mut self) -> u32 { again() } }
+                 fn again() -> u32 { let mut c = Ctx; c.go() }";
+        let b = "mod b { struct Ctx; struct Plain;
+                 impl Ctx { fn inner(&self) -> Plain { Plain } }
+                 impl Plain { fn step(&mut self) -> u32 { 0 } } }";
+        let r = report(&[("a.rs", a), ("b.rs", b)]);
+        assert_eq!(r.cycles, vec![keys(&["Ctx::go", "Walker::step", "again"])]);
+    }
+
     /// Fixture 5: the macro expander. A macro with nested repetitions writes an enum, an impl
     /// and one fn per entry (the `parser_diagnostics!` form); a macro in a body gives the edges
     /// of its expansion, also when it calls itself with another rule.
@@ -2216,13 +2724,13 @@ mod tests {
     #[test]
     fn what_the_graph_cannot_see_fails() {
         let field = "type Handler = fn(u32) -> u32;\nstruct S { h: Option<Handler> }";
-        let e = run(&[("f.rs".into(), field.into())], &BTreeSet::new()).unwrap_err();
+        let e = run(&[("f.rs".into(), field.into())], &BTreeSet::new(), &[]).unwrap_err();
         assert!(
             e.starts_with("f.rs:2: S.h: the field holds a fn value"),
             "{e}"
         );
         let foreign = "other_crate::make_fns! { fn hidden() { parse_a() } }";
-        let e = run(&[("i.rs".into(), foreign.into())], &BTreeSet::new()).unwrap_err();
+        let e = run(&[("i.rs".into(), foreign.into())], &BTreeSet::new(), &[]).unwrap_err();
         assert!(e.contains("make_fns! is a macro of another crate"), "{e}");
         let drop = r#"
             struct Guard<C> { p: ParserImpl<C> }
@@ -2295,6 +2803,11 @@ mod tests {
                 "let _go = self.config.may_recurse();",
                 "not an `if` statement",
             ),
+            // Review R2 B2-3: the gate of a fixed config type is no site.
+            (
+                "if NoTokensParserConfig::CHECKS_RECURSION && !self.config.may_recurse() { return self.recursion_stopped(); }",
+                "the condition is not",
+            ),
         ] {
             let text = src.replacen(FORM, bad, 1);
             assert_ne!(text, src);
@@ -2311,6 +2824,42 @@ mod tests {
             // It cuts nothing: the recursion of parse_a is a cycle.
             assert_eq!(r.cycles, vec![keys(&["ParserImpl::parse_a"])], "{bad}");
         }
+    }
+
+    /// Review R2 B2-1: a fn that names a type outside a pattern has an edge to each implicit
+    /// callee of that type, so a recursion that a `?` (`From`), a `format!` (`Display`) or a
+    /// `for` (`Iterator`) closes is a cycle. A pattern names no value, and a fn of the same type
+    /// gets no such edge.
+    #[test]
+    fn an_implicit_call_closes_a_cycle() {
+        const LOOPS: &str = "impl<C> ParserImpl<C> { fn set_pure_on_call_or_new_expr() {} \
+                             fn jsx_member_expression_eq() {} }";
+        for (src, cycle) in [
+            (
+                "struct E; impl From<u32> for E { fn from(_: u32) -> E { parse_e().unwrap_or(E) } }
+                 fn parse_e() -> Result<E, E> { let n: u32 = 1; Err(n)? }",
+                &["E::from", "parse_e"][..],
+            ),
+            (
+                "struct D(u32); impl std::fmt::Display for D { fn fmt(&self, f: &mut F) -> R { show() } }
+                 fn show() -> R { format!(\"{}\", make()) } fn make() -> D { D(0) }",
+                &["D::fmt", "make", "show"][..],
+            ),
+            (
+                "struct W; impl Iterator for W { type Item = u32; fn next(&mut self) -> Option<u32> { walk() } }
+                 fn walk() -> Option<u32> { let w: W = W; for x in w { return Some(x); } None }",
+                &["W::next", "walk"][..],
+            ),
+        ] {
+            let r = report(&[("a.rs", &format!("{src}\n{LOOPS}"))]);
+            assert_eq!(r.cycles, vec![keys(cycle)], "{src}");
+        }
+        // A match on `K::A` names no value; `K::name` names `K` but is a fn of `K`.
+        let pat = "enum K { A } impl std::fmt::Display for K { fn fmt(&self, f: &mut F) -> R { self.name(); see(self) } }
+                   impl K { fn name(&self) -> u32 { let k = Self::A; 0 } }
+                   fn see(k: &u32) -> R { match k { K::A => ok() } }";
+        let r = report(&[("p.rs", &format!("{pat}\n{LOOPS}"))]);
+        assert!(r.cycles.is_empty(), "{:?}", r.cycles);
     }
 
     /// Review V7: a call in the body of a `macro_rules!` of the sources is an edge where the

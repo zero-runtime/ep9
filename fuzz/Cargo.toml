@@ -66,6 +66,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "frontend_small_stack"
+path = "fuzz_targets/frontend_small_stack.rs"
+test = false
+doc = false
+bench = false
+
 # The regress fork of the root Cargo.toml (V9-D15): a [patch] applies only at its own workspace
 # root, so this workspace has the same entry (the regexp target runs ep9_regexp, RX0).
 [patch.crates-io]

@@ -77,7 +77,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [frontend_compile, function_ctor, eval_context, regexp, unit_loader]
+        target: [frontend_compile, function_ctor, eval_context, regexp, unit_loader, frontend_small_stack]
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 360
     steps:
