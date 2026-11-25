@@ -20,7 +20,8 @@
 //!     `if C::CHECKS_RECURSION && !R.config.may_recurse() { return Err(R.recursion_stopped_error()); }`
 //!   (R the parser: `self` or a parameter; C a type parameter of the fn or its impl that is a
 //!   type argument of the type of R, as `C` of `ParserImpl<'a, C>`: never a fixed config type
-//!   and never another parameter, review A4). The statements after it are behind the check, so
+//!   and never another parameter, review A4; a top-level `let` of R before the check leaves R
+//!   with no known type, review round 2 A-B3). The statements after it are behind the check, so
 //!   the node keeps only the edges of the statements before it. Any other statement that calls
 //!   `may_recurse` is a finding: a form that does not stop (no `return`), that calls more in its
 //!   condition, or that is not at the top level of the body would cut the graph falsely
@@ -62,9 +63,11 @@
 //! - A call through a fn value that a struct or enum field holds (a fn pointer, a `dyn` trait
 //!   object, a type parameter with an `Fn`, `FnMut` or `FnOnce` bound or the bound of a trait of
 //!   the sources with one of them as a supertrait, on the struct or enum, on an impl of it, on a
-//!   method of that impl or on a fn that takes the type, also when the argument only holds the
-//!   parameter, as `Hook<Box<F>>`, and through a type alias or a `use .. as` name of the type:
-//!   review A2, A5): such a field fails the run (exit 2).
+//!   method of that impl, on a fn or a trait fn that takes the type, also when the argument only
+//!   holds the parameter, as `Hook<Box<F>>`, or the type is inside another type, as
+//!   `&[Hook<F>]`, `Option<Hook<F>>` or `impl .. for Box<Hook<F>>`, and through a type alias or
+//!   a `use .. as` name of the type: review A2, A5, round 2 A-B1, A-B2): such a field fails the
+//!   run (exit 2).
 //! - The body of a fn that an item macro of another crate writes: a call of such a macro whose
 //!   tokens hold `fn` fails the run (exit 2). The other item macros of other crates
 //!   (`bitflags!`, `fieldless_enum!`) write no body from the tokens of the call.
@@ -938,30 +941,40 @@ fn type_idents(t: &Type, out: &mut BTreeSet<String>) {
     Names(out).visit_type(t);
 }
 
-/// (type name, place) of each argument of the path type `t` (through references) that holds a
-/// name of `fns` or a fn value: `Hook<F>` and `Hook<Box<F>>` with `F` in `fns` give
-/// (`Hook`, 0). Places as [`param_places`] gives them (no lifetimes).
+/// (type name, place) of each argument of each path type in `t` (through references, slices,
+/// arrays, tuples, pointers, and into the arguments, to the end) that holds a name of `fns` or
+/// a fn value: `Hook<F>` and `Hook<Box<F>>` with `F` in `fns` give (`Hook`, 0);
+/// `&[Hook<F>]` gives (`Hook`, 0); `Option<Hook<F>>` gives (`Option`, 0) and (`Hook`, 0)
+/// (review round 2, A-B1). Places as [`param_places`] gives them (no lifetimes).
 fn arg_places(t: &Type, fns: &BTreeSet<String>) -> Vec<(String, usize)> {
     match t {
         Type::Reference(r) => arg_places(&r.elem, fns),
         Type::Paren(p) => arg_places(&p.elem, fns),
         Type::Group(g) => arg_places(&g.elem, fns),
+        Type::Slice(s) => arg_places(&s.elem, fns),
+        Type::Array(a) => arg_places(&a.elem, fns),
+        Type::Ptr(p) => arg_places(&p.elem, fns),
+        Type::Tuple(t) => t.elems.iter().flat_map(|e| arg_places(e, fns)).collect(),
         Type::Path(p) => {
-            let Some(last) = p.path.segments.last() else {
-                return Vec::new();
-            };
-            let syn::PathArguments::AngleBracketed(a) = &last.arguments else {
-                return Vec::new();
-            };
-            a.args
-                .iter()
-                .filter(|g| !matches!(g, syn::GenericArgument::Lifetime(_)))
-                .enumerate()
-                .filter(
-                    |(_, g)| matches!(g, syn::GenericArgument::Type(t) if holds_fn_value(t, fns)),
-                )
-                .map(|(place, _)| (last.ident.to_string(), place))
-                .collect()
+            let mut out = Vec::new();
+            for s in &p.path.segments {
+                let syn::PathArguments::AngleBracketed(a) = &s.arguments else {
+                    continue;
+                };
+                let args = a
+                    .args
+                    .iter()
+                    .filter(|g| !matches!(g, syn::GenericArgument::Lifetime(_)));
+                for (place, g) in args.enumerate() {
+                    if let syn::GenericArgument::Type(t) = g {
+                        if holds_fn_value(t, fns) {
+                            out.push((s.ident.to_string(), place));
+                        }
+                        out.extend(arg_places(t, fns));
+                    }
+                }
+            }
+            out
         }
         _ => Vec::new(),
     }
@@ -1271,6 +1284,14 @@ impl<'ast> Visit<'ast> for Types {
 
     fn visit_item_trait(&mut self, t: &'ast syn::ItemTrait) {
         self.traits.insert(t.ident.to_string());
+        // The types that a fn of the trait takes with an `Fn` bound argument, as for an impl
+        // (review round 2, A-B2: `fn go<F: Fn()>(&self, h: &Hook<F>)`, a default fn).
+        for it in &t.items {
+            if let syn::TraitItem::Fn(f) = it {
+                let fns = fn_params(&[&t.generics, &f.sig.generics], &self.fn_traits);
+                self.mark_inputs(&f.sig, &fns);
+            }
+        }
         visit::visit_item_trait(self, t);
     }
 
@@ -1418,7 +1439,7 @@ impl Collector<'_> {
         // The config of each parser R that a site can name (review A4): the type arguments of
         // the type of R (`self`, or `p: &mut ParserImpl<'a, C>`).
         let own_args = self.self_args.last().cloned().unwrap_or_default();
-        let mut configs = BTreeMap::new();
+        let mut configs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for a in &sig.inputs {
             match a {
                 FnArg::Receiver(_) => {
@@ -1475,6 +1496,14 @@ impl Collector<'_> {
                 }
                 Some(Err(why)) => f.bad_checks.push((stmt.span().start().line, why)),
                 _ => {}
+            }
+            // A top-level `let` binds the parser name again: the type of the new R is not the
+            // signature one, so a check after it has no known config for R (review round 2,
+            // A-B3).
+            if let Stmt::Local(l) = stmt {
+                for name in pat_names(&l.pat) {
+                    configs.remove(&name);
+                }
             }
             // Behind the check only nested items count (they are their own nodes).
             let uses = if f.check_line.is_none() {
@@ -1671,6 +1700,20 @@ fn bound_names(block: &Block) -> BTreeSet<String> {
     }
     let mut b = Bind(BTreeSet::new());
     b.visit_block(block);
+    b.0
+}
+
+/// Every name that the pattern `p` binds.
+fn pat_names(p: &Pat) -> BTreeSet<String> {
+    struct Bind(BTreeSet<String>);
+    impl<'ast> Visit<'ast> for Bind {
+        fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
+            self.0.insert(p.ident.to_string());
+            visit::visit_pat_ident(self, p);
+        }
+    }
+    let mut b = Bind(BTreeSet::new());
+    b.visit_pat(p);
     b.0
 }
 

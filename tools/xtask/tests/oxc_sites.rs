@@ -1,7 +1,8 @@
 //! `cargo xtask oxc-sites` (T-SITES) on the gap fixtures in `tests/oxc_sites/` (README there).
 //!
 //! Each fixture is a false PASS of the lint before route OXC-SITES-LINT-GAPS (review R2 lens B,
-//! B2-1..B2-5; the M13-P0 review round 1, A1-A5): an unbounded recursion that the lint read as
+//! B2-1..B2-5; the M13-P0 review round 1, A1-A5, and round 2, A-B1..A-B4): an unbounded
+//! recursion that the lint read as
 //! safe. Each test runs the lint on
 //! one fixture dir and asserts the finding that the fixed lint gives. The fixtures are only
 //! parsed, never built.
@@ -199,4 +200,77 @@ fn a4_a_gate_of_another_type_parameter_is_not_a_site() {
         "{out}"
     );
     assert_cycle(&out, &["parse_a"]);
+}
+
+/// Review round 2, A-B1, A-B2 and A-B4: a fn value field when the type with the `Fn` bound
+/// argument is inside another type (a slice, an `Option`, a `Box` self type, a type alias of a
+/// `Box`), in the inputs of a trait fn or of a free fn, and when `Fn` or the struct has a
+/// `use .. as` name.
+#[test]
+fn round_2_more_fn_bound_places_make_a_fn_value_field() {
+    for (case, at) in [
+        (
+            "b1_slice_input",
+            "lib.rs:5: Hook.f: the field holds a fn value",
+        ),
+        (
+            "b1_option_input",
+            "lib.rs:5: Hook.f: the field holds a fn value",
+        ),
+        (
+            "b1_box_impl",
+            "lib.rs:5: Hook.f: the field holds a fn value",
+        ),
+        (
+            "b1_alias_box_impl",
+            "lib.rs:5: Hook.f: the field holds a fn value",
+        ),
+        (
+            "b2_trait_default",
+            "lib.rs:5: Hook.f: the field holds a fn value",
+        ),
+        (
+            "b4_fn_input",
+            "lib.rs:5: Hook.f: the field holds a fn value",
+        ),
+        (
+            "b4_use_as_fn",
+            "lib.rs:7: Hook.f: the field holds a fn value",
+        ),
+        (
+            "b4_use_as_impl",
+            "lib.rs:6: Hook.f: the field holds a fn value",
+        ),
+    ] {
+        let (code, _, err) = oxc_sites(case);
+        assert_eq!(code, Some(2), "{case}");
+        assert!(err.contains(at), "{case}: {err}");
+    }
+}
+
+/// Review round 2, A-B3: a top-level `let` that binds the parser name again before the check
+/// leaves R with no known config, so the check is not a site.
+#[test]
+fn round_2_a_gate_after_a_new_let_of_the_parser_is_not_a_site() {
+    let (code, out, _) = oxc_sites("b3_rebound_parser");
+    assert_eq!(code, Some(1));
+    assert!(
+        has_line(
+            &out,
+            "oxc-sites: NOT A SITE FORM at lib.rs:8 in `parse_a`: ",
+            &["a type argument of the type of R"]
+        ),
+        "{out}"
+    );
+    assert_cycle(&out, &["parse_a"]);
+}
+
+/// Review round 2, A-B4: `self.t` of a known type `S` is the field `t` of `S` only, not the
+/// field `t` of another struct: the cycle has `Tab::index` and no `Plain::index`.
+#[test]
+fn round_2_a_field_of_a_known_type_is_its_own_field() {
+    let (code, out, _) = oxc_sites("b4_own_field");
+    assert_eq!(code, Some(1));
+    assert_cycle(&out, &["S::walk", "Tab::index", "back"]);
+    assert!(!out.contains("Plain::index"), "{out}");
 }

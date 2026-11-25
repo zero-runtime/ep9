@@ -5,7 +5,9 @@ compiled: `cargo xtask oxc-sites --src tools/xtask/tests/oxc_sites/<case>` only 
 
 Each case is a false PASS of the lint before the route: an unbounded recursion that the lint
 read as safe (review R2 lens B, B2-1..B2-5; the `a*` cases: the M13-P0 review round 1, A1-A5,
-a false PASS of the lint at b94675f8). The lint before the route gives exit 0 and
+a false PASS of the lint at b94675f8; the `b1_*`..`b3_*` cases: review round 2, A-B1..A-B3,
+a false PASS of the lint at eb6b89ab; the `b4_*` cases: round 2 A-B4, a test of a branch
+that no case had, red on a copy of the lint without that branch). The lint before the route gives exit 0 and
 `PASS` on each case; the test of each case asserts the finding of the fixed lint. Each case
 has the 2 loop fns of `LOOPS`, so that a missing loop is no finding. The fixed lint also
 reports each ALLOW entry as unused on each case (the entries are for the oxc_parser sources),
@@ -30,3 +32,13 @@ so a test asserts its own finding line, not only the exit code.
 | `a3_allow_count/` | A3: `parse_regex_pattern` has the allowed `LiteralParser::new(..).parse()` and one more `me.parse()` | exit 1, cycle `parse`, `parse_regex_pattern` |
 | `a4_other_param_gate/` | A4: the gate `D::CHECKS_RECURSION`, `D` a type parameter of the fn, not the `C` of `ParserImpl<C>` | exit 1, `NOT A SITE FORM at lib.rs:8`, cycle `parse_a` |
 | `a5_alias_impl/` | A5: `type HH<F> = Hook<F>; impl<F: Fn(u32) -> u32> HH<F>` | exit 2, `Hook.f: the field holds a fn value` |
+| `b1_slice_input/` | round 2 A-B1: `fn call<F: Fn(u32) -> u32>(hs: &[Hook<F>])` | exit 2, `Hook.f: the field holds a fn value` |
+| `b1_option_input/` | round 2 A-B1: `fn call<F: Fn(u32) -> u32>(h: Option<Hook<F>>)` | exit 2, `Hook.f: the field holds a fn value` |
+| `b1_box_impl/` | round 2 A-B1: `impl<F: Fn(u32) -> u32> Tr for Box<Hook<F>>` | exit 2, `Hook.f: the field holds a fn value` |
+| `b1_alias_box_impl/` | round 2 A-B1: `type HH<F> = Box<Hook<F>>; impl<F: Fn(u32) -> u32> Tr for HH<F>` | exit 2, `Hook.f: the field holds a fn value` |
+| `b2_trait_default/` | round 2 A-B2: a default trait fn `fn go<F: Fn(u32) -> u32>(&self, h: &Hook<F>)` | exit 2, `Hook.f: the field holds a fn value` |
+| `b3_rebound_parser/` | round 2 A-B3: `let p: &mut ParserImpl<NoTokensParserConfig> = ..;` before `if C::CHECKS_RECURSION && !p.config.may_recurse()` | exit 1, `NOT A SITE FORM at lib.rs:8`, cycle `parse_a` |
+| `b4_fn_input/` | round 2 A-B4 (a mark of the inputs of a free fn): `fn call<F: Fn(u32) -> u32>(h: &Hook<F>)` | exit 2, `Hook.f: the field holds a fn value` |
+| `b4_use_as_fn/` | round 2 A-B4 (`Fn` by a `use .. as` name): `use std::ops::Fn as Cb; struct Hook<F: Cb(u32) -> u32>` | exit 2, `Hook.f: the field holds a fn value` |
+| `b4_use_as_impl/` | round 2 A-B4 (an impl of a `use .. as` name): `use m::Hook as HH; impl<F: Fn(u32) -> u32> HH<F>` | exit 2, `Hook.f: the field holds a fn value` |
+| `b4_own_field/` | round 2 A-B4 (a field of a known type): `S { t: Tab }`, `Other { t: Plain }`; `S::walk` reads `self.t[0]`; both `index` fns reach `walk` | exit 1, cycle `S::walk`, `Tab::index`, `back`, no `Plain::index` |
