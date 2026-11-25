@@ -42,6 +42,10 @@
 //!   constant indices (an M5-P2 cache keyed by a hash of the code bytes could, on a
 //!   collision). It holds no Value (rule 8).
 //! - Not a GC point; it allocates nothing (fixed arrays).
+//! - CTOR-FIT probe (f-design L1; probe branch only): the switch `EP9_SLACK_ARM`
+//!   ([`slack_arm`]) adds the names of the constructor chain (`_super.call(this, x)` in ES5
+//!   class code) and keeps going past a leave of `this` ([`chain_capacity`]). Arm 0 (not set)
+//!   is today's count, bit for bit; the scan is a run-time read, so no bytecode changes.
 
 use ep9_bytecode::{Instructions, Opcode, OperandKind, Register, RuntimeId};
 
@@ -123,8 +127,30 @@ impl Holders {
 /// follow jumps, so a register that holds `this` on one path only counts as holding it (a
 /// count, never a correctness input). Not a GC point.
 pub(crate) fn this_store_names(code: &[u8], names: &mut [u32; MAX_NAMES]) -> Option<usize> {
+    scan_this_stores::<false>(code, names).map(|(n, _)| n)
+}
+
+/// The scan of [`this_store_names`] in two modes. `ESCAPE = false`: today's scan; a leave of
+/// `this` gives [`None`]. `ESCAPE = true` (CTOR-FIT probe, f-design L1 (1)): a leave of
+/// `this` sets `escaped` (the second value) and the scan goes on. In both modes more than
+/// [`MAX_NAMES`] names or a decode fault give [`None`]. Not a GC point.
+pub(crate) fn scan_this_stores<const ESCAPE: bool>(
+    code: &[u8],
+    names: &mut [u32; MAX_NAMES],
+) -> Option<(usize, bool)> {
     let mut h = Holders::default();
     let mut n = 0;
+    let mut escaped = false;
+    // A leave of `this`: today's scan stops; the escape mode marks it and goes on.
+    macro_rules! leave {
+        () => {
+            if ESCAPE {
+                escaped = true;
+            } else {
+                return None;
+            }
+        };
+    }
     for insn in Instructions::new(code) {
         let insn = insn.ok()?;
         let op = insn.opcode;
@@ -136,14 +162,14 @@ pub(crate) fn this_store_names(code: &[u8], names: &mut [u32; MAX_NAMES]) -> Opt
             }
             Opcode::Star => {
                 if !h.set(insn.register(0), h.acc) {
-                    return None;
+                    leave!();
                 }
                 continue;
             }
             Opcode::Mov => {
                 let on = h.holds(insn.register(0));
                 if !h.set(insn.register(1), on) {
-                    return None;
+                    leave!();
                 }
                 continue;
             }
@@ -151,7 +177,7 @@ pub(crate) fn this_store_names(code: &[u8], names: &mut [u32; MAX_NAMES]) -> Opt
             Opcode::SetNamedProperty | Opcode::DefineNamedOwnProperty => {
                 // Operands: object register, name constant, slot; the value in acc.
                 if h.acc {
-                    return None;
+                    leave!();
                 }
                 if h.holds(insn.register(0)) {
                     let k = insn.unsigned(1);
@@ -174,14 +200,14 @@ pub(crate) fn this_store_names(code: &[u8], names: &mut [u32; MAX_NAMES]) -> Opt
                 // The pair `GetNamedProperty` then `Star dst` (operand 3; STAR-DST probe).
                 h.acc = false;
                 if !h.set(insn.register(3), false) {
-                    return None;
+                    leave!();
                 }
                 continue;
             }
             _ => {}
         }
         if h.acc && info.acc.reads() {
-            return None;
+            leave!();
         }
         let count = insn.operand_count();
         let mut i = 0;
@@ -191,12 +217,12 @@ pub(crate) fn this_store_names(code: &[u8], names: &mut [u32; MAX_NAMES]) -> Opt
                 OperandKind::Reg | OperandKind::RegInOut => {
                     let r = insn.register(i);
                     if h.holds(r) {
-                        return None;
+                        leave!();
                     }
                 }
                 OperandKind::RegOut => {
                     if !h.set(insn.register(i), false) {
-                        return None;
+                        leave!();
                     }
                 }
                 OperandKind::RegList | OperandKind::RegOutList => {
@@ -205,10 +231,10 @@ pub(crate) fn this_store_names(code: &[u8], names: &mut [u32; MAX_NAMES]) -> Opt
                     for j in 0..len {
                         let r = Register::from_operand(first + j);
                         if k == OperandKind::RegList && h.holds(r) {
-                            return None;
+                            leave!();
                         }
                         if k == OperandKind::RegOutList && !h.set(r, false) {
-                            return None;
+                            leave!();
                         }
                     }
                     i += 1;
@@ -219,10 +245,10 @@ pub(crate) fn this_store_names(code: &[u8], names: &mut [u32; MAX_NAMES]) -> Opt
                     for j in 0..len {
                         let r = Register::from_operand(first + j);
                         if k == OperandKind::RegPair && h.holds(r) {
-                            return None;
+                            leave!();
                         }
                         if k != OperandKind::RegPair && !h.set(r, false) {
-                            return None;
+                            leave!();
                         }
                     }
                 }
@@ -230,7 +256,7 @@ pub(crate) fn this_store_names(code: &[u8], names: &mut [u32; MAX_NAMES]) -> Opt
                     if RuntimeId::from_u16(insn.operand(i) as u16)
                         == Some(RuntimeId::ResolvePossiblyDirectEval) =>
                 {
-                    return None;
+                    leave!();
                 }
                 _ => {}
             }
@@ -240,7 +266,7 @@ pub(crate) fn this_store_names(code: &[u8], names: &mut [u32; MAX_NAMES]) -> Opt
             h.acc = false;
         }
     }
-    Some(n)
+    Some((n, escaped))
 }
 
 /// The value of the own data property at field `field` of the fast-mode object `o` with
@@ -280,7 +306,8 @@ pub(crate) fn instance_capacity(rt: &Runtime, f: u64, proto: u64) -> Option<usiz
         c => return Some(usize::from(c - 1)),
     }
     let r = first_capacity(rt, fi, proto);
-    // The capacity is at most MAX_NAMES + GENEROUS (72), so capacity + 1 fits below NO_COUNT.
+    // The capacity is at most MAX_NAMES + GENEROUS (72), or CHAIN_CAP_MAX (253) in a CTOR-FIT
+    // arm, so capacity + 1 fits below NO_COUNT.
     fi.slack_capacity.set(match r {
         Some(c) => u8::try_from(c + 1)
             .ok()
@@ -292,7 +319,8 @@ pub(crate) fn instance_capacity(rt: &Runtime, f: u64, proto: u64) -> Option<usiz
 }
 
 /// [`instance_capacity`] at the first construct of `fi`: the scan and the prototype count.
-/// Not a GC point.
+/// In a CTOR-FIT arm ([`slack_arm`] not 0), the chain count of [`chain_capacity`] when it is
+/// above [`GENEROUS`]; else today's count. Not a GC point.
 fn first_capacity(
     rt: &Runtime,
     fi: &crate::function_info::FunctionInfo,
@@ -303,6 +331,23 @@ fn first_capacity(
     // SAFETY: a bytecode FunctionInfo's code is its unit function's bytecode, which the unit
     // keeps at this address while the info lives (`FunctionInfo::bytecode`).
     let code = unsafe { core::slice::from_raw_parts(fi.code, fi.code_len as usize) };
+    if let Some(slack) = escape_slack(slack_arm())
+        && let Some(n) = chain_capacity(rt, fi, code, proto, slack)
+        && n > usize::from(GENEROUS)
+    {
+        return Some(n);
+    }
+    own_capacity(rt, fi, code, proto)
+}
+
+/// Today's count (arm 0): the scan of `code` (the code of `fi`) and the prototype count.
+/// Not a GC point.
+fn own_capacity(
+    rt: &Runtime,
+    fi: &crate::function_info::FunctionInfo,
+    code: &[u8],
+    proto: u64,
+) -> Option<usize> {
     let mut names = [0u32; MAX_NAMES];
     let n = this_store_names(code, &mut names)?;
     if n == 0 {
@@ -331,4 +376,200 @@ fn first_capacity(
         }
     }
     Some((n + extra.min(usize::from(GENEROUS))).min(obj::MAX_INOBJECT))
+}
+
+// ---- CTOR-FIT probe (f-design L1; probe branch only, the merge removes the switch) --------
+
+/// The most prototype objects [`chain_capacity`] reads (f-design L1 (2): 8 levels).
+pub(crate) const CHAIN_LEVELS: u32 = 8;
+
+/// The largest capacity [`chain_capacity`] gives: capacity + 1 must stay below [`NO_COUNT`]
+/// in the FunctionInfo byte.
+pub(crate) const CHAIN_CAP_MAX: usize = NO_COUNT as usize - 2;
+
+/// The CTOR-FIT probe arm: `EP9_SLACK_ARM`, read once per process ([`slack_arm_from`]).
+/// Probe branch only; the merge removes it.
+///
+/// | `EP9_SLACK_ARM` | arm | capacity of `new F` |
+/// |---|---|---|
+/// | not set, `0`, any other value | 0 | today's count ([`own_capacity`]), bit for bit |
+/// | `1` | CTOR-FIT, ESCAPE_SLACK 1 | the chain count when it is above [`GENEROUS`], else today's |
+/// | `2` | CTOR-FIT, ESCAPE_SLACK 0 | the same |
+/// | `3` | CTOR-FIT, ESCAPE_SLACK 2 | the same |
+///
+/// It reads the environment, not an execution policy (no preset, no feedback mode: rule 40,
+/// M-R9). Tests set a per-thread arm with [`slack_arm_override`].
+pub(crate) fn slack_arm() -> u8 {
+    #[cfg(test)]
+    if let Some(arm) = slack_arm_override::ARM.get() {
+        return arm;
+    }
+    if cfg!(miri) {
+        return 0;
+    }
+    static ARM: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *ARM.get_or_init(|| slack_arm_from(std::env::var("EP9_SLACK_ARM").ok().as_deref()))
+}
+
+/// The arm of an `EP9_SLACK_ARM` value ([`slack_arm`]): `"1"`, `"2"`, `"3"` are arms 1-3;
+/// every other value (not set, `"0"`, empty, `" 1"`, ...) is arm 0.
+pub(crate) fn slack_arm_from(var: Option<&str>) -> u8 {
+    match var {
+        Some("1") => 1,
+        Some("2") => 2,
+        Some("3") => 3,
+        _ => 0,
+    }
+}
+
+/// The ESCAPE_SLACK of an arm ([`slack_arm`]), or [`None`] for arm 0 (no chain count).
+pub(crate) const fn escape_slack(arm: u8) -> Option<usize> {
+    match arm {
+        1 => Some(1),
+        2 => Some(0),
+        3 => Some(2),
+        _ => None,
+    }
+}
+
+/// The distinct names (key bits) of a constructor chain ([`chain_names`]).
+pub(crate) struct ChainNames {
+    keys: [u64; CHAIN_CAP_MAX],
+    n: usize,
+    /// A scan saw `this` leave the frame (a call such as `_super.call(this, x)`).
+    pub escaped: bool,
+    /// The prototype objects read.
+    pub levels: u32,
+}
+
+impl ChainNames {
+    /// The names, in the order the scans found them.
+    pub(crate) fn keys(&self) -> &[u64] {
+        &self.keys[..self.n]
+    }
+
+    /// Adds the names of the scan result `names` of `fi` that are new. False if there is no
+    /// room.
+    fn add(&mut self, fi: &crate::function_info::FunctionInfo, names: &[u32]) -> bool {
+        for &k in names {
+            // Unit strings are atoms (one atom per text, H19), so equal names have equal bits.
+            let key = fi.constant(k);
+            if self.keys().contains(&key) {
+                continue;
+            }
+            if self.n == CHAIN_CAP_MAX {
+                return false;
+            }
+            self.keys[self.n] = key;
+            self.n += 1;
+        }
+        true
+    }
+}
+
+/// The names of `fi`'s `this.<name> =` stores and of its constructor chain (f-design L1
+/// (1), (2)), or [`None`] when a scan cannot give them (more than [`MAX_NAMES`] names in one
+/// code, a decode fault, more than [`CHAIN_CAP_MAX`] names in all).
+///
+/// ```text
+///  fi's code ──scan (escape mode)──> names
+///  cur = proto                                   (F.prototype at the first construct)
+///  while levels < 8 and cur is an object:
+///    stop at a dictionary-mode cur
+///    c = own data property `constructor` of cur  stop if none or an accessor
+///    stop unless c is a bytecode constructor that is not DERIVED (a host function stops)
+///    names += scan (escape mode) of c's code     (distinct key bits; fi itself once)
+///    cur = [[Prototype]] of cur
+/// ```
+///
+/// Escape mode: a leave of `this` (`_super.call(this, x)`) sets `escaped`; the scan goes on.
+/// Not a GC point; it allocates nothing and runs no JS (own data properties only).
+pub(crate) fn chain_names(
+    rt: &Runtime,
+    fi: &crate::function_info::FunctionInfo,
+    code: &[u8],
+    proto: u64,
+) -> Option<ChainNames> {
+    let mut ch = ChainNames {
+        keys: [0; CHAIN_CAP_MAX],
+        n: 0,
+        escaped: false,
+        levels: 0,
+    };
+    let mut names = [0u32; MAX_NAMES];
+    let (n, esc) = scan_this_stores::<true>(code, &mut names)?;
+    ch.escaped |= esc;
+    if !ch.add(fi, &names[..n]) {
+        return None;
+    }
+    let ctor_key = rt.atom(crate::runtime::Atom::Constructor);
+    let mut cur = proto;
+    while ch.levels < CHAIN_LEVELS && kind::is_object(cur) {
+        let s = shape::shape_of(cur);
+        if shape::is_dictionary(s) {
+            break;
+        }
+        let Some((c, attrs)) = crate::props::own_get(cur, ctor_key) else {
+            break;
+        };
+        if attrs & object::attr::ACCESSOR != 0 || !object::is_function(c) {
+            break;
+        }
+        let cfi = object::function_info(c);
+        let need = fi_flags::BYTECODE | fi_flags::CONSTRUCTOR;
+        if cfi.flags & need != need || cfi.flags & fi_flags::DERIVED != 0 || cfi.code.is_null() {
+            break;
+        }
+        ch.levels += 1;
+        if !core::ptr::eq(cfi, fi) {
+            // SAFETY: as in `first_capacity`.
+            let ccode = unsafe { core::slice::from_raw_parts(cfi.code, cfi.code_len as usize) };
+            let (n, esc) = scan_this_stores::<true>(ccode, &mut names)?;
+            ch.escaped |= esc;
+            if !ch.add(cfi, &names[..n]) {
+                return None;
+            }
+        }
+        cur = shape::proto(s);
+    }
+    Some(ch)
+}
+
+/// The CTOR-FIT count of `new F` (f-design L1 (3)): `n_chain` = the chain names
+/// ([`chain_names`]) + the prototype-field extra (today's rule: the non-callable data
+/// properties of `proto` that the chain does not store, at most [`GENEROUS`]) + `slack` when
+/// a scan saw `this` leave the frame; at most [`CHAIN_CAP_MAX`]. [`None`] when the chain
+/// names are unknown. The caller uses it only when it is above [`GENEROUS`] (so no object
+/// gets less in-object room than today). Not a GC point.
+pub(crate) fn chain_capacity(
+    rt: &Runtime,
+    fi: &crate::function_info::FunctionInfo,
+    code: &[u8],
+    proto: u64,
+    slack: usize,
+) -> Option<usize> {
+    let ch = chain_names(rt, fi, code, proto)?;
+    let mut extra = 0;
+    if kind::is_object(proto) {
+        let ps = shape::shape_of(proto);
+        if !shape::is_dictionary(ps) {
+            extra = (0..shape::count(ps))
+                .filter(|&i| {
+                    is_proto_field(proto, ps, i) && !ch.keys().contains(&shape::key_at(ps, i))
+                })
+                .count();
+        }
+    }
+    let slack = if ch.escaped { slack } else { 0 };
+    Some((ch.keys().len() + extra.min(usize::from(GENEROUS)) + slack).min(CHAIN_CAP_MAX))
+}
+
+/// Tests only: the arm of [`slack_arm`] for this thread, over the process value.
+#[cfg(test)]
+pub(crate) mod slack_arm_override {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        pub(crate) static ARM: Cell<Option<u8>> = const { Cell::new(None) };
+    }
 }

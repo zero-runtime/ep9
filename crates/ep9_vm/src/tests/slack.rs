@@ -7,7 +7,10 @@
 use ep9_bytecode::{FeedbackSlotKind, FunctionBuilder, FunctionCode, FunctionId, VerifiedUnit};
 
 use super::{Asm, config, isolate, meta, on_big_stack, take_output, unit};
+use crate::frame::UNDEFINED;
 use crate::kinds;
+use crate::object::{self, cell, obj, rd};
+use crate::runtime::{Atom, Root};
 use crate::shape;
 use crate::slack::{self, GENEROUS, MAX_NAMES};
 use crate::{Dispatch, Isolate, IsolateConfig};
@@ -149,11 +152,23 @@ struct Seen {
     last: (usize, usize),
     /// `o0` and `o` have one shape.
     same_shape: bool,
+    /// `o0` and `o` have a SLOTS cell (out-of-line fields).
+    slots: (bool, bool),
 }
 
 /// Runs `make()` in every dispatch expansion, with and without GC stress, with eager
-/// vectors and with none; checks the output and returns what each run saw.
+/// vectors and with none; checks the output and returns what each run saw. The CTOR-FIT
+/// probe arm is 0 (today's count; `slack::slack_arm`).
 fn run_each(make: fn() -> VerifiedUnit, want: &'static [&'static str]) -> Vec<(String, Seen)> {
+    run_each_arm(0, make, want)
+}
+
+/// [`run_each`] with the CTOR-FIT probe arm `arm` (`EP9_SLACK_ARM`) on each run thread.
+fn run_each_arm(
+    arm: u8,
+    make: fn() -> VerifiedUnit,
+    want: &'static [&'static str],
+) -> Vec<(String, Seen)> {
     let mut seen = Vec::new();
     for &d in Dispatch::ALL {
         for stress in [false, true] {
@@ -165,6 +180,7 @@ fn run_each(make: fn() -> VerifiedUnit, want: &'static [&'static str]) -> Vec<(S
                 let label = format!("{} stress={stress} threshold={threshold}", d.name());
                 let l = label.clone();
                 let s = on_big_stack(move || {
+                    slack::slack_arm_override::ARM.set(Some(arm));
                     let mut iso = isolate(c);
                     take_output();
                     let r =
@@ -191,14 +207,16 @@ fn observe(iso: &Isolate) -> Seen {
         let o = iso.global_raw(name).unwrap().to_bits();
         assert!(kinds::is_object(o), "{name} is an object");
         let s = shape::shape_of(o);
-        (s, (shape::field_layout(s).0, shape::count(s)))
+        let slots = rd(cell(o), obj::SLOTS) != UNDEFINED;
+        (s, (shape::field_layout(s).0, shape::count(s)), slots)
     };
-    let (s0, first) = read("o0");
-    let (s1, last) = read("o");
+    let (s0, first, slots0) = read("o0");
+    let (s1, last, slots1) = read("o");
     Seen {
         first,
         last,
         same_shape: s0 == s1,
+        slots: (slots0, slots1),
     }
 }
 
@@ -592,5 +610,392 @@ fn a_fused_named_load_scans_as_its_pair() {
             [Some(vec![2]), Some(vec![2]), Some(vec![1]), Some(vec![])],
             "fused {fused}"
         );
+    }
+}
+
+// ---- CTOR-FIT probe (f-design L1; `EP9_SLACK_ARM`, probe branch only) -----------------------
+
+#[test]
+fn the_slack_arm_parse() {
+    assert_eq!(slack::slack_arm_from(None), 0);
+    for (v, arm) in [("0", 0), ("1", 1), ("2", 2), ("3", 3)] {
+        assert_eq!(slack::slack_arm_from(Some(v)), arm, "{v}");
+    }
+    // Every other value is arm 0 (today's count).
+    for v in ["", "4", " 1", "1 ", "01", "on", "true", "-1"] {
+        assert_eq!(slack::slack_arm_from(Some(v)), 0, "{v:?}");
+    }
+    // Arm 1 = ESCAPE_SLACK 1, arm 2 = 0, arm 3 = 2; arm 0 reads no chain.
+    assert_eq!(slack::escape_slack(0), None);
+    assert_eq!(slack::escape_slack(1), Some(1));
+    assert_eq!(slack::escape_slack(2), Some(0));
+    assert_eq!(slack::escape_slack(3), Some(2));
+    assert_eq!(slack::escape_slack(4), None);
+    // The per-thread arm of the tests wins over the process value.
+    on_big_stack(|| {
+        for arm in 0..=3 {
+            slack::slack_arm_override::ARM.set(Some(arm));
+            assert_eq!(slack::slack_arm(), arm);
+        }
+    });
+}
+
+/// The escape-mode scan of `code`: (names, escaped).
+fn scan_escape(code: &FunctionCode) -> Option<(Vec<u32>, bool)> {
+    let mut names = [0u32; MAX_NAMES];
+    slack::scan_this_stores::<true>(code.bytecode(), &mut names)
+        .map(|(n, e)| (names[..n].to_vec(), e))
+}
+
+/// `_super.call(this, a, ..)` (the ES5 class form that TypeScript emits) with `extra` more
+/// arguments past `a`: `CallProperty2` (a `Reg` operand holds `this`) for 0, `CallProperty`
+/// (a register list holds `this`) for 1 or more.
+fn super_call(a: &mut Asm, extra: u32) {
+    let this = a.b.receiver();
+    let (sup, f) = (a.b.new_register(), a.b.new_register());
+    a.lda_global("_super");
+    a.b.star(sup);
+    a.get_named(sup, "call");
+    a.b.star(f);
+    if extra == 0 {
+        a.b.call_property2(f, sup, this, a.b.parameter(0), a.call);
+    } else {
+        let args = a.b.new_register_list(3 + extra);
+        a.b.mov(sup, args.get(0));
+        a.b.mov(this, args.get(1));
+        for i in 0..=extra {
+            a.b.ldar(a.b.parameter(0)).star(args.get(2 + i));
+        }
+        a.b.call_property(f, args, 3 + extra, a.call);
+    }
+}
+
+/// `this.<name> = a` for each name.
+fn stores(a: &mut Asm, names: &[&str]) {
+    let this = a.b.receiver();
+    for n in names {
+        a.b.ldar(a.b.parameter(0));
+        a.set_named(this, n);
+    }
+}
+
+#[test]
+fn the_escape_mode_goes_on_past_a_leave_of_this() {
+    for extra in [0, 1, 2] {
+        // `_super.call(this, a, ..); this.x = a; this.y = a`.
+        let d = ctor("D", |a| {
+            super_call(a, extra);
+            stores(a, &["x", "y"]);
+        });
+        // Today's scan: no count. The escape mode: both names, `escaped`.
+        assert_eq!(scan(&d), None, "extra {extra}");
+        let (names, escaped) = scan_escape(&d).unwrap();
+        assert_eq!(names.len(), 2, "extra {extra}");
+        assert!(escaped, "extra {extra}");
+    }
+    // `this.self = this; this.x = a`: the stored value is `this`.
+    let self_store = ctor("E", |a| {
+        let this = a.b.receiver();
+        a.b.ldar(this);
+        a.set_named(this, "self");
+        stores(a, &["x"]);
+    });
+    assert_eq!(scan(&self_store), None);
+    assert_eq!(scan_escape(&self_store).unwrap().0.len(), 2);
+    // No leave: the escape mode gives today's names and no `escaped`.
+    let p = ctor("P", point);
+    assert_eq!(scan_escape(&p), Some((scan_names(&p).unwrap(), false)));
+}
+
+/// The functions of the chain tests: f1 `D` (`_super.call(this, a); this.d0 = a; this.d1 =
+/// a`), f2 `B` (`this.b0 = a .. this.b6 = a`), f3 `E` (no store), f4 `K` (a DERIVED class
+/// constructor), each a global; `_super = B`.
+fn chain_functions() -> VerifiedUnit {
+    let d = ctor("D", |a| {
+        super_call(a, 0);
+        stores(a, &["d0", "d1"]);
+    });
+    let b = ctor("B", |a| {
+        stores(a, &["b0", "b1", "b2", "b3", "b4", "b5", "b6"])
+    });
+    let e = ctor("E", |_| {});
+    let mut m = meta("K", 0, 0, 0, 0);
+    m.kind = ep9_bytecode::FunctionKind::DerivedConstructor;
+    m.flags = ep9_bytecode::FunctionFlags::STRICT | ep9_bytecode::FunctionFlags::SIMPLE_PARAMETERS;
+    let mut k = Asm::new(m);
+    k.b.lda_undefined().return_();
+    let k = k.finish();
+    let mut s = Asm::script(0);
+    for (i, g) in [(1, "D"), (2, "B"), (3, "E"), (4, "K")] {
+        let c = s.b.function_constant(FunctionId(i));
+        s.b.create_closure(c, s.closure, 0);
+        s.sta_global(g);
+    }
+    s.lda_global("B");
+    s.sta_global("_super");
+    s.b.lda_undefined().return_();
+    unit("", vec![s.finish(), d, b, e, k])
+}
+
+/// How a prototype object of a chain test is made.
+#[derive(Clone, Copy)]
+enum Level {
+    /// Own data property `constructor` = the global function of this name.
+    Ctor(&'static str),
+    /// `constructor` = the global function, then the object goes to dictionary mode.
+    Dictionary(&'static str),
+    /// `constructor` is an accessor (its getter: the global function).
+    Accessor(&'static str),
+    /// No own `constructor`.
+    Bare,
+}
+
+/// Makes the prototype chain `levels` (the first is `F.prototype`, the last has
+/// %Object.prototype% as its prototype) and returns the chain count of `D` on it:
+/// (names, escaped, levels read, capacity at ESCAPE_SLACK 0 / 1 / 2).
+fn chain_of(levels: &'static [Level]) -> (usize, bool, u32, [usize; 3]) {
+    on_big_stack(move || {
+        let mut iso = isolate(config(Dispatch::ALL[0], false));
+        iso.run_raw(chain_functions(), "chain.js").unwrap();
+        let rt = &*iso.rt;
+        let global = |n: &str| iso.global_raw(n).unwrap().to_bits();
+        let ctor_key = rt.atom(Atom::Constructor);
+        let mut proto = rt.root(Root::ObjectPrototype);
+        for l in levels.iter().rev() {
+            let p = object::new_object(rt, proto);
+            match *l {
+                Level::Ctor(f) => {
+                    object::own_define(rt, p, ctor_key, global(f), object::attr::HIDDEN)
+                }
+                Level::Dictionary(f) => {
+                    object::own_define(rt, p, ctor_key, global(f), object::attr::HIDDEN);
+                    crate::props::to_dictionary(rt, p);
+                    assert!(shape::is_dictionary(shape::shape_of(p)));
+                }
+                Level::Accessor(f) => {
+                    let pair = crate::accessor::new_pair(rt, global(f), UNDEFINED);
+                    let at = object::attr::ACCESSOR | object::attr::CONFIGURABLE;
+                    object::own_define(rt, p, ctor_key, pair, at);
+                }
+                Level::Bare => {}
+            }
+            proto = p;
+        }
+        let fi = object::function_info(global("D"));
+        // SAFETY: `D` is a bytecode function: its code lives while the isolate does.
+        let code = unsafe { core::slice::from_raw_parts(fi.code, fi.code_len as usize) };
+        let ch = slack::chain_names(rt, fi, code, proto).unwrap();
+        let cap = [0, 1, 2].map(|k| slack::chain_capacity(rt, fi, code, proto, k).unwrap());
+        (ch.keys().len(), ch.escaped, ch.levels, cap)
+    })
+}
+
+#[test]
+fn the_chain_adds_the_names_of_each_constructor_level() {
+    use Level::*;
+    // D.prototype -> B.prototype -> %Object.prototype% (constructor Object: a host function).
+    let (n, escaped, levels, cap) = chain_of(&[Ctor("D"), Ctor("B")]);
+    assert_eq!((n, escaped, levels), (9, true, 2));
+    // d0, d1, b0..b6 = 9; + ESCAPE_SLACK when `this` left the frame.
+    assert_eq!(cap, [9, 10, 11]);
+    // A level whose constructor has no store adds no name and the walk goes on.
+    assert_eq!(chain_of(&[Ctor("D"), Ctor("E"), Ctor("B")]).0, 9);
+    // D.prototype with no own `constructor`: only D's own names.
+    assert_eq!(chain_of(&[Bare, Ctor("B")]).0, 2);
+}
+
+#[test]
+fn the_chain_stops_at_each_stop_rule() {
+    use Level::*;
+    // A host function (`print`) as `constructor`: B is not read.
+    let (n, _, levels, _) = chain_of(&[Ctor("D"), Ctor("print"), Ctor("B")]);
+    assert_eq!((n, levels), (2, 1));
+    // A dictionary-mode prototype: its constructor B is not read.
+    let (n, _, levels, _) = chain_of(&[Ctor("D"), Dictionary("B")]);
+    assert_eq!((n, levels), (2, 1));
+    // An accessor `constructor` (its getter is not called).
+    let (n, _, levels, _) = chain_of(&[Ctor("D"), Accessor("B")]);
+    assert_eq!((n, levels), (2, 1));
+    // A DERIVED class constructor: no count (its `this` comes from the super call).
+    let (n, _, levels, _) = chain_of(&[Ctor("D"), Ctor("K"), Ctor("B")]);
+    assert_eq!((n, levels), (2, 1));
+}
+
+#[test]
+fn the_chain_reads_at_most_8_levels() {
+    use Level::*;
+    // B at level 8: read.
+    let (n, _, levels, _) = chain_of(&[
+        Ctor("D"),
+        Ctor("E"),
+        Ctor("E"),
+        Ctor("E"),
+        Ctor("E"),
+        Ctor("E"),
+        Ctor("E"),
+        Ctor("B"),
+    ]);
+    assert_eq!((n, levels), (9, 8));
+    // B at level 9: not read.
+    let (n, _, levels, _) = chain_of(&[
+        Ctor("D"),
+        Ctor("E"),
+        Ctor("E"),
+        Ctor("E"),
+        Ctor("E"),
+        Ctor("E"),
+        Ctor("E"),
+        Ctor("E"),
+        Ctor("B"),
+    ]);
+    assert_eq!((n, levels), (2, 8));
+    assert_eq!(slack::CHAIN_LEVELS, 8);
+}
+
+/// An ES5 class chain as TypeScript emits it, with `base` names in the base constructor `B`
+/// and `own` names in `D` (`_super.call(this, a); this.d<i> = a`). The VM tests have no
+/// built-ins, so `B.call` is a bytecode function `callB(t, a)` that calls B with receiver `t`,
+/// and `__extends` is the TypeScript form `__.prototype = B.prototype; D.prototype = new __()`
+/// with `function __() { this.constructor = D; }`. Then 10 times `o = new D(1, 2)` (`o0` =
+/// the first), and `print(o.d0)`.
+fn es5_chain(base: &'static [&'static str], own: &'static [&'static str]) -> VerifiedUnit {
+    let d = ctor("D", |a| {
+        super_call(a, 0);
+        stores(a, own);
+    });
+    let b = ctor("B", |a| stores(a, base));
+    // `callB(t, a)`: B with receiver `t` and argument `a`.
+    let call_b = ctor("callB", |a| {
+        let bf = a.b.new_register();
+        a.lda_global("B");
+        a.b.star(bf);
+        a.b.call_property1(bf, a.b.parameter(0), a.b.parameter(1), a.call);
+    });
+    // `function __() { this.constructor = D; }`.
+    let ext = ctor("__", |a| {
+        let this = a.b.receiver();
+        a.lda_global("D");
+        a.set_named(this, "constructor");
+    });
+    let mut s = Asm::script(0);
+    for (i, g) in [(1, "D"), (2, "B"), (3, "callB"), (4, "__")] {
+        let c = s.b.function_constant(FunctionId(i));
+        s.b.create_closure(c, s.closure, 0);
+        s.sta_global(g);
+    }
+    let (rd, rb, rx, rp, none) = (
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register_list(0),
+    );
+    // `_super = B; B.call = callB`.
+    s.lda_global("B");
+    s.sta_global("_super");
+    s.b.star(rb);
+    s.lda_global("callB");
+    s.set_named(rb, "call");
+    // `__.prototype = B.prototype; D.prototype = new __()`.
+    s.lda_global("__");
+    s.b.star(rx);
+    s.get_named(rb, "prototype");
+    s.set_named(rx, "prototype");
+    s.b.construct(rx, none, 0, s.call).star(rp);
+    s.lda_global("D");
+    s.b.star(rd);
+    s.b.ldar(rp);
+    s.set_named(rd, "prototype");
+    let site = s.b.feedback_slot(FeedbackSlotKind::Call);
+    let args = s.b.new_register_list(2);
+    let (i, o) = (s.b.new_register(), s.b.new_register());
+    s.b.lda_zero().star(i);
+    let head = s.b.bound_label();
+    let exit = s.b.new_label();
+    s.b.lda_smi(10).test_less_than(i, s.cmp).jump_if_false(exit);
+    s.b.lda_smi(1)
+        .star(args.get(0))
+        .lda_smi(2)
+        .star(args.get(1));
+    s.lda_global("D");
+    s.b.star(rd);
+    s.b.construct(rd, args, 2, site).star(o);
+    s.sta_global("o");
+    let skip = s.b.new_label();
+    s.b.lda_zero()
+        .test_equal_strict(i, s.cmp)
+        .jump_if_false(skip);
+    s.b.ldar(o);
+    s.sta_global("o0");
+    s.b.bind(skip);
+    s.b.ldar(i).inc(s.bin).star(i).jump_loop(head, 0, s.loop_);
+    s.b.bind(exit);
+    s.get_named(o, "d0");
+    s.print_acc();
+    s.b.lda_undefined().return_();
+    unit("", vec![s.finish(), d, b, call_b, ext])
+}
+
+/// 7 base names + 3 own names: n_chain = 10 (above GENEROUS).
+fn es5_chain_10() -> VerifiedUnit {
+    es5_chain(
+        &["b0", "b1", "b2", "b3", "b4", "b5", "b6"],
+        &["d0", "d1", "d2"],
+    )
+}
+
+/// 3 base names + 2 own names: n_chain = 5 (+ slack; at most GENEROUS).
+fn es5_chain_5() -> VerifiedUnit {
+    es5_chain(&["b0", "b1", "b2"], &["d0", "d1"])
+}
+
+#[test]
+fn an_es5_class_chain_gets_its_chain_count_in_object() {
+    // Arm 0 (today): `this` leaves in the super call, so no count: GENEROUS slots, and
+    // fields 9 and 10 in a SLOTS cell.
+    for (label, s) in run_each_arm(0, es5_chain_10, &["1"]) {
+        assert_eq!(s.first, (usize::from(GENEROUS), 10), "arm 0 {label}");
+        assert_eq!(s.last, (usize::from(GENEROUS), 10), "arm 0 {label}");
+        assert_eq!(s.slots, (true, true), "arm 0 {label}");
+        assert!(s.same_shape, "arm 0 {label}");
+    }
+    // Arms 1, 2, 3 (ESCAPE_SLACK 1, 0, 2): n_chain = 10 + slack in-object slots and no
+    // SLOTS cell, for the first instance too; one shape family.
+    for (arm, cap) in [(1, 11), (2, 10), (3, 12)] {
+        for (label, s) in run_each_arm(arm, es5_chain_10, &["1"]) {
+            assert_eq!(s.first, (cap, 10), "arm {arm} {label}");
+            assert_eq!(s.last, (cap, 10), "arm {arm} {label}");
+            assert_eq!(s.slots, (false, false), "arm {arm} {label}");
+            assert!(s.same_shape, "arm {arm} {label}");
+        }
+    }
+}
+
+#[test]
+fn a_chain_count_of_8_or_less_keeps_todays_answer() {
+    // n_chain = 5 + ESCAPE_SLACK <= GENEROUS: every arm gives today's answer (no count for
+    // an escaping `this`: GENEROUS).
+    let today = run_each_arm(0, es5_chain_5, &["1"]);
+    for (label, s) in &today {
+        assert_eq!(s.last, (usize::from(GENEROUS), 5), "{label}");
+        assert_eq!(s.slots, (false, false), "{label}");
+    }
+    for arm in [1, 2, 3] {
+        let seen = run_each_arm(arm, es5_chain_5, &["1"]);
+        for ((label, s), (_, t)) in seen.iter().zip(&today) {
+            assert_eq!((s.first, s.last), (t.first, t.last), "arm {arm} {label}");
+            assert_eq!(s.slots, t.slots, "arm {arm} {label}");
+        }
+    }
+}
+
+#[test]
+fn every_arm_keeps_the_count_of_a_constructor_with_no_chain() {
+    // A plain constructor (no chain level adds a name, n_chain = 2): every arm gives
+    // today's 2 slots.
+    for arm in 0..=3 {
+        for (label, s) in run_each_arm(arm, plain_point, &["3"]) {
+            assert_eq!(s.last, (2, 2), "arm {arm} {label}");
+        }
     }
 }
