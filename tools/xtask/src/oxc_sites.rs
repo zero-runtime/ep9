@@ -51,6 +51,10 @@
 //! stands for (a `use X as T` rename or a `type T = X` alias of the sources, to the end of a
 //! chain), and each name that stands for T. So `R::go` with `use Tr as R` is `Tr::go`, and a
 //! parameter `p: &mut P<C>` with `type P<C> = ParserImpl<C>` has the type `ParserImpl`.
+//! A field type or a return type that two items of one name give two types (two structs `Ctx`
+//! in two modules, each with a field `inner`) is not known (review R2 B2-5): one type for both
+//! would narrow the edges of one of them to the fns of the other. Each narrowing rule has a
+//! unit test whose cycle runs only through the narrowed edge (`each_narrowing_rule_keeps_its_cycle`).
 //!
 //! What the graph cannot see, and what the task does instead:
 //!
@@ -880,13 +884,30 @@ fn holds_fn_value(t: &Type, aliases: &BTreeSet<String>) -> bool {
     }
 }
 
+/// Adds a known type (or `None`, not known) for `key`: a second type that is not the first
+/// makes it not known (review R2 B2-5: one name for two structs or two fns).
+fn merge(map: &mut BTreeMap<String, Option<String>>, key: String, t: Option<String>) {
+    match map.entry(key) {
+        std::collections::btree_map::Entry::Vacant(v) => {
+            v.insert(t);
+        }
+        std::collections::btree_map::Entry::Occupied(mut o) => {
+            if *o.get() != t {
+                o.insert(None);
+            }
+        }
+    }
+}
+
 /// Pass 1: what the sources say about types.
 #[derive(Default)]
 struct Types {
     /// The file that is visited now.
     file: String,
     /// struct name -> field name -> field type name (not for a field of a generic type).
-    fields: BTreeMap<String, BTreeMap<String, String>>,
+    /// `None`: not known (a field of a generic type, or two structs of the name whose fields of
+    /// the name have other types: review R2 B2-5).
+    fields: BTreeMap<String, BTreeMap<String, Option<String>>>,
     /// The self type names of every impl.
     impls: BTreeSet<String>,
     /// The traits that the sources define.
@@ -900,7 +921,8 @@ struct Types {
     /// The fns of the impls of traits of other crates (filled by `check_fields`).
     implicit: Vec<String>,
     /// fn or associated const key -> its type name (`Self` is the impl type).
-    rets: BTreeMap<String, String>,
+    /// `None`: not known (two fns of the key with other return types, as for `fields`).
+    rets: BTreeMap<String, Option<String>>,
     /// Type aliases (name -> type) and the struct and enum fields (place, type, the type
     /// parameters of the struct or enum with an `Fn` bound), for the check.
     aliases: Vec<(String, Type)>,
@@ -971,10 +993,9 @@ impl<'ast> Visit<'ast> for Types {
         self.fields_of(&s.ident.to_string(), &s.generics, &s.fields);
         let e = self.fields.entry(s.ident.to_string()).or_default();
         for f in &s.fields {
-            if let (Some(id), Some(t)) = (&f.ident, type_name(&f.ty))
-                && !generics.contains(&t)
-            {
-                e.insert(id.to_string(), t);
+            if let Some(id) = &f.ident {
+                let t = type_name(&f.ty).filter(|t| !generics.contains(t));
+                merge(e, id.to_string(), t);
             }
         }
         visit::visit_item_struct(self, s);
@@ -1052,8 +1073,12 @@ impl<'ast> Visit<'ast> for Types {
     }
 
     fn visit_impl_item_const(&mut self, c: &'ast syn::ImplItemConst) {
-        if let (Some(Some(t)), Some(r)) = (self.impl_self.last(), type_name(&c.ty)) {
-            self.rets.insert(format!("{t}::{}", c.ident), r);
+        if let Some(Some(t)) = self.impl_self.last() {
+            merge(
+                &mut self.rets,
+                format!("{t}::{}", c.ident),
+                type_name(&c.ty),
+            );
         }
     }
 
@@ -1062,13 +1087,14 @@ impl<'ast> Visit<'ast> for Types {
             self.generics.last().is_some_and(|g| g.contains(r))
                 || f.sig.generics.type_params().any(|p| p.ident == r)
         };
-        if let (Some(Some(t)), syn::ReturnType::Type(_, ty)) =
-            (self.impl_self.last(), &f.sig.output)
-            && let Some(r) = type_name(ty)
-            && !generic(&r)
-        {
-            let r = if r == "Self" { t.clone() } else { r };
-            self.rets.insert(format!("{t}::{}", f.sig.ident), r);
+        if let Some(Some(t)) = self.impl_self.last() {
+            let r = match &f.sig.output {
+                syn::ReturnType::Type(_, ty) => type_name(ty).filter(|r| !generic(r)),
+                syn::ReturnType::Default => None,
+            };
+            let r = r.map(|r| if r == "Self" { t.clone() } else { r });
+            let key = format!("{t}::{}", f.sig.ident);
+            merge(&mut self.rets, key, r);
         }
         // Local types and impls in the body.
         let saved = (
@@ -1480,14 +1506,14 @@ impl Uses<'_> {
                     q
                 };
                 let n = &p.path.segments[1].ident;
-                self.types.rets.get(&format!("{q}::{n}")).cloned()
+                self.types.rets.get(&format!("{q}::{n}")).cloned()?
             }
             Expr::Field(f) => {
                 let base = self.recv_type(&f.base)?;
                 let syn::Member::Named(m) = &f.member else {
                     return None;
                 };
-                self.types.fields.get(&base)?.get(&m.to_string()).cloned()
+                self.types.fields.get(&base)?.get(&m.to_string()).cloned()?
             }
             Expr::Call(c) => {
                 let Expr::Path(p) = &*c.func else {
@@ -1504,11 +1530,14 @@ impl Uses<'_> {
                     q
                 };
                 let n = &segs[segs.len() - 1].ident;
-                self.types.rets.get(&format!("{q}::{n}")).cloned()
+                self.types.rets.get(&format!("{q}::{n}")).cloned()?
             }
             Expr::MethodCall(m) => {
                 let t = self.recv_type(&m.receiver)?;
-                self.types.rets.get(&format!("{t}::{}", m.method)).cloned()
+                self.types
+                    .rets
+                    .get(&format!("{t}::{}", m.method))
+                    .cloned()?
             }
             Expr::Paren(p) => self.recv_type(&p.expr),
             Expr::Group(g) => self.recv_type(&g.expr),
@@ -2438,6 +2467,106 @@ mod tests {
         let r = run_with("{ Dummy::dummy(a); Self::dummy(a) }");
         assert_eq!(r.cycles, vec![keys(&["JSXClosing::dummy"])]);
         assert!(r.unused_allow.is_empty());
+    }
+
+    /// Review R2 B2-5: each rule that narrows an edge to fewer fns has a cycle that runs only
+    /// through the narrowed edge. A rule that gives a wrong type loses the edge, and its case
+    /// fails here (for example `DEREF = &[]` loses the `Box<Lexer>` case). Each case also has a
+    /// same-name fn of another type, so an edge to every fn of the name is not the only edge.
+    #[test]
+    fn each_narrowing_rule_keeps_its_cycle() {
+        const DECOY: &str = "struct Other; impl Other { fn f(&mut self) -> u32 { 0 } \
+                             fn a(&mut self) -> u32 { 0 } fn c(&mut self) -> u32 { 0 } \
+                             fn go(&mut self) -> u32 { 0 } fn step(&mut self) -> u32 { 0 } }";
+        let cases: &[(&str, &str, &[&str])] = &[
+            (
+                "a field type",
+                "struct P { lexer: Lexer } struct Lexer;
+                 impl P { fn a(&mut self) -> u32 { self.lexer.f(self) } }
+                 impl Lexer { fn f(&mut self, p: &mut P) -> u32 { p.a() } }",
+                &["Lexer::f", "P::a"],
+            ),
+            (
+                "a DEREF wrapper",
+                "struct P { lexer: Box<Lexer> } struct Lexer;
+                 impl P { fn a(&mut self) -> u32 { self.lexer.f(self) } }
+                 impl Lexer { fn f(&mut self, p: &mut P) -> u32 { p.a() } }",
+                &["Lexer::f", "P::a"],
+            ),
+            (
+                "a return type chain",
+                "struct P; struct Q;
+                 impl P { fn b(&self) -> Q { Q } fn a(&mut self) -> u32 { self.b().c(self) } }
+                 impl P { fn c(&self, p: &mut P) -> u32 { 0 } }
+                 impl Q { fn c(&self, p: &mut P) -> u32 { p.a() } }",
+                &["P::a", "Q::c"],
+            ),
+            (
+                "an associated const receiver",
+                "struct K; struct W;
+                 impl K { const ALL: W = W; fn a(&mut self) -> u32 { Self::ALL.go(self) } }
+                 impl W { fn go(&self, k: &mut K) -> u32 { k.a() } }",
+                &["K::a", "W::go"],
+            ),
+            (
+                "a qualified path",
+                "trait Walk { fn step(&mut self) -> u32; } struct A;
+                 impl Walk for A { fn step(&mut self) -> u32 { run(self) } }
+                 fn run(a: &mut A) -> u32 { <A as Walk>::step(a) }",
+                &["A::step", "run"],
+            ),
+            (
+                "a module path",
+                "mod m { pub fn down(n: u32) -> u32 { super::up(n) } }
+                 fn up(n: u32) -> u32 { m::down(n) }",
+                &["down", "up"],
+            ),
+            (
+                "a blanket impl",
+                "trait Ext { fn ext(&self) -> u32; }
+                 impl<X: AsRef<str>> Ext for X { fn ext(&self) -> u32 { look(self.as_ref()) } }
+                 fn look(s: &str) -> u32 { s.ext() }",
+                &["X::ext", "look"],
+            ),
+            (
+                "a nested fn",
+                "fn outer(n: u32) -> u32 { fn inner(n: u32) -> u32 { outer(n) } inner(n) }",
+                &["inner", "outer"],
+            ),
+        ];
+        for (rule, src, cycle) in cases {
+            let r = report(&[("n.rs", &format!("{src}\n{DECOY}"))]);
+            assert_eq!(r.cycles, vec![keys(cycle)], "{rule}");
+        }
+        // A LOOP fn on a cycle is not a loop.
+        let src = "impl<C> ParserImpl<C> { fn set_pure_on_call_or_new_expr(&mut self) { \
+                   self.set_pure_on_call_or_new_expr() } fn jsx_member_expression_eq() {} }";
+        let r = report(&[("l.rs", src)]);
+        assert_eq!(
+            r.loops
+                .iter()
+                .map(|(k, _, ok)| (label(k), *ok))
+                .collect::<Vec<_>>(),
+            vec![
+                ("set_pure_on_call_or_new_expr", false),
+                ("jsx_member_expression_eq", true)
+            ]
+        );
+    }
+
+    /// Review R2 B2-5: two fns of one key (two types of one name) with other return types:
+    /// the return type is not known, never the type of one of them.
+    #[test]
+    fn a_return_type_of_two_fns_of_one_key_is_not_known() {
+        let a = "struct Ctx; struct Walker;
+                 impl Ctx { fn inner(&self) -> Walker { Walker } fn go(&mut self) -> u32 { self.inner().step() } }
+                 impl Walker { fn step(&mut self) -> u32 { again() } }
+                 fn again() -> u32 { let mut c = Ctx; c.go() }";
+        let b = "mod b { struct Ctx; struct Plain;
+                 impl Ctx { fn inner(&self) -> Plain { Plain } }
+                 impl Plain { fn step(&mut self) -> u32 { 0 } } }";
+        let r = report(&[("a.rs", a), ("b.rs", b)]);
+        assert_eq!(r.cycles, vec![keys(&["Ctx::go", "Walker::step", "again"])]);
     }
 
     /// Fixture 5: the macro expander. A macro with nested repetitions writes an enum, an impl

@@ -118,3 +118,12 @@ fn b2_4_allow_holds_only_its_own_use() {
         "{out}"
     );
 }
+
+/// B2-5: two structs of one name whose fields of one name have other types: the field type is
+/// not known (every method of the name is an edge), never the type of one of them.
+#[test]
+fn b2_5_a_field_of_two_structs_of_one_name_fails() {
+    let (code, out, _) = oxc_sites("b2_5_field_collision");
+    assert_eq!(code, Some(1));
+    assert_cycle(&out, &["Ctx::go", "Walker::step", "again"]);
+}

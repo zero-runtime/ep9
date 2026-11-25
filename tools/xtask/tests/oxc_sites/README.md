@@ -18,3 +18,4 @@ so a test asserts its own finding line, not only the exit code.
 | `b2_2c_generic_fn_field/` | B2-2 (c): `struct Hook<F: Fn(u32) -> u32> { f: F }` | exit 2, `Hook.f: the field holds a fn value` |
 | `b2_3_foreign_gate/` | B2-3: `if NoTokensParserConfig::CHECKS_RECURSION && !self.config.may_recurse() { return .. }` at the start of a self-recursive `parse_a` | exit 1, `NOT A SITE FORM at lib.rs:7`, cycle `parse_a` |
 | `b2_4_allow_by_use/` | B2-4: `JSXClosing::dummy` calls itself by `Self::dummy`; ALLOW has (JSXClosing::dummy, JSXClosing::dummy) for the use `Dummy::dummy` | exit 1, cycle `JSXClosing::dummy`, `UNUSED ALLOW entry` for that entry |
+| `b2_5_field_collision/` | B2-5: 2 structs `Ctx` (a.rs, b.rs) with a field `inner` of 2 types; `Ctx::go` calls `self.inner.step()` on the `Walker` one, and `Walker::step` reaches `Ctx::go` again | exit 1, cycle `Ctx::go`, `Walker::step`, `again` |
