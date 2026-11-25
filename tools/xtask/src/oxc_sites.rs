@@ -18,8 +18,9 @@
 //!   a site = a top-level statement of a fn body in one of the 2 site forms of the patch:
 //!     `if C::CHECKS_RECURSION && !R.config.may_recurse() { return R.recursion_stopped(); }`
 //!     `if C::CHECKS_RECURSION && !R.config.may_recurse() { return Err(R.recursion_stopped_error()); }`
-//!   (R the parser: `self` or a parameter). The statements after it are behind the check, so the
-//!   node keeps only the edges of the statements before it. Any other statement that calls
+//!   (R the parser: `self` or a parameter; C a type parameter of the fn or its impl, never a
+//!   fixed config type). The statements after it are behind the check, so the node keeps only
+//!   the edges of the statements before it. Any other statement that calls
 //!   `may_recurse` is a finding: a form that does not stop (no `return`), that calls more in its
 //!   condition, or that is not at the top level of the body would cut the graph falsely
 //!   -> the site table; a cycle (a strongly connected group, or a self call) that is left is a
@@ -1111,7 +1112,7 @@ impl Collector<'_> {
         }
         let mut behind = BTreeSet::new();
         for stmt in &block.stmts {
-            match check_stmt(stmt) {
+            match check_stmt(stmt, &generics) {
                 Some(Ok(())) if f.check_line.is_none() => {
                     // The check is the cut: its own uses are the check and the stop.
                     f.check_line = Some(stmt.span().start().line);
@@ -1270,8 +1271,9 @@ impl<'ast> Visit<'ast> for Collector<'_> {
 }
 
 /// A statement that calls [`CHECK`]: `Ok` if it is a site form, else why not. `None` if it does
-/// not call it (a nested item is its own node and is not looked at here).
-fn check_stmt(stmt: &Stmt) -> Option<Result<(), String>> {
+/// not call it (a nested item is its own node and is not looked at here). `generics`: the type
+/// parameters of the fn and its impl.
+fn check_stmt(stmt: &Stmt, generics: &BTreeSet<String>) -> Option<Result<(), String>> {
     struct Find(usize);
     impl<'ast> Visit<'ast> for Find {
         fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
@@ -1286,7 +1288,7 @@ fn check_stmt(stmt: &Stmt) -> Option<Result<(), String>> {
     f.visit_stmt(stmt);
     match f.0 {
         0 => None,
-        1 => Some(site_form(stmt)),
+        1 => Some(site_form(stmt, generics)),
         n => Some(Err(format!("{n} calls of {CHECK} in one statement"))),
     }
 }
@@ -1327,7 +1329,7 @@ fn is_call_on(e: &Expr, recv: &str, name: &str) -> bool {
 }
 
 /// Is `stmt` one of the 2 site forms of the patch (the module doc)?
-fn site_form(stmt: &Stmt) -> Result<(), String> {
+fn site_form(stmt: &Stmt, generics: &BTreeSet<String>) -> Result<(), String> {
     let Stmt::Expr(Expr::If(i), _) = stmt else {
         return Err("not an `if` statement at the top level of the body".into());
     };
@@ -1347,6 +1349,9 @@ fn site_form(stmt: &Stmt) -> Result<(), String> {
                     && segs.len() == 2
                     && segs.iter().all(|s| s.arguments.is_none())
                     && segs[1].ident == "CHECKS_RECURSION"
+                    // The config of this parser (review R2 B2-3): a type parameter of the fn or
+                    // its impl, never a fixed type (`NoTokensParserConfig` gives `false`).
+                    && generics.contains(&segs[0].ident.to_string())
             }
             _ => false,
         };
@@ -1371,7 +1376,8 @@ fn site_form(stmt: &Stmt) -> Result<(), String> {
     });
     let Some(recv) = recv else {
         return Err(format!(
-            "the condition is not `C::CHECKS_RECURSION && !R.config.{CHECK}()`"
+            "the condition is not `C::CHECKS_RECURSION && !R.config.{CHECK}()` (C a type \
+             parameter of the fn or its impl)"
         ));
     };
     // The body: one `return R.recursion_stopped()` or `return Err(R.recursion_stopped_error())`.
@@ -2513,6 +2519,11 @@ mod tests {
             (
                 "let _go = self.config.may_recurse();",
                 "not an `if` statement",
+            ),
+            // Review R2 B2-3: the gate of a fixed config type is no site.
+            (
+                "if NoTokensParserConfig::CHECKS_RECURSION && !self.config.may_recurse() { return self.recursion_stopped(); }",
+                "the condition is not",
             ),
         ] {
             let text = src.replacen(FORM, bad, 1);

@@ -14,3 +14,4 @@ has the 2 loop fns of `LOOPS`, so that a missing loop is no finding.
 | `b2_2a_renamed_trait/` | B2-2 (a): `parse_x` calls `R::go`, `use crate::Tr as R`; `ParserImpl::go` calls `parse_x` | exit 1, cycle `go`, `parse_x` |
 | `b2_2b_type_alias/` | B2-2 (b): `walk(p: &mut P<C>)` calls `p.parse_x()`, `type P<C> = ParserImpl<C>` | exit 1, cycle `parse_x`, `walk` |
 | `b2_2c_generic_fn_field/` | B2-2 (c): `struct Hook<F: Fn(u32) -> u32> { f: F }` | exit 2, `Hook.f: the field holds a fn value` |
+| `b2_3_foreign_gate/` | B2-3: `if NoTokensParserConfig::CHECKS_RECURSION && !self.config.may_recurse() { return .. }` at the start of a self-recursive `parse_a` | exit 1, `NOT A SITE FORM at lib.rs:7`, cycle `parse_a` |

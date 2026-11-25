@@ -82,3 +82,19 @@ fn b2_2c_a_generic_fn_field_fails() {
         "{err}"
     );
 }
+
+/// B2-3: only the const of a type parameter of the fn or its impl gates a site.
+#[test]
+fn b2_3_a_gate_of_a_fixed_config_type_is_not_a_site() {
+    let (code, out, _) = oxc_sites("b2_3_foreign_gate");
+    assert_eq!(code, Some(1));
+    assert!(
+        has_line(
+            &out,
+            "oxc-sites: NOT A SITE FORM at lib.rs:7 in `parse_a`: ",
+            &["CHECKS_RECURSION"]
+        ),
+        "{out}"
+    );
+    assert_cycle(&out, &["parse_a"]);
+}
