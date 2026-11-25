@@ -46,9 +46,8 @@
 //!     logs -> sweep: frees the unmarked (dead young) cells, keeps every mark (survivors
 //!     become old)
 //!   sweep: frees the unmarked cells and keeps the mark bits of the others (old = marked)
-//!   policy: a minor GC when the allocation budget is spent (budget = s1_budget: the old bytes
-//!     up to 72 MiB, at least half of them; above 12 MiB of old bytes at least 12 MiB + 5 x
-//!     the old bytes above 12 MiB, up to 144 MiB); a major GC once the old bytes pass twice the last
+//!   policy: a minor GC when the allocation budget is spent (budget = s1_budget: LEVER-7 and
+//!     GC-BUDGET, see there); a major GC once the old bytes pass twice the last
 //!     major GC's live bytes (est.), after a minor GC with high survival (after_gc), or no memory
 //!
 //! verify_after_gc (GC-stress turns it on): the verify costs no second trace of the heap
@@ -113,8 +112,7 @@ pub struct HeapConfig {
     /// default): no callback.
     pub near_limit: Option<fn(committed: usize, limit: usize) -> usize>,
     /// Bytes allocated before the first GC. Later budgets are `max(this, live bytes)` (S0) or
-    /// `max(this, min(old bytes, 72 MiB), old bytes / 2)`, and above 12 MiB of old bytes at
-    /// least `min(12 MiB + 5 x (old bytes - 12 MiB), 144 MiB)` (S1, `s1_budget`).
+    /// at least `max(this, min(old bytes, 72 MiB), old bytes / 2)` (S1, `s1_budget`).
     pub initial_budget: usize,
     /// GC-stress: collect before every Nth allocation. 0 = off, 1 = every allocation. A
     /// value above 0 also turns on the process-wide E2 check
