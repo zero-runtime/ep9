@@ -185,8 +185,14 @@ export function summarizeCell(runs, arm0Runs) {
     peak_old: peak,
     o17: ok.length === runs.length && ok.length > 0 ? (peak <= O17_LIMIT ? "pass" : "FAIL") : "no reading",
     trace_sigs: sigs,
-    decisions_equal_arm0: ok.length && ok0.length && ok.length === runs.length ? sigs.join() === sigs0.join() : null,
+    // A failed run in this arm or in arm 0 gives no reading (null), not a compare with a part set.
+    decisions_equal_arm0: ok.length && ok0.length && ok.length === runs.length && ok0.length === arm0Runs.length ? sigs.join() === sigs0.join() : null,
   };
+}
+
+/** The median GC count of a cell only when every run of the cell counted; else null (no reading). */
+export function fullMedian(cell) {
+  return cell && cell.runs > 0 && cell.counted === cell.runs ? (cell.median ?? null) : null;
 }
 
 /**
@@ -199,8 +205,9 @@ export function tsLines(res) {
     const row = b.rows.find((r) => r.name === TS_WORKLOAD);
     if (!row) continue;
     for (const form of res.forms) {
-      const c0 = row.arms["0"]?.[form]?.median ?? null;
-      const c1 = row.arms["1"]?.[form]?.median ?? null;
+      // A cell with a failed run gives no TS reading (not the median of the runs that counted).
+      const c0 = fullMedian(row.arms["0"]?.[form]);
+      const c1 = fullMedian(row.arms["1"]?.[form]);
       const ratio = c0 && c1 !== null ? c1 / c0 : null;
       out.push({
         build: b.build,
@@ -602,7 +609,8 @@ export function compareReads(read, merge, { readArm = "1", mergeArm = "0" } = {}
     for (const rr of rb.rows) {
       const mr = mb?.rows.find((r) => r.name === rr.name);
       const forms = read.forms.filter((f) => merge.forms.includes(f));
-      const counts = forms.map((f) => ({ form: f, read: rr.arms[readArm]?.[f]?.median ?? null, merge: mr?.arms[mergeArm]?.[f]?.median ?? null }));
+      // A cell with a failed run is no reading on either side (the compare never uses a part set).
+      const counts = forms.map((f) => ({ form: f, read: fullMedian(rr.arms[readArm]?.[f]), merge: fullMedian(mr?.arms[mergeArm]?.[f]) }));
       const ir0 = rr.ir?.[readArm] ?? null;
       const ir1 = mr?.ir?.[mergeArm] ?? null;
       const have = Number.isInteger(ir0) && Number.isInteger(ir1) && ir0 > 0;

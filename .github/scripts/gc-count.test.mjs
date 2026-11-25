@@ -15,6 +15,7 @@ import { BENCH_SET } from "./bench-set.mjs";
 import {
   compareReads,
   decisionSig,
+  fullMedian,
   median,
   O17_LIMIT,
   parseArgs,
@@ -98,16 +99,25 @@ test("a cell: median, constant count, O17 at 11 MiB, decisions against arm 0", (
   assert.equal(bad.o17, "no reading", "a failed run gives no O17 reading");
   assert.equal(bad.decisions_equal_arm0, null);
   assert.equal(bad.counted, 1);
+  // A failed arm-0 run: no compare with a part set of arm 0.
+  assert.equal(summarizeCell([run(5, 0, "x")], [run(5, 0, "x"), { status: "error", error: "e" }]).decisions_equal_arm0, null);
+  assert.equal(fullMedian(id), 5);
+  assert.equal(fullMedian(bad), null, "a cell with a failed run has no full median");
+  assert.equal(fullMedian(undefined), null);
 });
 
 test("the TS line: B1 at most 0.661 of arm 0", () => {
-  const cell = (m) => ({ median: m });
+  const cell = (m, counted = 5) => ({ runs: 5, counted, median: m });
   const res = (c0, c1) => ({ forms: ["H1"], builds: [{ build: "jitless", rows: [{ name: TS_WORKLOAD, arms: { 0: { H1: cell(c0) }, 1: { H1: cell(c1) } } }] }] });
   assert.equal(tsLines(res(12, 7))[0].word, "pass");
   assert.equal(tsLines(res(12, 8))[0].word, "FAIL");
   assert.equal(tsLines(res(11, 7))[0].word, "pass");
   assert.deepEqual(tsLines(res(12, 6))[0], { build: "jitless", form: "H1", arm0: 12, b1: 6, ratio: 0.5, e: 0.0221, word: "pass" });
   assert.equal(tsLines(res(null, 6))[0].word, "no reading");
+  // A failed run in the B1 cell: no TS reading, not the median of the 4 runs that counted.
+  const part = res(12, 6);
+  part.builds[0].rows[0].arms[1].H1.counted = 4;
+  assert.equal(tsLines(part)[0].word, "no reading");
 });
 
 // ---- options -----------------------------------------------------------------------------------
@@ -307,7 +317,8 @@ test("--patch writes the print into a heap.rs copy", (t) => {
 // ---- the merge check ---------------------------------------------------------------------------
 
 test("the merge check: GC counts equal to the read's B1, Ir within 1e-5", (t) => {
-  const row = (name, arm, med, ir) => ({ name, arms: { [arm]: { H1: { median: med }, H0: { median: med } } }, ir: { [arm]: ir } });
+  const cell = (med) => ({ runs: 3, counted: 3, median: med });
+  const row = (name, arm, med, ir) => ({ name, arms: { [arm]: { H1: cell(med), H0: cell(med) } }, ir: { [arm]: ir } });
   const doc = (head, arm, rows) => ({ schema: SCHEMA, head, forms: ["H1", "H0"], builds: [{ build: "jitless", rows }] });
   const read = doc("a", "1", [row(TS_WORKLOAD, "1", 6, 1_000_000_000), row("splay", "1", 5, 2_000_000_000)]);
   let merge = doc("b", "0", [row(TS_WORKLOAD, "0", 6, 1_000_010_000), row("splay", "0", 5, 2_000_000_000)]);
@@ -322,6 +333,12 @@ test("the merge check: GC counts equal to the read's B1, Ir within 1e-5", (t) =>
   merge = doc("b", "0", [row(TS_WORKLOAD, "0", 6, 1_000_000_000)]);
   c = compareReads(read, merge);
   assert.equal(c.verdict, "INCOMPLETE", "a row with no merge reading");
+  // A merge cell with a failed run is no reading, even when its median equals the read.
+  merge = doc("b", "0", [row(TS_WORKLOAD, "0", 6, 1_000_000_000), row("splay", "0", 5, 2_000_000_000)]);
+  merge.builds[0].rows[1].arms["0"].H0.counted = 2;
+  c = compareReads(read, merge);
+  assert.equal(c.rows[1].word, "no reading");
+  assert.equal(c.verdict, "INCOMPLETE");
   // The CLI form.
   const dir = mkdtempSync(path.join(os.tmpdir(), "ep9-gc-count-cmp-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
