@@ -3,10 +3,10 @@ FC1	month 13 about 12% if the month-12 end read puts all 4 TS low ends at 0.985 
 FC2	month 13 about 3%, month 14 about 12%, by month 15 about 25%	R18S 5.3	G	plan v18 row V18-D1: month 13 about 1% or less; month 14 the fallback, no estimate	plan v18 row V18-D1	open (a guess); superseded
 FC3	the end read gives about the month-11 values with the box spread	IN18 #2; R18S 0	I	moves jit -0.24% / +0.53%, jitless +1.34% / +0.81%	PBe12:396-397	confirmed (within 1.3 points)
 FC4	K1: the end read moves 1.5-3 points by box draw	R18S 8	E	TS cells -0.2 to +1.3 points; items 2 and 6 +2.6 to +5.5 points	PBe12:406-409; R24 3.3	refuted for the TS cells (smaller); above the range on items 2 and 6
-FC5	jitless cells do not pass in any case (low ends 0.978-0.999 from PBe11)	R18S 5.1	D on E	re-based on PBe12: low 0.990 / 0.993, center 0.998 / 1.001, high 1.009 / 1.012	D: PBe12 low ends x R18S Path B gains	refuted: the jitless need fell to x1.019-1.022
-FC6	jit cells do not pass in any case	R18S 5.1	D on E	re-based: low 0.965 / 0.964, center 0.973 / 0.972, high 0.982 / 0.981	D	confirmed: 1.8-1.9 points short at the high case
+FC5	jitless cells do not pass in any case (low ends 0.978-0.999 from PBe11)	R18S 5.1	D on E	re-based on PBe12: low 0.990 / 0.993, center 0.998 / 1.001, high 1.009 / 1.012	D: PBe12 low ends x R18S Path B gains	premise changed: the jitless need fell to x1.019-1.022 (M); the re-based values are still a forecast (D on E)
+FC6	jit cells do not pass in any case	R18S 5.1	D on E	re-based: low 0.965 / 0.964, center 0.973 / 0.972, high 0.982 / 0.981	D	holds on the re-base: 1.8-1.9 points short at the high case; still a forecast (D on E)
 FC7	the jit build binds (box-1 jit low end 0.954)	R18S 0, 5.1	M	need jit x1.041 / x1.042, jitless x1.022 / x1.019	PBe12:29, :85 (D)	confirmed; both jit boxes now bind
-FC8	no mid Path B can fire	R18P 1.3 row N4; IN18 #5	D	the jit cells need about x1.052 A/B at t 0.8	D: 1.042^(1/0.8)	confirmed
+FC8	no mid Path B can fire	R18P 1.3 row N4; IN18 #5	D	the jit cells need about x1.052 A/B at t 0.8	D: (1 / 0.960)^(1/0.8) = 1.0524	holds on the re-base; still a forecast (D on E)
 FC9	the end Path B box dies at build without the oxc sync	R18M 0, X9	I	fork_attest oxc=pinned on both boxes	PBe12:10, :15, :393; OL M6-ORCH-1542	did not happen: fix R18M-D4 applied before the box
 FC10	the end read costs 1.75-2.10 box-h	R18P 1.1 row 6	E	2 x 57 min = 1.90 box-h	OL M6-ORCH-1542	confirmed
 FC11	month 12 uses 6.36-6.71 box-h with the health run	R18P 0	E	5.43 before the health run; health est. 1.08 not read	R24 6; DL M12-FUZZ-H	open

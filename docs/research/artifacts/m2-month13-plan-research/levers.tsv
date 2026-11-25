@@ -1,7 +1,7 @@
 lever	mechanism	jitless_ab_low	jitless_ab_center	jitless_ab_high	jit_ab	g8	merge_odds_f1	cost	round_call	plan_v18	source
 GC-BUDGET (arm B1, carried)	S1 budget grows 5x the old bytes above 12 MiB, cap 144 MiB	1.007	1.012	1.017	same as jitless (E)	0 / +1	73-86% (D, model)	1.0-1.5 agent-days; 2.75-3.05 box-h, expected 3.0-3.6	1st month-13 lever box	1st (V18-D2, V18-D18)	R18S 2.2, 4 row 1; ABF 3
 WIDE FIX (shape F-a)	W-1 far twins + W-2 with a second prefix for 3 ops; Wide and Wide_cold byte-equal	1.013	1.017	1.023	1.000 / 1.006 / 1.010	+1 / +2	57-73% if the cost goes; 46-60% if a part stays (D, model)	1.0-1.5 agent-days; 2.5-2.8 box-h expected	2nd, after the 0-box gate G1, G1b, G2-G5	2nd; no REP read on a gate miss (V18-D19)	R18S 1.5, 4 row 2; ABF 2.4-2.6; ABC X5
-both (A/B product)	-	1.020	1.029	1.040	1.007 / 1.018 / 1.027	-	about 45-60% (D, as if independent)	-	-	-	R18S 5.1
+both (A/B product)	-	1.020	1.029	1.040	1.007 / 1.018 / 1.027	-	about 42-63% (D, as if independent: 0.73 x 0.57 to 0.86 x 0.73; R18S wrote about 45-60%)	-	-	-	R18S 5.1
 both at the Path B (t 0.6 / 0.7 / 0.8)	-	1.012	1.020	1.032	1.004 / 1.013 / 1.022	-	-	-	-	-	R18S 5.1
 NL-1 stage 1 (FI-WORD)	4 -> 3 dependent loads on the feedback path	1.000	1.005	1.012	same	0 / +1	-	3.0-3.6 agent-days; about 2.0 box-h	not in month 13 (under the floor x1.015)	LEVER-20 pick, expected NOT RUN (V18-D20)	R18S 4 row 3; DL M12-P3-PICK
 MH (stub-cache index)	no multiply in the probe index	1.000	1.002	1.004	same	0	-	0.3-0.5 agent-day + a read-tool fix	an arm only	not in month 13 (V18-D24)	R18S 4 row 4
@@ -9,7 +9,7 @@ GC-2 sweep share	every page of a GC goes to the sweeper	1.001	1.003	1.006	same	0
 GC-2 helper policy	start the parallel drain earlier	1.000	1.002	1.006	same	0	-	1.0-1.5 agent-days	month 14 or later	GC-2 first rejected (V18-D2)	R18S 4 row 5; R24 4.1
 JUMP-INVERT	a far conditional jump becomes its inverse short jump	1.001	1.002	1.006	same	0	-	0.5-1 agent-day	only after R7 closes W-1	-	R18S 4 row 6
 F2 handler order	one section, fixed order, both builds	1.000	1.000	1.000	1.000-1.005 (G)	0 / +1	-	2.7 agent-days	trigger only	not in month 13 (V18-D24)	R18S 4 row 7
-HA-STAGE-1 S1-A	no callee-saved handler ABI	1.000	1.000-1.001	1.000-1.001	same	+3	-	12-19 agent-days; 4-6 box-h	not in M2	not in M2 (V18-D24)	R18S 4 row 8; HA 0; HAC fix 2
+HA-STAGE-1 S1-A	no callee-saved handler ABI	1.000	1.000-1.001	1.000-1.001	same	+3	-	12-19 agent-days; 4-6 box-h	not in M2	not in M2 (V18-D24)	R18S 4 row 8; HA 0; HAC fix 2; GOF 2 (cost)
 BOLT / PGO layout	post-link hot / cold split	1.000	1.003	1.005	same	0	-	2-3 agent-days	not in month 13	closed (V18-D24)	R18S 4 row 9
 5 fusions	the 5 open opcode pairs	1.005 (all 5)	-	-	same	+1 to +3	-	1-2 agent-days each	not in month 13	no fusion lever (V18-D24)	R18S 4 row 10; R23 5.3
 SHAPE-LOOKUP-CACHE	a (shape, key) -> index cache in front of lookup_with	1.000	1.002	1.005 (G)	same	0 (not checked)	-	0.3 agent-day count, then 1.5-2.5	a Mac call count only	the count SHAPE-LOOKUP-COUNT (V18-D20)	R18S 4 row 13; crates/ep9_vm/src/shape.rs:852

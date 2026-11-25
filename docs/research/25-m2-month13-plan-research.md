@@ -31,17 +31,17 @@ Short forms:
  "about 12% for month 13 IF all 4 TS low ends >= 0.985"       low ends jit 0.961 / 0.960, jitless 0.978 / 0.981   condition FAILED (4 of 4)
  "expect about the month-11 values, +- the box draw"          moves jit -0.2% / +0.5%, jitless +1.3% / +0.8%      confirmed (within 1.3 points)
  K1: "the end read moves 1.5-3 points by box draw"            TS cells -0.2 to +1.3 points                        refuted for TS (smaller)
- "jitless cells: no pass in any case" (from PBe11 low ends)   re-based: center 0.998 / 1.001, high 1.009 / 1.012  refuted (the need fell)
- "jit cells: no pass in any case"                             re-based: high 0.982 / 0.981                        confirmed (1.8-1.9 points short)
+ "jitless cells: no pass in any case" (from PBe11 low ends)   re-based: center 0.998 / 1.001, high 1.009 / 1.012  premise changed (the need fell); still a forecast
+ "jit cells: no pass in any case"                             re-based: high 0.982 / 0.981                        holds on the re-base (1.8-1.9 points short); still a forecast
  the binding cell is the jit build                            need jit x1.041 / x1.042, jitless x1.022 / x1.019   confirmed (now both jit boxes)
  month-13 lever gains (GC-BUDGET, WIDE FIX)                   no month-13 box yet                                 open
 ```
 
-1. **The 2 carried levers do not reach the jit need in any case (D).** GC-BUDGET + WIDE FIX give at the Path B x1.012 / x1.020 / x1.032 (jitless) and x1.004 / x1.013 / x1.022 (jit) (R18S §5.1, E). On the PBe12 low ends the jit cells end at 0.965-0.982: 1.8-3.5 points short (§1.3).
+1. **The 2 carried levers do not reach the jit need in any case (D).** GC-BUDGET + WIDE FIX give at the Path B x1.012 / x1.020 / x1.032 (jitless) and x1.004 / x1.013 / x1.022 (jit) (R18S §5.1, E). On the PBe12 low ends the jit cells end at 0.964-0.982: 1.8-3.6 points short (§1.3).
 2. **The month-12 end read moved the binding cell from jitless to jit (M, D).** Need jit x1.041 / x1.042, jitless x1.022 / x1.019 (PBe12:29, :85). The jitless need fell by the read-to-read move, not by code (R24 §3.3).
 3. **The noise measure was registered before the data and read as registered (M).** R18S-D7 put one information line in the end-read row: the move per box on nearly the same VM code. It read jit 0.9976 / 1.0053, jitless 1.0134 / 1.0081 (PBe12:406-409). Plan v18 then set the rule-101 resolve line at ln x >= 0.030 (plan v18 row V18-D3).
 4. **The conditional exit chance failed on its condition (M).** R18S wrote "about 12% for month 13 if the month-12 end read puts all 4 low ends at 0.985 or more" (G). All 4 low ends are under 0.985. Plan v18 restates month 13 as about 1% or less (G; plan v18 row V18-D1).
-5. **Month 12 lost on the instrument, and form F1 is the fix with a stated price (D).** The 1.010 guard line has 50% power at a +1.0% cost whatever the n; a null family of 10-14 cells fails it in 46-80% of reads. F1 lowers the false GUARD-FAIL to 2.5-16% (24-26% at the measured cell offset) and moves the 50% power point to +1.6% / +2.0% (ABF §1.4). R18P names 7 gaps G-1..G-7 that F1 leaves open (§2.3).
+5. **Month 12 lost on the instrument, and form F1 is the fix with a stated price (D).** The 1.010 guard line has 50% power at a +1.0% cost whatever the n; a null family of 10-14 cells fails it in 46-80% of reads. F1 lowers the false GUARD-FAIL to 2.5-19% by cell split (2.5-16% for the GC-BUDGET split of 12 IDENTITY + 2 LEVER cells; 24-26% at the measured cell offset) and moves the 50% power point to +1.6% / +2.0% (ABF §1.4). R18P names 7 gaps G-1..G-7 that F1 leaves open (§2.3).
 6. **The WIDE-SET guard cost has one cause in the code, and V8 and JSC avoid it by table form (M, source).** W-2 puts a table step in front of `Wide_cold` for 253 of 256 bytes, so an unlisted prefixed op pays one more load and one more indirect branch. The V8 and JSC wide tables hold the final handler for every opcode (§1.5).
 7. **DEPS-BUMP-3 at oxc 0.160.0 is a measured re-port, not an offset move (M).** The patch has 3 failed and 3 fuzzy hunks of 36; check sites go 22 -> 25; one fuzzy hunk lands in the wrong function; the PropertyKey port has 4 sites that compile and change results (§3).
 8. **The option paper keeps K as the default and records no owner decision (M).** H is the only owner action that can move the date with no change of the gate text; R helps only in its wide reading; S and A give no gain by month 14 (GOF §2-§3; §4).
@@ -65,7 +65,7 @@ The medians on PBe12: jit 0.968 / 0.980, jitless 0.985 / 0.988 (PBe12:29, :85). 
 |---|---|---|---|---|---|---|---|
 | GC-BUDGET (arm B1, carried) | fewer minor GCs: the S1 budget grows 5 x the old bytes above 12 MiB (cap 144 MiB) | x1.007 / x1.012 / x1.017 | same (E: GC work does not depend on the tier) | 0 / +1 | 73-86% | 1.0-1.5 agent-days; 2.75-3.05 box-h, expected 3.0-3.6 | R18S §2.2, §4 row 1; ABF §3 |
 | WIDE FIX (shape F-a) | W-1 far twins + W-2 with a second prefix for the 3 wide-list ops; `Wide` and `Wide_cold` byte-equal to the base | x1.013 / x1.017 / x1.023 | x1.000 / x1.006 / x1.010 | +1 / +2 | 57-73% if the time cost goes; 46-60% if a part stays | 1.0-1.5 agent-days; 2.5-2.8 box-h expected | R18S §1.5, §4 row 2; ABF §2.4-§2.6; ABC X5 |
-| both, A/B | | x1.020 / x1.029 / x1.040 | x1.007 / x1.018 / x1.027 | | about 45-60% (D, as if independent) | | R18S §5.1 |
+| both, A/B | | x1.020 / x1.029 / x1.040 | x1.007 / x1.018 / x1.027 | | about 42-63% (D, as if independent: 0.73 x 0.57 to 0.86 x 0.73; R18S wrote about 45-60%) | | R18S §5.1 |
 
 Bases of the GC-BUDGET estimate (R18S §2.2): Mac TS wall B1 / arm 0 0.9861 (range 0.983-0.987; OL M6-ORCH-1471); x86 bench Ir TS -1.295% (jit) / -1.306% (jitless), runs 45349020669, 45349037862 (DL M12-P1-GC-NOT-RUN); a bound of x1.025 at most from 6 of the 11 x86 TS GCs at the average 0.40% of cycles per GC (R18S §2.2; the per-GC value from R24 §1.2); the Mac count fell 12 -> 6 (OL M6-ORCH-1471). R24 had estimated x1.001 / x1.003 / x1.010 before the arm search; the 2 estimates conflict (R24 §4.1, Q3).
 
@@ -79,7 +79,7 @@ Bases of the GC-BUDGET estimate (R18S §2.2): Mac TS wall B1 / arm 0 0.9861 (ran
 | center at t 0.2 (the low end of the registered band) | 0.2 | x1.006 | x1.004 | - -> 0.984 / 0.987 | - -> 0.964 / 0.963 |
 
 - Rows 1-3 are R18S §5.1 (E). The PBe12 columns are low end x Path B gain (D). The t 0.2 row: 1.029^0.2 = x1.006, 1.018^0.2 = x1.004 (D; the band 0.2-0.8 of DL M12-PRE-SWITCH).
-- **No case passes the jit cells.** The high case leaves them 1.8-1.9 points short. A mid Path B could fire the jit cells only with an A/B product of about x1.052 (D: 1.042^(1/0.8)).
+- **No case passes the jit cells.** The high case leaves them 1.8-1.9 points short. A mid Path B could fire the jit cells only with an A/B product of about x1.052 (D: (1 / 0.960)^(1/0.8) = 1.0524).
 - The other candidates (NL-1 stage 1, MH, GC-2, fusions, JUMP-INVERT, F2, BOLT, HA-STAGE-1, SHAPE-LOOKUP-CACHE, oxc 0.160 parse speed) have centers of x1.005 or less each, or are out of M2 (R18S §4). None is a jit-only gain (I).
 
 ### 1.4 The other candidates (R18S §4; estimates)
@@ -115,7 +115,7 @@ The cause (M, code): commit d1719606 (the WIDE-SET probe line, head 1ae919cc; no
 | Engine | How a wide prefix dispatches | Cite (verified at the named commit) |
 |---|---|---|
 | V8 Ignition | `IGNITION_HANDLER(Wide) { DispatchWide(OperandScale::kDouble); }`; `DispatchWide` loads the next byte and jumps through the scaled table, which holds a handler for every bytecode | `v8/v8@932ddd7ca4` `src/interpreter/interpreter-generator.cc:3514-3516`, `src/interpreter/interpreter-assembler.cc:1433-1458` |
-| JSC LLInt | `nextInstructionWide16` loads the opcode byte and jumps through `opcodeMapWide16` | `WebKit/WebKit@f30433b25d` `Source/JavaScriptCore/llint/LowLevelInterpreter.asm:401-404` (R18S wrote :405-409) |
+| JSC LLInt | `nextInstructionWide16` loads the opcode byte and jumps through `opcodeMapWide16` | `WebKit/WebKit@f30433b25d` `Source/JavaScriptCore/llint/LowLevelInterpreter.asm:402-406` (R18S wrote :405-409) |
 | ep9 W-2 | the same 2 steps, but for 253 of 256 bytes the target is `Wide_cold`, which tests the opcode again | d1719606 (R18S §1.3) |
 
 Lesson (I): a table step pays only when the entry is the final handler. Shape F-a keeps the old `Wide` path byte-equal and adds a second prefix only for the 3 listed ops; its gate adds G1b (the disassembly of `Wide` and `Wide_cold` byte-equal to the base, and 0 runs of a new handler on t0-loop) to G1-G5 (R18S §1.5; plan v18 row V18-D19).
@@ -163,10 +163,10 @@ R18S-D7: "Before the month-12 end Path B data, write one report line in its row:
 | FC2 | month 13 about 3%, month 14 about 12%, by month 15 about 25% (R18S §5.3; G) | plan v18 row V18-D1: month 13 about 1% or less; no month-14/15 estimate | open (a guess); superseded |
 | FC3 | the end read gives about the month-11 values with the box spread (IN18 #2; R18S §0) | jit -0.24% / +0.53%, jitless +1.34% / +0.81% (PBe12:396-397) | confirmed (within 1.3 points) |
 | FC4 | K1: the end read moves 1.5-3 points by box draw (R18S §8) | TS cells -0.2 to +1.3 points; items 2 and 6 +2.6 to +5.5 points (R24 §3.3) | refuted for the TS cells (smaller); above the range on items 2 and 6 |
-| FC5 | jitless cells do not pass in any case (R18S §5.1, from PBe11) | re-based on PBe12: center 0.998 / 1.001, high 1.009 / 1.012 (§1.3, D) | refuted: the jitless need fell to x1.019-1.022 |
-| FC6 | jit cells do not pass in any case (R18S §5.1) | re-based: high 0.982 / 0.981 (§1.3, D) | confirmed: 1.8-1.9 points short |
+| FC5 | jitless cells do not pass in any case (R18S §5.1, from PBe11) | re-based on PBe12: center 0.998 / 1.001, high 1.009 / 1.012 (§1.3, D) | premise changed: the jitless need fell to x1.019-1.022 (M); the re-based values are still a forecast (D on E) |
+| FC6 | jit cells do not pass in any case (R18S §5.1) | re-based: high 0.982 / 0.981 (§1.3, D) | holds on the re-base: 1.8-1.9 points short; still a forecast (D on E) |
 | FC7 | the jit build is the binding build; the box-1 jit low end binds (R18S §0, §5.1) | need jit x1.041 / x1.042 against jitless x1.022 / x1.019 | confirmed; both jit boxes now bind |
-| FC8 | no mid Path B can fire (R18P §1.3 row N4; IN18 #5) | the jit cells need about x1.052 A/B at t 0.8 (D) | confirmed (no case reaches it) |
+| FC8 | no mid Path B can fire (R18P §1.3 row N4; IN18 #5) | the jit cells need about x1.052 A/B at t 0.8 (D) | holds on the re-base (no case reaches it); still a forecast (D on E) |
 | FC9 | the end Path B box dies at build without the oxc sync (R18M §0, X9) | `fork_attest regress=pinned icu4x=pinned oxc=pinned` on both boxes (PBe12:10, :15, :393; OL M6-ORCH-1542) | did not happen: the fix R18M-D4 was applied before the box |
 | FC10 | the end read costs 1.75-2.10 box-h (R18P §1.1 row 6) | 2 x 57 min = 1.90 box-h (OL M6-ORCH-1542) | confirmed |
 | FC11 | the month uses 6.36-6.71 box-h with the health run (R18P §0) | 3.53 + 1.90 = 5.43 before the health run (R24 §6); health run est. 1.08, not read here | open (5.43 + 1.08 = 6.51 if the estimate holds, E) |
@@ -348,7 +348,7 @@ Re-port cost (E, R18M §1.2): 0.25 agent-day for a step like 0.158 -> 0.159; 0.7
 | data parsers (serde_json, regex-syntax, toml_edit) | a depth counter with a fixed default | crates.io sources (R18M §1.4; not verified here) |
 | ep9 (built) | an opt-in `ParserConfig` hook; the embedder supplies the compare; oxc gets no stack code and no thread-local | `third_party/patches/oxc/0002-parser-recursion-check.patch` |
 
-The oxc contributor policy asks for an AI disclosure with the model name and version and a human contributor who takes full responsibility (`oxc-project/oxc@3464a0d181` `AGENTS.md:7-16`, verified). R18M found the prepared upstream text stale: it proposes a run-time option field, not the built hook (R18M §1.4). **2 outward texts were prepared for the owner (an upstream request and a report); not sent.** The upstream request is a user call, offered in the month-12 status and again after DEPS-BUMP-3 (plan v18 row V18-D9).
+The oxc contributor policy asks for an AI disclosure with the model name and version and a human contributor who takes full responsibility (`oxc-project/oxc@3464a0d181` `AGENTS.md:7-16`, verified). R18M found the prepared upstream text stale against the built hook (R18M §1.4). **2 outward texts were prepared for the owner (an upstream request and a report); not sent.** The upstream request is a user call, offered in the month-12 status and again after DEPS-BUMP-3 (plan v18 row V18-D9).
 
 ### 3.6 The G8 cap and the SAFETY allowance
 
@@ -425,7 +425,7 @@ HB-4: a known weakness, already public in [docs/research/20](20-bestfit-data-str
 - The PBe12 values of §1.1, §1.7 and §1.9 against the compare file (PBe12:10, :15, :29, :85, :363, :381-409) and OL M6-ORCH-1542; the 4 low ends are under 0.985, so the FC1 condition failed.
 - The derived values of §1.3: the re-based low ends (low end x Path B gain), the t 0.2 row, the x1.052 mid-read need; the needs as 1 / low end.
 - The R18S, R18P and R18M values copied here against the notes; the A/B form numbers against ABF and ABC; the HA verdict against HA §0 and HAC fixes 1-2; the option table against GOF §2-§3.
-- Every engine cite of §1.5, §3.5 and §3.7 with `git show <commit>:<path>` in the named upstream commit. One correction: the JSC `nextInstructionWide16` macro is at `LowLevelInterpreter.asm:401-404`, not :405-409 as R18S wrote.
+- Every engine cite of §1.5, §3.5 and §3.7 with `git show <commit>:<path>` in the named upstream commit. One correction: the JSC `nextInstructionWide16` macro is at `LowLevelInterpreter.asm:402-406`, not :405-409 as R18S wrote.
 - The ep9 cites at this head: `literal.rs:111-125` (`_ => None`), `expr.rs:861-878` (`unsupported("private names")`), `class_fields.rs:226-236`, `pattern.rs:197-200`, `shape.rs:852` (`lookup_with`), `third_party/patches/oxc/README.md:33`, `third_party/oxc.commit` (74e5e665), `docs/plan/01-front-end.md:168-169`.
 - The OL row ids: each orchestrator-log line cited by the notes as a line number was mapped to its M6-ORCH id and read.
 - The commits d1719606, 1ae919cc, 5ca1610c, dabc0e85 exist in the repo object store; d1719606 is on the pushed probe branches, not on the month line.
