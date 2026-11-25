@@ -199,15 +199,15 @@ fn parse_part<'a>(
 ) -> Result<Program<'a>, CompileError> {
     let mut parsed = match crate::regex_check::parse(allocator, text, SourceType::script()) {
         Ok(parsed) => parsed,
-        Err(fatal) => return Err(crate::early_errors(text, fatal.errors()).into()),
+        // A layer-1 stop is read before the diagnostics.
+        Err(stopped) => return Err(stopped.into_error(text)),
     };
     shim.check_regex_literals(text, &parsed.tokens, &mut parsed.diagnostics);
     if parsed.diagnostics.has_errors() {
         return Err(crate::early_errors(text, parsed.diagnostics.errors()).into());
     }
-    if let Err(deep) = crate::depth::check_ast_depth(&parsed.program, crate::AST_CAP) {
-        return Err(RangeError::too_deep(DepthLayer::Ast, text, Some(deep.span.start)).into());
-    }
+    // Layer 2 and the run-time budget check of layer 1.
+    crate::check_depth(&parsed.program, text)?;
     Ok(parsed.program)
 }
 

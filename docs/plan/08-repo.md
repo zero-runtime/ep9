@@ -33,7 +33,7 @@ ep9/
 │  ├─ bench-jetstream.commit # WebKit/JetStream branch JetStream3.0
 │  ├─ shells.toml            # reference shells: version, asset and sha256 per platform (sync-shells.sh)
 │  ├─ regress.commit     # base of the RX0 fork
-│  ├─ oxc.commit         # only while ep9 carries oxc patches (commit of the 0.155.0 release)
+│  ├─ oxc.commit         # only while ep9 carries oxc patches (commit of the 0.155.0 release) [2026-11-25, M12-P1 L1-STACK-CHECK: present since M12-P1 (the vcs commit of the oxc_parser 0.158.0 package); its patches are third_party/patches/oxc (0001 manifest, 0002 layer 1; 01-front-end section 7)]
 │  └─ patches/<name>/NNNN-*.patch   # <name> = the pin name: tsrs, oxc, regress, bench-jetstream, ...
 ├─ scripts/
 │  ├─ sync-lib.sh        # shared: fetch pin, reset, apply patches in order, write stamp

@@ -578,17 +578,93 @@ test("CLI --build: the JSON and the table name the build; a binary of the other 
   assert.equal(r.res.build, null);
 });
 
-test("ci.yml bench-set: each side builds jit and jitless in its own target dirs; the head rebuild guard; the artifact keeps both legs", () => {
+test("ci.yml bench-set: each side builds jit and jitless in its own target dirs; the head rebuild guard; the artifact keeps both legs", (t) => {
   const job = CI.slice(CI.indexOf("\n  bench-set:\n"));
   const build = stepScript("build ep9 at base and head");
+  // BENCH-TREE-NEST: the checkouts bench/base and bench/head move to $RUNNER_TEMP/bench before
+  // the first build, and each build runs there, so no parent dir of a tree is this checkout.
+  assert.match(job, /\n {10}path: bench\/base\n[\s\S]*\n {10}path: bench\/head\n/);
+  const move = build.indexOf('\nmkdir -p "$RUNNER_TEMP/bench"; mv bench/base bench/head "$RUNNER_TEMP/bench/"; cd "$RUNNER_TEMP"\n');
+  assert.ok(move > 0 && move < build.indexOf("\nfor side in base head; do\n") && move < build.indexOf("cargo build"), build);
+  assert.match(build, /\nfor side in base head; do\n(?: .*\n)*? {2}pushd "bench\/\$side" > \/dev\/null\n/);
+  assert.equal(build.split(/\bcd /).length, 2, "one cd: the one to $RUNNER_TEMP");
+  assert.doesNotMatch(build, /pushd "?\$(GITHUB_WORKSPACE|BENCH_DIR)/);
   // BENCH-STALE-HEAD: no target dir is shared by base and head (a CARGO_TARGET_DIR env would be).
   assert.match(build, /\n *target="\$BENCH_DIR\/target-\$side" jitless="\$BENCH_DIR\/target-jitless-\$side"\n/);
-  assert.match(build, /\n *cargo build --release --locked -p ep9_cli --target-dir "\$target" --message-format=json-render-diagnostics > "\$BENCH_DIR\/build-\$side\.jsonl"\n/);
-  assert.match(build, /\n *cargo build --release --locked -p ep9_cli --no-default-features --target-dir "\$jitless" --message-format=json-render-diagnostics > "\$BENCH_DIR\/build-jitless-\$side\.jsonl"\n/);
-  assert.match(build, /cp "\$target\/release\/ep9" "bench\/ep9-\$side"/);
-  assert.match(build, /cp "\$jitless\/release\/ep9" "bench\/ep9-jitless-\$side"/);
-  assert.match(build, /"bench\/ep9-jitless-\$side" --version/);
-  assert.match(build, /\n *for b in build build-jitless; do\n *node \.github\/scripts\/bench-set\.mjs --rebuild-guard --base-tree bench\/base --head-tree bench\/head --cargo-json "bench\/\$b-head\.jsonl"\n *done$/);
+  // Each build: its flags, the JSON on stdout to the .jsonl file, stderr (-v) to the log and to .err.
+  assert.match(build, /\n *\{ cargo build -v --release --locked -p ep9_cli --target-dir "\$target" --message-format=json-render-diagnostics 2>&1 >&3 \| tee "\$BENCH_DIR\/build-\$side\.err" >&2; \} 3> "\$BENCH_DIR\/build-\$side\.jsonl"\n/);
+  assert.match(build, /\n *\{ cargo build -v --release --locked -p ep9_cli --no-default-features --target-dir "\$jitless" --message-format=json-render-diagnostics 2>&1 >&3 \| tee "\$BENCH_DIR\/build-jitless-\$side\.err" >&2; \} 3> "\$BENCH_DIR\/build-jitless-\$side\.jsonl"\n/);
+  // The binaries go to $BENCH_DIR (the checkout's bench/), where the count step reads bench/ep9-*.
+  assert.match(build, /\n *cp "\$target\/release\/ep9" "\$BENCH_DIR\/ep9-\$side"\n/);
+  assert.match(build, /\n *cp "\$jitless\/release\/ep9" "\$BENCH_DIR\/ep9-jitless-\$side"\n/);
+  assert.match(build, /\n *"\$BENCH_DIR\/ep9-\$side" --version\n/);
+  assert.match(build, /\n *"\$BENCH_DIR\/ep9-jitless-\$side" --version\n/);
+  // The align count line per side and build (a print, no gate).
+  const count = /\n *for b in build build-jitless; do\n( *n="\$\(grep -m1 -e '--crate-name ep9 ' "\$BENCH_DIR\/\$b-\$side\.err" \| grep -o -e '-align-all-functions=' \| wc -l \|\| true\)"\n *echo "align-all-functions \$side \$b: \$\(\(n\)\)" \| tee -a "\$GITHUB_STEP_SUMMARY"\n) *done\n *done\n/.exec(build);
+  assert.ok(count, build);
+  const dir = mkdtempSync(path.join(os.tmpdir(), "ep9-bench-set-align-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const rustc = (flags, name = "ep9") => `     Running \`rustc --crate-name ${name} --edition=2024 crates/ep9_cli/src/main.rs ${flags}\`\n`;
+  const flag = "-C llvm-args=-align-all-functions=6";
+  // Only the first rustc line of the crate "ep9" counts (not ep9_cli, not a later line).
+  writeFileSync(path.join(dir, "build-base.err"), rustc(`${flag} ${flag}`, "ep9_cli") + rustc(flag) + rustc(`${flag} ${flag}`));
+  writeFileSync(path.join(dir, "build-jitless-base.err"), rustc(""));
+  writeFileSync(path.join(dir, "build-head.err"), rustc(`${flag} ${flag}`));
+  writeFileSync(path.join(dir, "build-jitless-head.err"), "no rustc line\n");
+  const sum = path.join(dir, "summary");
+  writeFileSync(sum, "");
+  for (const side of ["base", "head"]) {
+    const r = spawnSync("bash", ["-e", "-c", `set -euo pipefail\nfor b in build build-jitless; do\n${count[1]}done`], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, BENCH_DIR: dir, GITHUB_STEP_SUMMARY: sum, side },
+    });
+    assert.equal(r.status, 0, r.stderr);
+  }
+  assert.equal(readFileSync(sum, "utf8"), "align-all-functions base build: 1\nalign-all-functions base build-jitless: 0\nalign-all-functions head build: 2\nalign-all-functions head build-jitless: 0\n");
+  // The head rebuild guard: both builds; the trees are relative to $RUNNER_TEMP (the cwd after the
+  // loop), the JSON is in $BENCH_DIR, and the script comes from the dispatched checkout.
+  assert.match(build, /\n *for b in build build-jitless; do\n *node "\$GITHUB_WORKSPACE\/\.github\/scripts\/bench-set\.mjs" --rebuild-guard --base-tree bench\/base --head-tree bench\/head --cargo-json "\$BENCH_DIR\/\$b-head\.jsonl"\n *done$/);
+  // The step as GitHub runs it (shell: bash = bash --noprofile --norc -eo pipefail), with a fake
+  // cargo and rustup: a failed set-up command (mkdir, mv, cd) or a cargo that exits 101 after its
+  // output stops the step before a build in the checkout, before cp and before the guard.
+  const sim = mkdtempSync(path.join(os.tmpdir(), "ep9-bench-set-build-"));
+  t.after(() => rmSync(sim, { recursive: true, force: true }));
+  const fake = (p, body) => { mkdirSync(path.dirname(p), { recursive: true }); writeFileSync(p, body); chmodSync(p, 0o755); };
+  fake(path.join(sim, "bin/rustup"), "#!/bin/sh\n");
+  fake(path.join(sim, "bin/cargo"), `#!/bin/sh\necho "cargo $PWD" >> "${sim}/log"\nfor a; do [ "$p" = --target-dir ] && d=$a; p=$a; done\nmkdir -p "$d/release" && : > "$d/release/ep9" && chmod +x "$d/release/ep9"\necho '{"reason":"compiler-artifact"}'\nexit "\${FAKE_RC:-0}"\n`);
+  const runBuild = (name, env, setup) => {
+    const c = path.join(sim, name), ws = path.join(c, "ws");
+    for (const s of ["base", "head"]) {
+      fake(path.join(ws, `bench/${s}/rust-toolchain.toml`), '[toolchain]\nchannel = "1.0.0"\n');
+      fake(path.join(ws, `bench/${s}/scripts/sync-regress.sh`), "");
+    }
+    fake(path.join(ws, ".github/scripts/bench-set.mjs"), `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(path.join(sim, "log"))}, "guard\\n");\n`);
+    mkdirSync(path.join(c, "rt"), { recursive: true });
+    setup?.(c);
+    writeFileSync(path.join(sim, "log"), "");
+    const r = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", build], {
+      cwd: ws,
+      encoding: "utf8",
+      env: { PATH: [path.join(sim, "bin"), path.dirname(process.execPath), process.env.PATH].join(path.delimiter), GITHUB_WORKSPACE: ws, RUNNER_TEMP: path.join(c, "rt"), BENCH_DIR: path.join(ws, "bench"), GITHUB_STEP_SUMMARY: path.join(c, "summary"), ...env },
+    });
+    const log = readFileSync(path.join(sim, "log"), "utf8").split("\n").filter(Boolean);
+    return { ...r, cargo: log.filter((l) => l.startsWith("cargo ")), guard: log.filter((l) => l === "guard").length, copied: existsSync(path.join(ws, "bench/ep9-base")) };
+  };
+  let b = runBuild("ok", {});
+  assert.equal(b.status, 0, b.stderr);
+  assert.equal(b.cargo.length, 4, b.cargo.join("\n"));
+  for (const l of b.cargo) assert.ok(l.includes(`${path.sep}rt${path.sep}bench${path.sep}`), l);
+  assert.equal(b.copied, true);
+  assert.equal(b.guard, 2);
+  b = runBuild("file", {}, (c) => writeFileSync(path.join(c, "rt/bench"), ""));
+  assert.notEqual(b.status, 0, "a failed mkdir stops the step");
+  assert.deepEqual(b.cargo, [], "no cargo build inside the checkout");
+  assert.equal(b.guard, 0);
+  b = runBuild("rc", { FAKE_RC: "101" });
+  assert.equal(b.status, 101, b.stderr);
+  assert.equal(b.cargo.length, 1, "the step stops at the first failed cargo");
+  assert.equal(b.copied, false, "no cp after a failed cargo");
+  assert.equal(b.guard, 0);
   assert.doesNotMatch(job.slice(0, job.indexOf("\n      - name: count")), /CARGO_TARGET_DIR/);
   assert.match(job, /\n {10}BENCH_DIR: \$\{\{ github\.workspace \}\}\/bench\n/);
   assert.match(job, /\n {12}bench-set-\$\{\{ matrix\.name \}\}-jitless\.json\n/);

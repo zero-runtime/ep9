@@ -115,3 +115,8 @@ regress = { path = "third_party/regress" }
 # *.patch. Run `bash scripts/sync-icu4x.sh` before the first cargo command in a new tree, as for
 # regress. spikes/spike-c has the same entry; dep-guards check 16 checks both.
 icu_calendar = { path = "third_party/icu4x/components/calendar" }
+# oxc_parser 0.158.0 with the layer-1 recursion check of H01 (third_party/patches/oxc/README.md):
+# the upstream commit in third_party/oxc.commit plus third_party/patches/oxc/*.patch. Run
+# `bash scripts/sync-oxc.sh` before the first cargo command in a new tree, as for regress. fuzz,
+# spikes/spike-b and spikes/spike-c have the same entry; dep-guards check 16 checks all 4.
+oxc_parser = { path = "third_party/oxc/crates/oxc_parser" }

@@ -33,20 +33,31 @@ fn measure<R>(bytes: usize, f: impl FnOnce() -> R) -> (usize, R) {
 }
 
 /// As [`measure`], but reports a full region instead of panicking.
+///
+/// The stack is touched from the anchor down, 8 bytes at a time (reads in the gap, then the
+/// paint from `high` down to `low`), because Windows commits a thread stack one guard page at
+/// a time from the top and a first touch below the guard page is an access violation.
 #[inline(never)]
 fn measure_or_full<R>(bytes: usize, f: impl FnOnce() -> R) -> (usize, R, bool) {
     let anchor = 0u8;
     let sp = black_box(&raw const anchor) as usize;
     let low = (sp - bytes) & !7;
     let high = (sp - GAP) & !7;
-    let mut addr = low;
-    while addr < high {
-        // SAFETY: `[low, high)` lies inside this thread's stack (the probe thread has a 2 GiB
-        // stack and `bytes` is at most 1.5 GiB), below the current stack pointer minus a 64 KiB
-        // gap, so no live frame and no red zone uses it. Volatile writes keep the compiler from
-        // eliding or reordering them.
-        unsafe { std::ptr::write_volatile(addr as *mut u64, PATTERN) };
-        addr += 8;
+    let mut addr = sp & !7;
+    while addr > low {
+        addr -= 8;
+        if addr >= high {
+            // SAFETY: `[high, sp)` (the gap) lies inside this thread's stack just below the
+            // anchor; a volatile read changes nothing. On Windows it commits the gap pages in
+            // order.
+            unsafe { std::ptr::read_volatile(addr as *const u64) };
+        } else {
+            // SAFETY: `[low, high)` lies inside this thread's stack (the probe thread has a
+            // 2 GiB stack and `bytes` is at most 1.5 GiB), below the current stack pointer
+            // minus the 16 KiB `GAP`, so no live frame and no red zone uses it. Volatile writes
+            // keep the compiler from eliding or reordering them.
+            unsafe { std::ptr::write_volatile(addr as *mut u64, PATTERN) };
+        }
     }
     let result = black_box(f());
     let mut addr = low;
@@ -55,6 +66,38 @@ fn measure_or_full<R>(bytes: usize, f: impl FnOnce() -> R) -> (usize, R, bool) {
         addr += 8;
     }
     (sp.saturating_sub(addr), result, addr == low)
+}
+
+/// T-RED (l1.rs): paint `bytes` of stack below the caller, run `f`, and give the lowest address
+/// that `f` touched. The paint and touch order of [`measure_or_full`] (top down, for Windows).
+///
+/// Panics if `f` used the whole painted region.
+#[inline(never)]
+pub(crate) fn deepest_point<R>(bytes: usize, f: impl FnOnce() -> R) -> (usize, R) {
+    let anchor = 0u8;
+    let sp = black_box(&raw const anchor) as usize;
+    let low = (sp - bytes) & !7;
+    let high = (sp - GAP) & !7;
+    let mut addr = sp & !7;
+    while addr > low {
+        addr -= 8;
+        if addr >= high {
+            // SAFETY: as in `measure_or_full`: the gap below the anchor, a read.
+            unsafe { std::ptr::read_volatile(addr as *const u64) };
+        } else {
+            // SAFETY: as in `measure_or_full`: `[low, high)` lies in this thread's stack (the
+            // caller keeps `bytes` above the guard pages), below every live frame.
+            unsafe { std::ptr::write_volatile(addr as *mut u64, PATTERN) };
+        }
+    }
+    let result = black_box(f());
+    let mut addr = low;
+    // SAFETY: as above: reads of this thread's own stack below every live frame.
+    while addr < high && unsafe { std::ptr::read_volatile(addr as *const u64) } == PATTERN {
+        addr += 8;
+    }
+    assert!(addr > low, "the painted region ({bytes} B) is too small");
+    (addr, result)
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -68,6 +111,42 @@ struct Sample {
     scope: usize,
 }
 
+/// The parse call of the worker (`crate::parse`, lib.rs): `regex_check::parse` with the
+/// source type of the goal. The whole call runs on the worker stack, so the probe measures the
+/// whole call: in debug builds pass 1 (tokens off, own arena) and pass 2 (tokens on), in
+/// release pass 2 only, then the regex literal check over the tokens (regex parsing is off in
+/// oxc, so a regex pattern is parsed in that check, not in the parser). The parser config is
+/// the production one, `L1Config` (layer 1), so the probe measures its frames; the probe thread
+/// has the limit of its own stack (`l1::LimitScope::of`).
+fn worker_parse<'a>(
+    allocator: &'a Allocator,
+    src: &'a str,
+    module: bool,
+) -> Result<oxc_parser::ParserReturn<'a>, crate::regex_check::Stopped> {
+    let source_type = if module {
+        oxc_span::SourceType::mjs()
+    } else {
+        oxc_span::SourceType::script()
+    };
+    crate::regex_check::parse(allocator, src, source_type)
+}
+
+/// The parse of `form` at `n` must have no error (a fatal one or a diagnostic).
+fn assert_parsed<'a>(
+    form: &Form,
+    n: usize,
+    parsed: Result<oxc_parser::ParserReturn<'a>, crate::regex_check::Stopped>,
+) -> oxc_parser::ParserReturn<'a> {
+    let parsed = parsed.unwrap_or_else(|stopped| panic!("form {} n {n}: {stopped:?}", form.name));
+    assert!(
+        !parsed.diagnostics.has_errors(),
+        "form {} n {n}: {:?}",
+        form.name,
+        parsed.diagnostics.errors().next()
+    );
+    parsed
+}
+
 fn sample(form: &Form, n: usize, paint: usize) -> Sample {
     let src = (form.build)(n);
     let opts = if form.module {
@@ -78,29 +157,13 @@ fn sample(form: &Form, n: usize, paint: usize) -> Sample {
     let module = opts.goal() == Goal::Module;
     let (prescan_bytes, est) = measure(paint, || prescan::estimate(src.as_bytes(), module));
     let allocator = Allocator::default();
-    let source_type = if module {
-        oxc_span::SourceType::mjs()
-    } else {
-        oxc_span::SourceType::script()
-    };
-    let options = oxc_parser::ParseOptions {
-        parse_regular_expression: true,
-        ..oxc_parser::ParseOptions::default()
-    };
-    let (parse_bytes, parsed) = measure(paint, || {
-        oxc_parser::Parser::new(&allocator, &src, source_type)
-            .with_options(options)
-            .parse()
-    });
-    assert!(
-        !parsed.diagnostics.has_errors(),
-        "form {} n {n}: {:?}",
-        form.name,
-        parsed.diagnostics.errors().next()
-    );
-    let program = parsed.program;
-    let (depth_bytes, ast) = measure(paint, || depth::check_ast_depth(&program, u32::MAX));
-    let ast_depth = ast.expect("no cap");
+    // The parse as the worker runs it (see `worker_parse`): the T-A slope is of that call.
+    let (parse_bytes, parsed) = measure(paint, || worker_parse(&allocator, &src, module));
+    let program = assert_parsed(form, n, parsed).program;
+    // At `AST_CAP`, as `check_depth` calls it: on this 2 GiB thread that is the copy with no
+    // backstop, the one that runs on the worker.
+    let (depth_bytes, ast) = measure(paint, || depth::check_ast_depth(&program, crate::AST_CAP));
+    let ast_depth = ast.expect("within the cap");
     let (semantic_bytes, built) = measure(paint, || {
         oxc_semantic::SemanticBuilder::new_compiler().build(&program)
     });
@@ -145,14 +208,27 @@ fn per(delta_bytes: usize, delta_units: u32) -> String {
 /// Stack growth from n1 to n2 that is noise, not a slope (one page).
 const FLAT: usize = 4 << 10;
 
-/// Parse stack one pre-scan unit may use: its share of the worker stack, keeping the 1.5x
-/// margin of `stack.rs` (6,199 B debug, 2,615 B release).
-const PARSE_UNIT_BUDGET: usize =
-    crate::stack::WORKER_STACK_BYTES / 3 * 2 / crate::PRESCAN_CAP as usize;
+/// Parse stack one pre-scan unit may use: its share of the worker stack budget (`BUDGET_BYTES`,
+/// the red zone of layer 1 is not budget), keeping the 1.5x margin of `stack.rs` (7,559 B
+/// debug, 2,615 B release).
+const PARSE_UNIT_BUDGET: usize = crate::stack::BUDGET_BYTES / 3 * 2 / crate::PRESCAN_CAP as usize;
 
-/// Pass stack one AST level may use: its share of the worker stack, keeping the 1.5x margin of
-/// `stack.rs`, as `bytecodegen::stack_tests` does for codegen (7,749 B debug, 3,269 B release).
-const PASS_LEVEL_BUDGET: usize = crate::stack::WORKER_STACK_BYTES / 3 * 2 / crate::AST_CAP as usize;
+/// Pass stack one AST level may use: its share of the worker stack budget, keeping the 1.5x
+/// margin of `stack.rs`, as `bytecodegen::stack_tests` does for codegen (9,449 B debug, 3,269 B
+/// release).
+const PASS_LEVEL_BUDGET: usize = crate::stack::BUDGET_BYTES / 3 * 2 / crate::AST_CAP as usize;
+
+/// Pass stack one AST level may use in a walk after layer 2: the unit of the run-time budget
+/// check of layer 1 (`stack::PASS_PER_LEVEL`, the worst pass row of the 4 targets). It is below
+/// the budget share, so a walk that fits it fits the budget too.
+const PASS_UNIT: usize = crate::stack::PASS_PER_LEVEL;
+
+// T-BUDGET: each share is a share of `BUDGET_BYTES`, never of the red zone.
+const _: () = {
+    assert!(PARSE_UNIT_BUDGET * crate::PRESCAN_CAP as usize <= crate::stack::BUDGET_BYTES);
+    assert!(PASS_LEVEL_BUDGET * crate::AST_CAP as usize <= crate::stack::BUDGET_BYTES);
+    assert!(PASS_UNIT <= PASS_LEVEL_BUDGET);
+};
 
 /// `None` if `delta_bytes` over `delta_units` fits `budget` per unit; else what is wrong. No
 /// units means the stack must stay flat (the cap counts nothing for this form).
@@ -165,8 +241,43 @@ fn over_budget(delta_bytes: usize, delta_units: u32, budget: usize) -> Option<St
     }
 }
 
-/// Measures every form, and fails when a slope does not fit its share of the worker stack:
-/// parse per pre-scan unit, the depth pass, oxc_semantic and the scope pass per AST level.
+/// The 4 walks of the eval path after layer 2 (`eval::measure_walks`): the T-PASS columns.
+const WALKS: [&str; 4] = [
+    "Allowed::collect",
+    "Shim::patch",
+    "rewrite_completion",
+    "post_checks",
+];
+
+/// The text of a form at n levels.
+type Build = fn(usize) -> String;
+
+/// T-COVER: the class-B walks of oxc (the cover grammar of arrow heads and assignment targets),
+/// at n levels.
+const COVER: [(&str, Build); 4] = [
+    ("([[[a]]])=>0", |n| {
+        format!("({}a{})=>0", "[".repeat(n), "]".repeat(n))
+    }),
+    ("({a:{a:b}})=>0", |n| {
+        format!("({}b{})=>0", "{a:".repeat(n), "}".repeat(n))
+    }),
+    ("[[[a]]]=0", |n| {
+        format!("{}a{}=0", "[".repeat(n), "]".repeat(n))
+    }),
+    ("((((a))))=0", |n| {
+        format!("{}a{}=0", "(".repeat(n), ")".repeat(n))
+    }),
+];
+
+/// T-A: the final assert of `measure_forms` runs only when this is true.
+/// On since the debug unit of `stack.rs` comes from T-A on the 4 CI targets (H01 B2).
+const T_A_ASSERT: bool = true;
+
+/// Measures every form, and fails when a slope does not fit its share of the worker stack or
+/// its unit: parse per pre-scan unit (the whole worker parse call, [`worker_parse`]); a regex
+/// row per group, against the unit of the regex budget check (`stack::REGEX_PER_GROUP`); the
+/// depth pass, oxc_semantic, the scope pass and the 4 walks of the eval path per AST level,
+/// against the unit of the run-time budget check (`stack::PASS_PER_LEVEL`).
 #[test]
 #[ignore = "measurement; run on demand with --ignored --nocapture"]
 fn measure_forms() {
@@ -176,10 +287,17 @@ fn measure_forms() {
     } else {
         "release"
     };
-    let (out, over) = std::thread::Builder::new()
+    let (out, over, worst, regex_worst, eval_out, eval_over, eval_worst, cover_out) =
+        std::thread::Builder::new()
         .stack_size(2 << 30)
         .spawn(move || {
+            // Layer 1: this thread's limit, as a worker has one (l1.rs).
+            let _limit = crate::l1::LimitScope::of(2 << 30);
             let mut over = Vec::new();
+            // T-A: the worst parse slope per pre-scan unit, rounded up to a whole byte.
+            let mut worst: Option<(usize, &'static str)> = None;
+            // The worst regex row, per group.
+            let mut regex_worst: Option<(usize, &'static str)> = None;
             let mut out = String::new();
             writeln!(
                 out,
@@ -193,6 +311,11 @@ fn measure_forms() {
             )
             .unwrap();
             writeln!(out, "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|").unwrap();
+            let mut eval_out = String::new();
+            writeln!(eval_out, "| form | {} B/AST |\n|---|---|---|---|---|", WALKS.join(" B/AST | "))
+                .unwrap();
+            let mut eval_over = Vec::new();
+            let mut eval_worst: [Option<(usize, &'static str)>; 4] = [None; 4];
             for form in FORMS {
                 let paint = 384 << 20;
                 let a = sample(form, n1, paint);
@@ -200,6 +323,28 @@ fn measure_forms() {
                 let de = b.estimate - a.estimate;
                 let dast = b.ast_depth - a.ast_depth;
                 let dn = u32::try_from(n2 - n1).unwrap();
+                if de > 0 {
+                    let slope = b.parse.saturating_sub(a.parse).div_ceil(de as usize);
+                    if worst.is_none_or(|(w, _)| slope > w) {
+                        worst = Some((slope, form.name));
+                    }
+                }
+                // A regex row: n is the group or class level, the unit of the regex budget
+                // check of layer 1 (`stack::REGEX_PER_GROUP`, the worst of the 4 targets). Whole
+                // bytes (the floor), as `over_budget`: never above the "parse B/n" column.
+                if form.name.starts_with("regex-") {
+                    let group = b.parse.saturating_sub(a.parse) / dn as usize;
+                    if regex_worst.is_none_or(|(w, _)| group > w) {
+                        regex_worst = Some((group, form.name));
+                    }
+                    if group > crate::stack::REGEX_PER_GROUP {
+                        over.push(format!(
+                            "{} parse: {group} B/group > REGEX_PER_GROUP {}",
+                            form.name,
+                            crate::stack::REGEX_PER_GROUP
+                        ));
+                    }
+                }
                 // Base = the stack at n2 minus the slope times the units at n2.
                 let base = |at_b: usize, at_a: usize, units_b: u32, units_a: u32| -> i64 {
                     let du = i64::from(units_b) - i64::from(units_a);
@@ -230,7 +375,7 @@ fn measure_forms() {
                 )
                 .unwrap();
                 let pass = |at_b: usize, at_a: usize| {
-                    over_budget(at_b.saturating_sub(at_a), dast, PASS_LEVEL_BUDGET)
+                    over_budget(at_b.saturating_sub(at_a), dast, PASS_UNIT)
                 };
                 for (phase, problem) in [
                     (
@@ -246,18 +391,111 @@ fn measure_forms() {
                         over.push(format!("{} {phase}: {problem}", form.name));
                     }
                 }
+                // T-PASS columns: the 4 walks of the eval path per AST level.
+                if !form.module {
+                    let walks = |n: usize| {
+                        // A lone surrogate (shim text), so that `Shim::patch` walks.
+                        let text = format!("\"\u{FDD0}d800\";\n{}", (form.build)(n));
+                        crate::eval::measure_walks(&text, &mut |f: &mut dyn FnMut()| {
+                            measure(paint, f).0
+                        })
+                    };
+                    match (walks(n1), walks(n2)) {
+                        (Some(wa), Some(wb)) => {
+                            let cols: Vec<String> =
+                                (0..4).map(|k| per(wb[k].saturating_sub(wa[k]), dast)).collect();
+                            writeln!(eval_out, "| {} | {} |", form.name, cols.join(" | "))
+                                .unwrap();
+                            for k in 0..4 {
+                                if let Some(problem) =
+                                    over_budget(wb[k].saturating_sub(wa[k]), dast, PASS_UNIT)
+                                {
+                                    eval_over.push(format!("{} {}: {problem}", form.name, WALKS[k]));
+                                }
+                                if dast > 0 {
+                                    let slope = wb[k].saturating_sub(wa[k]) / dast as usize;
+                                    if eval_worst[k].is_none_or(|(w, _)| slope > w) {
+                                        eval_worst[k] = Some((slope, form.name));
+                                    }
+                                }
+                            }
+                        }
+                        _ => writeln!(eval_out, "| {} | no eval code | | | |", form.name).unwrap(),
+                    }
+                }
             }
-            (out, over)
+            // T-COVER: the cover walks of oxc (class B sites) per level, in the whole parse.
+            let mut cover_out = String::new();
+            for (name, build) in COVER {
+                let bytes = |n: usize| {
+                    let src = build(n);
+                    let allocator = Allocator::default();
+                    let (used, parsed) = measure(384 << 20, || worker_parse(&allocator, &src, false));
+                    assert!(parsed.is_ok_and(|p| !p.diagnostics.has_errors()), "T-COVER {name}");
+                    used
+                };
+                let level = (bytes(n2).saturating_sub(bytes(n1))) / (n2 - n1);
+                writeln!(cover_out, "T-COVER {profile} {name}: {level} B per level (parse)").unwrap();
+            }
+            (
+                out,
+                over,
+                worst,
+                regex_worst,
+                eval_out,
+                eval_over,
+                eval_worst,
+                cover_out,
+            )
         })
         .unwrap()
         .join()
         .unwrap();
     println!("{out}");
-    assert!(
-        over.is_empty(),
-        "stack slopes above the worker stack share:\n{}",
-        over.join("\n")
+    let (w, name) = worst.expect("a form with a growing estimate");
+    println!(
+        "T-A worst {}-{} {profile}: {w} B per pre-scan unit (form {name}); budget {PARSE_UNIT_BUDGET} B",
+        std::env::consts::OS,
+        std::env::consts::ARCH
     );
+    let (w, name) = regex_worst.expect("a regex form");
+    println!(
+        "T-A regex worst {}-{} {profile}: {w} B per group (form {name}); REGEX_PER_GROUP {} B",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        crate::stack::REGEX_PER_GROUP
+    );
+    for line in &over {
+        println!("T-A over: {line}");
+    }
+    // T-PASS: the run-time budget check of layer 1 takes PASS_PER_LEVEL as the worst of these
+    // columns and the pass columns above.
+    println!("T-PASS eval walks per AST level:\n{eval_out}");
+    for (k, worst) in eval_worst.iter().enumerate() {
+        if let Some((w, name)) = worst {
+            println!(
+                "T-PASS worst {}-{} {profile}: {} {w} B per AST level (form {name}); unit {PASS_UNIT} B",
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                WALKS[k]
+            );
+        }
+    }
+    for line in &eval_over {
+        println!("T-PASS over: {line}");
+    }
+    print!("{cover_out}");
+    if T_A_ASSERT {
+        assert!(
+            over.is_empty() && eval_over.is_empty(),
+            "stack slopes above the worker stack share or the unit:\n{}",
+            over.iter()
+                .chain(&eval_over)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
 }
 
 /// Literal starts (regex, string, template) in oxc's AST.
@@ -901,5 +1139,98 @@ fn p4_lone_surrogate_eval_count() {
             "staging/sm/String/unicode-braced.js",
         ],
         "{review}"
+    );
+}
+
+/// T-D: the worker parse call of every form at the pre-scan cap (the largest n with estimate <=
+/// `PRESCAN_CAP`, the fit of `depth_tests::check_prescan_cap_form`) fits the worker stack
+/// budget (`BUDGET_BYTES`) with the 1.5x margin of `stack.rs`. The pre-scan lets such an input reach oxc, so this is the
+/// deepest parse the worker can run for the form. The measure is of the whole call of
+/// [`worker_parse`] (`regex_check::parse`: in debug both passes, then the regex literal check),
+/// as on the worker stack. Forms whose estimate does not grow have no pre-scan cap and are only
+/// listed.
+#[test]
+#[ignore = "measurement; run on demand with --ignored --nocapture"]
+fn parse_stack_at_the_cap() {
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let paint = crate::stack::WORKER_STACK_BYTES;
+    // T-BUDGET: the share of the budget, not of the reservation (RED is not budget).
+    let limit = crate::stack::BUDGET_BYTES / 3 * 2;
+    let (out, rows, flat) = std::thread::Builder::new()
+        .stack_size(2 << 30)
+        .spawn(move || {
+            // Layer 1: this thread's limit, as a worker has one (l1.rs).
+            let _limit = crate::l1::LimitScope::of(2 << 30);
+            let mut out = String::new();
+            let mut rows = Vec::new();
+            let mut flat = Vec::new();
+            writeln!(
+                out,
+                "| form | n | estimate | parse B | full |\n|---|---|---|---|---|"
+            )
+            .unwrap();
+            for form in FORMS {
+                let estimate =
+                    |n: usize| prescan::estimate((form.build)(n).as_bytes(), form.module).depth;
+                let (e10, e11, e17) = (estimate(10), estimate(11), estimate(17));
+                let ea = e11 - e10;
+                let eb = e10 - 10 * ea;
+                assert_eq!(
+                    e17,
+                    17 * ea + eb,
+                    "{}: the estimate is not linear",
+                    form.name
+                );
+                if ea == 0 {
+                    flat.push(form.name);
+                    continue;
+                }
+                let n = usize::try_from((crate::PRESCAN_CAP - eb) / ea).unwrap();
+                let src = (form.build)(n);
+                let e = prescan::estimate(src.as_bytes(), form.module).depth;
+                assert!(e <= crate::PRESCAN_CAP, "{} n {n}: estimate {e}", form.name);
+                let allocator = Allocator::default();
+                // The whole worker parse call (`worker_parse`: both debug passes and the
+                // regex literal check).
+                let (bytes, parsed, full) =
+                    measure_or_full(paint, || worker_parse(&allocator, &src, form.module));
+                assert_parsed(form, n, parsed);
+                writeln!(out, "| {} | {n} | {e} | {bytes} | {full} |", form.name).unwrap();
+                rows.push((form.name, n, e, bytes, full));
+            }
+            (out, rows, flat)
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    println!("{out}");
+    println!("no pre-scan cap (estimate does not grow): {flat:?}");
+    let &(name, _, _, worst, _) = rows
+        .iter()
+        .max_by_key(|row| row.3)
+        .expect("a form with a growing estimate");
+    println!(
+        "T-D worst {}-{} {profile}: {worst} B at the cap (form {name}); limit {limit} B",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    let over: Vec<String> = rows
+        .iter()
+        .filter(|row| row.4 || row.3 > limit)
+        .map(|&(name, n, e, bytes, full)| {
+            format!("{name} n {n} estimate {e}: {bytes} B (full {full}) > limit {limit} B")
+        })
+        .collect();
+    for line in &over {
+        println!("T-D over: {line}");
+    }
+    assert!(
+        over.is_empty(),
+        "parse stack at the pre-scan cap above BUDGET_BYTES / 1.5:\n{}",
+        over.join("\n")
     );
 }

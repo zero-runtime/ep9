@@ -105,7 +105,7 @@ gh workflow run ci.yml --ref <ref with this ci.yml> -f bench_base=<base sha> -f 
 ```text
 bench_base (full sha) ──┐                       per leg: linux-x64 (--branch-sim), linux-arm64
 bench_head (full sha;   ├─> checkout both trees ─> cargo build --release -p ep9_cli in each
- empty: the dispatched  │   (each with its own toolchain file, regress and icu4x forks and
+ empty: the dispatched  │   (each with its own toolchain file, regress, icu4x and oxc forks and
  commit)                │    its own target dir, bench/target-<side>), and the jitless build
                         │    of each: --no-default-features (bench/target-jitless-<side>);
                         │    then the head rebuild guard on the 2 head builds

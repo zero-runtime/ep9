@@ -1,0 +1,343 @@
+# T-HOLES (H01 layer 1): every class of the pre-scan hole hunt (297) and of the pre-scan
+# design check (21), one row each. The test tests/stack_holes.rs reads this file.
+# Columns (tab-separated): name family goal path prefix open mid close suffix n_abort hunt valid expect
+#   family  the hunt rule (1-18) or the design-check class (K1-K6) of an abort row; else control
+#   goal    script | strict | module
+#   path    compile | eval (compile_eval, direct, sloppy) | function (the body of Function) |
+#           function-params (the parameters of Function, body "")
+#   text    prefix + open x n + mid + close x n + suffix; "{i}" in open or close is the level
+#           index 0..n-1. Escapes: \n \r \t \\ \u{HEX}; no raw control or format byte.
+#   n_abort the smallest level count at which the hunt saw an abort; empty: only at 2,000,000
+#   hunt    the hunt result: ABORT, clean, runs, rc1 (a run-time error) or timing (slow, clean)
+#   valid   the text is a valid program in node 26.13.1 at n = 3 (eval, Function: the inner text)
+#   expect  the allowed results, ";"-separated cases of "kind|kind" or "kind|kind@n". A case
+#           without "@n" runs at the sizes of its test set; "@n" runs at exactly n (the hunt
+#           size of a class that ran only near the caps). Kinds: Ok, Syntax, Unsupported,
+#           Range(PreScan), Range(Ast), Range(Pass), Range(StackLimit).
+# The table is made by a script from the generators, and each expansion was compared with the
+# generator text byte for byte. Never change a row to make a test pass.
+# The last 3 rows (A21-*) are not hunt classes: review R2 A2-1, eval of a TS type-name chain
+# (oxc parses it in JS mode with a non-fatal error). Before the layer-2 walk gated these chains,
+# each one aborted at 4,000,000 levels (debug and release). They are controls: hunt clean is
+# the result with the gates, and they are written by hand (no generator).
+K0-control-if	control	script	compile		if(a)			;		clean	yes	Range(PreScan)
+K1a-await-top	1	script	compile		await 			x	419531	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+K1b-yield-top	1	script	compile		yield 			x	281875	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+K1c-async-concise-bracket	2	script	compile	async x=>[	await 			x]	419531	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+K1d-async-concise-paren	2	script	compile	async x=>(	await 			x)	419531	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+K2-semi-while	3	script	compile	;	while(a)			;	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+K3-asi-block-after-obj	4	script	compile	x={}\n{	if(a)			;}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+K4-escaped-if	9	script	compile		\\u0069f(a)			;	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A1-await-sloppy-fn	1	script	compile	function f(){	await 			x}	419531	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A1-await-class-field	1	script	compile	class A{x=	await 			x}	419531	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A1-await-arrow-block-in-async	1	script	compile	async function f(){()=>{	await 			x}}	419531	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A1-await-async-concise-call	2	script	compile	async x=>f(	await 			x)	419531	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A1-await-async-concise-tmpl	2	script	compile	async x=>`${	await 			x}`	419531	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A1-yield-arrow-block-in-gen	1	script	compile	function*g(){()=>{	yield 			x}}	281875	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A1-yield-sloppy-fn	1	script	compile	function f(){	yield 			x}	281875	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A1-await-module-ok	control	module	compile		await 			x		clean	yes	Range(PreScan)
+A1-yield-gen-ok	control	script	compile	function*g(){	yield 			x}		clean	yes	Range(PreScan)
+A1-yield-star-gen-ok	control	script	compile	function*g(){	yield* 			x}		clean	yes	Range(PreScan)
+A1-await-strict-top	1	strict	compile		await 			x	419531	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A2-dowhile-then-while	3	script	compile	do;while(a)	while(a)			;	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A2-block-while	3	script	compile	{}	while(a)			;	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A2-asi-while	3	script	compile	x\n	while(a)			;	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A2-if-else-while-ok	control	script	compile	if(a);else 	while(a)			;		clean	yes	Range(PreScan)
+A3-fnexpr-asi-block	4	script	compile	x=function(){}\n{	if(a)			;}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A3-classexpr-asi-block	4	script	compile	x=class{}\n{	if(a)			;}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A3-arrow-asi-block	4	script	compile	x=>{}\n{	if(a)			;}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A3-debugger-asi-block	5	script	compile	debugger\n{	if(a)			;}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A3-break-asi-block	5	script	compile	for(;;){break\n{	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A3-continue-asi-block	5	script	compile	for(;;){continue\n{	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A3-extends-object-method	6	script	compile	class A extends {}{m(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A3-extends-fnexpr-method	6	script	compile	class A extends function(){}{m(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A3-extends-class-static	6	script	compile	class A extends class{}{static{	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A3-extends-class-method-ok	control	script	compile	class A extends class{}{m(){	if(a)			;}}		clean	yes	Range(PreScan)
+A3-label-in-misread-block	4	script	compile	x={}\n{	a{i}:			;}	209375	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A3-typeof-in-misread-block	4	script	compile	x={}\n{	typeof 			a}	1043750	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+A3-return-asi-block-ok	control	script	compile	function f(){return\n{	if(a)			;}}		clean	yes	Range(PreScan)
+A4-escaped-if-braced	9	script	compile		\\u{69}f(a)			;	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A4-escaped-typeof	9	script	compile		\\u0074ypeof 			x	1043750	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A4-escaped-new	9	script	compile		\\u006eew 			x	446093	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A4-escaped-while	9	script	compile		\\u0077hile(a)			;	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A4-escaped-else-chain	9	script	compile	if(a);	\\u0065lse if(a);				313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A4-escaped-function-body	9	script	compile	x=\\u0066unction(){	if(a)			;}	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A4-escaped-class-static	9	script	compile	\\u0063lass A{static{	if(a)			;}}	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+A4-escaped-typeof-regex-desync	9	script	compile	\\u0074ypeof /"/;	if(a)			;	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+D1-let-division	12	script	compile	var let=1,a=0,x;x=let/1;	if(a)			;1/1	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+D2-of-division-for-head	13	script	compile	var of=1,a=0,x;for(x=of/1;;)break;	if(a)			;1/1	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+D3-yield-ident-concise-arrow-in-gen	14	script	compile	function*g(){x=>yield/1;	if(a)			;1/1}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+D4-await-ident-concise-arrow-in-async	14	script	compile	async function f(){x=>await/1;	if(a)			;1/1}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+D5-regex-groups-after-misread-block	17	script	compile	x={}\n{}\n/"	(		)	"/	136875	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+D6-regex-groups-control	control	script	compile	/	(		)	/		clean	yes	Range(PreScan)
+D7-regex-vclass-control	control	script	compile	/	[		]	/v		clean	yes	Range(PreScan)
+D8-html-open-comment	control	script	compile	x=1<!--	if(a)			;		runs	yes	Ok
+D9-html-close-first-line	control	script	compile	-->	if(a)			;		runs	yes	Ok
+D10-html-close-after-comment	control	script	compile	a=1\n/*\n*/-->	if(a)			;		runs	yes	Ok
+D11-template-hides-ok	control	script	compile	`	if(a)			`		runs	yes	Ok
+D12-let-asi-desync	12	script	compile	var let=1,a=0,x\nlet\n/1;	if(a)			;1/1	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+U1-nel-before-if	10	script	compile		\u{85}if(a)			;	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+U2-mvs-before-if	control	script	compile		\u{180E}if(a)			;		clean	no	Syntax
+U3-zwsp-before-if	10	script	compile		\u{200B}if(a)			;	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+U4-bom-before-if-ok	control	script	compile		\u{FEFF}if(a)			;		clean	yes	Range(PreScan)
+U5-euro-before-if	control	script	compile		\u{20AC}if(a)			;		clean	no	Syntax
+U6-hash-if	control	script	compile		#if(a)			;		clean	no	Syntax
+U7-backslash-if	control	script	compile		\\if(a)			;		clean	no	Syntax
+U8-ls-between-ok	control	script	compile		if(a)\u{2028}			;		clean	yes	Range(PreScan)
+U9-nbsp-between-ok	control	script	compile		if\u{A0}(a)			;		clean	yes	Range(PreScan)
+U10-escaped-ident-label-ok	control	script	compile		\\u0061{i}:			;		clean	yes	Range(PreScan)
+T1-pure-member	control	script	compile	/*@__PURE__*/a	.a					clean	yes	Range(Ast)|Range(Pass)
+T2-pure-call-member	control	script	compile	/*@__PURE__*/a()	.a					clean	yes	Range(Ast)|Range(Pass)
+T3-pure-hash-member	control	script	compile	/*#__PURE__*/a	.a					clean	yes	Range(Ast)|Range(Pass)
+T4-pure-optional-chain	control	script	compile	/*@__PURE__*/a	?.a					clean	yes	Range(Ast)|Range(Pass)
+T5-pure-computed	control	script	compile	/*@__PURE__*/a	[0]					clean	yes	Range(Ast)|Range(Pass)
+T6-pure-new-member	control	script	compile	/*@__PURE__*/new a	.a					clean	yes	Range(Ast)|Range(Pass)
+T7-pure-paren	control	script	compile	/*@__PURE__*/(a	.a			)		clean	yes	Range(Ast)|Range(Pass)
+T8-member-chain-ok	control	script	compile	a	.a					clean	yes	Range(Ast)|Range(Pass)
+T9-call-chain-ok	control	script	compile	a	()					clean	yes	Range(Ast)|Range(Pass)
+T10-member-assign	control	script	compile	a	.a			=0		clean	yes	Range(Ast)|Range(Pass)
+T11-member-in-array-pattern	control	script	compile	[a	.a			]=0		clean	yes	Range(Ast)|Range(Pass)
+T12-member-for-in	control	script	compile	for(a	.a			 in b);		clean	yes	Range(Ast)|Range(Pass)
+T13-member-update	control	script	compile	a	.a			++		clean	yes	Range(Ast)|Range(Pass)
+T14-binary-left-ok	control	script	compile	1	+1					clean	yes	Range(Ast)|Range(Pass)
+T15-tagged-template-chain-ok	control	script	compile	a	``					clean	yes	Range(Ast)|Range(Pass)
+T16-optional-chain-ok	control	script	compile	a	?.a					clean	yes	Range(Ast)|Range(Pass)
+T17-comma-ok	control	script	compile	a	,a					rc1	yes	Ok
+T18-nsc-pure-fn	control	script	compile	/*@__NO_SIDE_EFFECTS__*/function f(){	if(a)			;}		clean	yes	Range(PreScan)
+T19-pure-member-assign-rhs	control	script	compile	x=/*@__PURE__*/a	.a					clean	yes	Range(Ast)|Range(Pass)
+T20-pure-call-chain	control	script	compile	/*@__PURE__*/a	()					clean	yes	Range(Ast)|Range(Pass)
+E1-assign-chain	control	script	compile		a=			1		clean	yes	Range(PreScan)
+E2-cond-right	control	script	compile		a?b:			c		clean	yes	Range(PreScan)
+E3-cond-left	control	script	compile		a?	b	:c			clean	yes	Range(PreScan)
+E4-bang	control	script	compile		!			a		clean	yes	Range(PreScan)
+E5-minus	control	script	compile		- 			a		clean	yes	Range(PreScan)
+E6-tilde	control	script	compile		~			a		clean	yes	Range(PreScan)
+E7-typeof	control	script	compile		typeof 			a		clean	yes	Range(PreScan)
+E8-new	control	script	compile		new 			a		clean	yes	Range(PreScan)
+E9-exp	control	script	compile		a**			a		clean	yes	Range(PreScan)
+E10-arrow	control	script	compile		a=>			a		clean	yes	Range(PreScan)
+E11-async-arrow	control	script	compile		async a=>			a		clean	yes	Range(PreScan)
+E12-preinc	control	script	compile		++			a		clean	no	Range(PreScan)
+E13-class-extends	control	script	compile	x=	class extends 	a	{}			clean	yes	Range(PreScan)
+E14-private-in	control	script	compile	class C{#a;m(){	#a in 			this}}		clean	no	Syntax
+E15-decorators	control	script	compile		@a 			class A{}		clean	no	Unsupported
+E16-op-assign-chain	control	script	compile		a??=			1		clean	yes	Range(PreScan)
+E17-binary-mixed-prec	control	script	compile	a	||a&&a|a^a&a==a<a<<a+a*a					clean	yes	Range(Ast)|Range(Pass)
+E18-delete-void	control	script	compile		delete void 			a		clean	yes	Range(PreScan)
+E19-minus-after-escaped-kw	control	script	compile	\\u0074ypeof	 -			a		clean	no	Range(PreScan)
+E20-spread-paren	control	script	compile		f(...	a	)			clean	yes	Range(PreScan)
+S1-else-if	control	script	compile	if(a);	else if(a);					clean	yes	Range(PreScan)
+S2-labels	control	script	compile		a{i}:			;		clean	yes	Range(PreScan)
+S3-do	control	script	compile		do 	;	while(a);			clean	yes	Range(PreScan)
+S4-with	control	script	compile		with(a)			;		clean	yes	Range(PreScan)
+S5-for	control	script	compile		for(;;)			;		clean	yes	Range(PreScan)
+S6-for-of	control	script	compile		for(a of b)			;		clean	yes	Range(PreScan)
+S7-label-let	control	script	compile		let:			;		clean	no	Range(PreScan)
+S8-label-yield	control	script	compile		yield:			;		clean	no	Range(PreScan)
+S9-for-await	control	script	compile	async function f(){	for await(a of b)			;}		clean	yes	Range(PreScan)
+S10-blocks	control	script	compile		{		}			clean	yes	Range(PreScan)
+S11-if-else-block	control	script	compile	if(a){}	else if(a){}					clean	yes	Range(PreScan)
+S12-if-asi	control	script	compile		if(a)x\n					rc1	yes	Ok
+M1-kwmethod-if-after-field	7	script	compile	class A{x=1\nif(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+M1-kwmethod-class-after-field	7	script	compile	class A{x=1\nclass(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+M1-kwmethod-catch-after-field	7	script	compile	class A{x=1\ncatch(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+M1-kwmethod-while-after-field	7	script	compile	class A{x=1\nwhile(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+M1-method-as-after-field	8	script	compile	class A{x=1\nas(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+M1-method-satisfies-after-field	8	script	compile	class A{x=1\nsatisfies(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+M1-method-plain-after-field-ok	control	script	compile	class A{x=1\nm(){	if(a)			;}}		clean	yes	Range(PreScan)
+M1-let-ident-asi-block	5	script	compile	var let;x=let\n{	if(a)			;}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+M1-fndecl-while	3	script	compile	function f(){}	while(a)			;	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+M1-export-default-obj-asi-block	4	module	compile	export default {}\n{	if(a)			;}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R2-async-newline-arrow-desync	14	script	compile	var async;async\nx=>await/1;	if(a)			;1/1	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R2-stale-concise-async-desync	14	script	compile	var a;a?async x=>x:await/1;	if(a)			;1/1	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R2-nested-arrow-in-async-arrow-desync	14	script	compile	async x=>y=>{await/1;	if(a)			;1/1}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R2-class-field-await-in-async-desync	15	script	compile	async function f(){class A{x=await/1;m(){	if(a)			;1/1}}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R2-module-await-sloppy-fn	1	module	compile	function f(){	await 			x}	419531	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+R2-eval-await	1	script	eval		await 			x	419531	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+R2-eval-while	3	script	eval	;	while(a)			;	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R2-function-ctor-while	3	script	function	;	while(a)			;	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R2-eval-control-if	control	script	eval		if(a)			;		clean	yes	Range(PreScan)
+R2-escaped-kw-regex-groups	9	script	compile	\\u0074ypeof /"	(		)	"/	136875	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+R2-ls-html-close-ok	control	script	compile	a=1\u{2028}-->	if(a)			;		runs	yes	Ok
+R2-nel-typeof	10	script	compile		typeof\u{85}			x	1043750	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+R2-zwsp-new	10	script	compile		new\u{200B}			x	446093	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+R2-bad-braced-escape-hides	11	script	compile	x=a\\u{;	if(a)			;}	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+R2-number-eats-if	control	script	compile		1if(a)			;		clean	no	Syntax
+R2-nel-ws-ok-control	control	script	compile		if(a)\u{2000}			;		clean	yes	Range(PreScan)
+X1-arrow-head-defaults	control	script	compile		(a=	1	)			clean	yes	Ok@5000;Range(Ast)|Range(Pass)@10000
+X2-parens	control	script	compile		(	a	)			rc1	yes	Ok@5000;Ok@10000
+X3-async-call	control	script	compile		async(	a	)			rc1	yes	Ok@5000;Ok@10000
+X4-paren-array	control	script	compile		([	a	])			clean	yes	Ok@5000;Range(Ast)|Range(Pass)@10000
+X5-paren-object	control	script	compile		({a:	a	})			clean	yes	Ok@5000;Range(Ast)|Range(Pass)@10000
+X6-arrow-in-paren	control	script	compile		(a=>(	a	))			clean	yes	Ok@5000;Range(PreScan)@10000
+X7-arrow-head-defaults-arrow	control	script	compile		(a=	1	)=>1			clean	yes	Ok@5000;Range(Ast)|Range(Pass)@10000
+X8-paren-regex-heads	control	script	compile		(a=/a/,	1	)			clean	yes	Ok@5000;Range(Ast)|Range(Pass)@10000
+X9-async-arrow-heads	control	script	compile		async(a=	1	)			timing	yes	Ok@2000;Ok@4000;Ok@5000;Ok@8000;Range(Ast)|Range(Pass)@10000;Range(Ast)|Range(Pass)@12400
+X10-cond-arrow-heads	control	script	compile		a?(b)=>(	c	):d			clean	yes	Ok@5000;Range(PreScan)@10000
+D1-control-ident-division	control	script	compile	var b=1,a=0,x;x=b/1;	if(a)			;1/1		clean	yes	Range(PreScan)
+X11-async-call-comma	control	script	compile		async(a,	1	)			clean	yes	Ok@5000;Ok@10000;Range(Ast)|Range(Pass)@20000
+X12-async-call-spread	control	script	compile		async(...	a	)			clean	yes	Syntax@5000;Syntax@10000;Syntax@20000
+X13-async-call-array	control	script	compile		async([	a	])			clean	yes	Ok@5000;Range(Ast)|Range(Pass)@10000;Range(PreScan)@20000
+X14-async-call-object	control	script	compile		async({a:	a	})			clean	yes	Ok@5000;Range(Ast)|Range(Pass)@10000;Range(PreScan)@20000
+X15-async-call-default-arrow	control	script	compile		async(a=	1	)=>1			clean	yes	Ok@5000;Range(Ast)|Range(Pass)@10000;Range(PreScan)@20000
+X16-paren-comma	control	script	compile		(a,	1	)			clean	yes	Ok@5000;Range(Ast)|Range(Pass)@10000;Range(Ast)|Range(Pass)@20000
+P1-td-parens	18	script	compile	x={}\n{}\n/`/;	(	a	)	;/`/	177656	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P2-td-arrays	18	script	compile	x={}\n{}\n/`/;	[	a	]	;/`/	218437	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P3-td-objects	18	script	compile	x={}\n{}\n/`/;x=	{a:	a	}	;/`/	136875	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P4-td-bang	18	script	compile	x={}\n{}\n/`/;	!			a;/`/	1043750	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P5-td-preinc	18	script	compile	x={}\n{}\n/`/;	++			a;/`/	1043750	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+P6-td-exp	18	script	compile	x={}\n{}\n/`/;a	**a			;/`/	392968	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P7-td-new	18	script	compile	x={}\n{}\n/`/;	new 			a;/`/	446093	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P8-td-private-in	18	script	compile	class C{#a;m(){x={}\n{}\n/`/;	(#a in 	this	)	;/`/}}	123281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P9-td-binding-pattern	18	script	compile	x={}\n{}\n/`/;var 	[	a	]	=0;/`/	446093	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P10-td-assign-target-cover	18	script	compile	x={}\n{}\n/`/;	[	a	]	=0;/`/	218437	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P11-td-paren-target-cover	18	script	compile	x={}\n{}\n/`/;	(	a	)	=0;/`/	177656	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P12-td-arrow-head-cover	18	script	compile	x={}\n{}\n/`/;(	[	a	]	)=>0;/`/	446093	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P13-td-assign	18	script	compile	x={}\n{}\n/`/;a	=a			;/`/	281875	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P14-td-cond	18	script	compile	x={}\n{}\n/`/;a	?a:a			;/`/	281875	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P15-td-blocks	18	script	compile	x={}\n{}\n/`/;	{		}	;/`/	200312	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P16-td-unary-typeof	18	script	compile	x={}\n{}\n/`/;	typeof 			a;/`/	1043750	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P17-td-class-extends	18	script	compile	x={}\n{}\n/`/;x=	class extends 	a	{}	;/`/	127812	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+P18-td-regex-groups	18	script	compile	x={}\n{}\n/`/;/	(		)	/;/`/	136875	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+Q1-static-block-await-in-async-desync	control	script	compile	async function f(){class A{static{await/1;	if(a)			;1/1}}}		clean	no	Syntax
+Q2-class-field-yield-in-gen-desync	15	script	compile	function*g(){class A{x=yield/1;m(){	if(a)			;1/1}}}	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+Q3-static-block-yield-in-gen-desync	15	script	compile	function*g(){class A{static{yield/1;	if(a)			;1/1}}}	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+Q4-regex-backslash-newline	control	script	compile	x=/a\\\n	if(a)			;1/		clean	no	Syntax
+Q5-template-after-html-close	control	script	compile	`\n`-->	if(a)			;		clean	no	Range(PreScan)
+Q6-nul-before-if-control	control	script	compile		\u{0}if(a)			;		clean	no	Range(PreScan)
+Q7-strict-asi-block	4	strict	compile	x={}\n{	if(a)			;}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+F1-try	control	script	compile		try{		}			clean	no	Syntax@24900
+F2-try-catch	control	script	compile		try{}catch{		}			clean	yes	Range(Ast)|Range(Pass)@24900
+F3-try-finally	control	script	compile		try{}finally{		}			clean	yes	Range(Ast)|Range(Pass)@24900
+F4-class-static-block	control	script	compile		class A{static{		}}			clean	yes	Range(Ast)|Range(Pass)@12450
+F5-async-fn-body	control	script	compile		async function f(){		}			clean	yes	Range(Ast)|Range(Pass)@24900
+F6-gen-fn-body	control	script	compile		function*g(){		}			clean	yes	Range(Ast)|Range(Pass)@24900
+F7-async-gen-body	control	script	compile		async function*g(){		}			clean	yes	Range(Ast)|Range(Pass)@24900
+F8-object-method	control	script	compile		x={m(){		}}			clean	yes	Range(Ast)|Range(Pass)@8300
+F9-class-method	control	script	compile		class A{m(){		}}			clean	yes	Range(Ast)|Range(Pass)@12450
+F10-switch-case	control	script	compile		switch(a){case 0:		}			clean	yes	Range(Ast)|Range(Pass)@24900
+F11-with-block	control	script	compile		with(a){		}			clean	yes	Range(Ast)|Range(Pass)@12450
+F12-for-block	control	script	compile		for(;;){		}			clean	yes	Range(Ast)|Range(Pass)@12450
+F13-if-block	control	script	compile		if(a){		}			clean	yes	Range(Ast)|Range(Pass)@12450
+F14-arrow-block	control	script	compile		x=>{		}			clean	yes	Range(Ast)|Range(Pass)@12450
+F15-async-arrow-block	control	script	compile		async()=>{		}			clean	yes	Range(Ast)|Range(Pass)@12450
+F16-paren-fn-expr	control	script	compile		(function(){		})			clean	yes	Range(Ast)|Range(Pass)@12450
+F17-template-subst	control	script	compile		`${		}`			clean	no	Syntax@24900
+F18-label-block	control	script	compile		l{i}:{		}			clean	yes	Range(Ast)|Range(Pass)@12450
+F19-do-block	control	script	compile		do{		}while(a)			clean	yes	Range(Ast)|Range(Pass)@12450
+F20-blocks	control	script	compile		{		}			clean	yes	Range(Ast)|Range(Pass)@24900
+F21-arrays	control	script	compile		[		]			clean	yes	Range(Ast)|Range(Pass)@24900
+F22-parens	control	script	compile		(	a	)			clean	yes	Range(Ast)|Range(Pass)@24900
+F23-class-extends	control	script	compile	x=	class extends 	a	{}			rc1	yes	Ok@12450
+F24-regex-groups	control	script	compile	/	(		)	/		runs	yes	Ok@6225
+F25-async-arrow-chain	control	script	compile		async a=>			a		clean	yes	Range(Ast)|Range(Pass)@24900
+F26-yield-chain	control	script	compile	function*g(){	yield 			a}		clean	yes	Range(Ast)|Range(Pass)@24900
+F27-await-chain	control	script	compile	async function f(){	await 			a}		clean	yes	Range(Ast)|Range(Pass)@24900
+F28-typeof-chain	control	script	compile		typeof 			a		clean	yes	Range(Ast)|Range(Pass)@24900
+F29-new-chain	control	script	compile		new 			a		clean	yes	Range(Ast)|Range(Pass)@24900
+F30-cond-chain	control	script	compile		a?b:			c		clean	yes	Range(Ast)|Range(Pass)@24900
+F31-fn-param-default	control	script	compile	x=	function(a=		){}			clean	no	Syntax@12450
+F32-object-values	control	script	compile	x=	{a:	a	}			clean	yes	Range(Ast)|Range(Pass)@24900
+F33-array-spread	control	script	compile		[...	a	]			clean	yes	Range(Ast)|Range(Pass)@24900
+F34-call-spread	control	script	compile		f(...	a	)			clean	yes	Range(Ast)|Range(Pass)@24900
+F35-class-computed-key	control	script	compile	x=	class{[	a	]}			clean	yes	Range(Ast)|Range(Pass)@12450
+F36-class-field-class	control	script	compile	x=	class{x=	a	}			clean	yes	Range(Ast)|Range(Pass)@12450
+F37-getter-body	control	script	compile	x=	{get a(){return{get a(){		}}}}			clean	no	Syntax@6225
+F38-else-if	control	script	compile	if(a);	else if(a);					clean	yes	Range(Ast)|Range(Pass)@24900
+F39-for-in	control	script	compile		for(a in b)			;		clean	yes	Range(Ast)|Range(Pass)@24900
+F40-while	control	script	compile		while(a)			;		clean	yes	Range(Ast)|Range(Pass)@24900
+F41-do-chain	control	script	compile		do 	;	while(a);			clean	yes	Range(Ast)|Range(Pass)@24900
+F42-labels	control	script	compile		l{i}:			;		clean	yes	Range(Ast)|Range(Pass)@24900
+F43-bang	control	script	compile		!			a		clean	yes	Range(Ast)|Range(Pass)@24900
+F44-async-call	control	script	compile		async(	a	)			clean	yes	Range(Ast)|Range(Pass)@24900
+F45-import-call	control	script	compile		import(	a	)			clean	yes	Range(Ast)|Range(Pass)@24900
+F46-computed-member	control	script	compile	a	[a		]			clean	yes	Range(Ast)|Range(Pass)@24900
+F47-call-args	control	script	compile		a(	a	)			clean	yes	Range(Ast)|Range(Pass)@24900
+F48-tagged-template	control	script	compile	a	`${a		}`			clean	yes	Range(Ast)|Range(Pass)@24900
+F49-array-pattern-assign	control	script	compile		[	a	]	=0		clean	yes	Range(Ast)|Range(Pass)@24900
+F50-object-pattern-assign	control	script	compile	(	{a:	a	}	=0)		clean	yes	Range(Ast)|Range(Pass)@24900
+F51-var-binding-pattern	control	script	compile	var 	[	a	]	=0		clean	yes	Range(Ast)|Range(Pass)@24900
+F52-param-binding-pattern	control	script	compile	function f(	[	a	]	){}		clean	yes	Range(Ast)|Range(Pass)@24900
+F53-catch-param-pattern	control	script	compile	try{}catch(	[	a	]	){}		clean	yes	Range(Ast)|Range(Pass)@24900
+F54-arrow-param-pattern	control	script	compile	(	[	a	]	)=>0		clean	yes	Range(Ast)|Range(Pass)@24900
+F55-exp-chain	control	script	compile		a**			a		clean	yes	Range(Ast)|Range(Pass)@24900
+F56-assign-chain	control	script	compile		a=			a		clean	yes	Range(Ast)|Range(Pass)@24900
+F57-arrow-chain	control	script	compile		a=>			a		clean	yes	Range(Ast)|Range(Pass)@24900
+F58-preinc	control	script	compile		++			a		clean	no	Syntax@24900
+F59-with	control	script	compile		with(a)			;		clean	yes	Range(Ast)|Range(Pass)@24900
+F60-for-of	control	script	compile		for(a of b)			;		clean	yes	Range(Ast)|Range(Pass)@24900
+R4-regex-flags-bad-escape	control	script	compile	/a/\\u{;	if(a)			;}		clean	no	Syntax
+R4-private-name-bad-escape	11	script	compile	class A{#a\\u{;m(){	if(a)			;}}	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+R4-string-bad-escape-ok	control	script	compile	x="\\u{";	if(a)			;		clean	no	Range(PreScan)
+R4-concise-async-class-key	2	script	compile	async x=>class{[	await 			x](){}}	419531	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R4-cr-html-close-ok	control	script	compile	a=1\r-->	if(a)			;		runs	yes	Ok
+R4-unterminated-template-ok	control	script	compile	`	if(a)			;		clean	no	Syntax
+R4-unterminated-comment-ok	control	script	compile	/*	if(a)			;		clean	no	Syntax
+R4-extends-paren-object-ok	control	script	compile	class A extends ({}){m(){	if(a)			;}}		clean	yes	Range(PreScan)
+R4-extends-template-object-ok	control	script	compile	class A extends `${{}}`{m(){	if(a)			;}}		clean	yes	Range(PreScan)
+R4-extends-new-fnexpr	6	script	compile	class A extends new function(){}{m(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R4-fndecl-else-while-ok	control	script	compile	if(a)function f(){}else 	while(a)			;		clean	yes	Range(PreScan)
+R4-strict-yield-top	1	strict	compile		yield 			x	281875	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+X17-async-paren-default	control	script	compile		async((a=	1	))			clean	yes	Ok@2000;Ok@4000;Range(Ast)|Range(Pass)@8000
+X18-async-default-paren	control	script	compile		async(a=(b=	1	))			timing	yes	Ok@2000;Ok@4000;Range(PreScan)@8000
+X19-cond-async-default	control	script	compile		a?async(b=	1	):c			timing	yes	Ok@2000;Ok@4000;Range(Ast)|Range(Pass)@8000;Range(Ast)|Range(Pass)@8300
+R5-arrow-asi-regex-desync	16	script	compile	x=>{}\n/"/;	if(a)			;	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R5-async-arrow-asi-regex-desync	16	script	compile	async()=>{}\n/"/;	if(a)			;	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R5-arrow-asi-regex-groups	16	script	compile	x=>{}\n/"	(		)	"/	136875	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R5-escaped-static-block	9	script	compile	class A{st\\u0061tic{	if(a)			;}}	313281	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+R5-escaped-async-await	9	script	compile	\\u0061sync function f(){	await 			x}	419531	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+R5-binary-number-sign-ok	control	script	compile	0b1e-1;	if(a)			;		clean	no	Range(PreScan)
+R5-fnexpr-asi-division-ok	control	script	compile	x=function(){}\n/"/;	if(a)			;/"/		clean	no	Syntax
+R5-kwmethod-get-after-field-ok	control	script	compile	class A{x=1\nget(){	if(a)			;}}		clean	yes	Range(PreScan)
+R5-kwmethod-static-after-field-ok	control	script	compile	class A{x=1\nstatic(){	if(a)			;}}		clean	yes	Range(PreScan)
+R5-kwmethod-function-after-field-ok	control	script	compile	class A{x=1\nfunction(){	if(a)			;}}		clean	yes	Range(PreScan)
+R5-kwmethod-for-after-field	7	script	compile	class A{x=1\nfor(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R5-kwmethod-do-after-field-ok	control	script	compile	class A{x=1\ndo(){	if(a)			;}}		clean	yes	Range(PreScan)
+R6-ident-escaped-quote	control	script	compile	a\\"x";	if(a)			;		clean	no	Syntax
+R6-ident-bad-u	control	script	compile	a\\uZZ;	if(a)			;		clean	no	Range(PreScan)
+R6-arrow-asi-while	3	script	compile	x=>{}\n	while(a)			;	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R6-field-classexpr-kwmethod	7	script	compile	class A{x=class{}\nif(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R6-field-concise-async-kwmethod	7	script	compile	class A{x=async y=>y\nif(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R6-escaped-let-division-ok	control	script	compile	var a=0,x;x=l\\u0065t/1;	if(a)			;1/1		clean	yes	Range(PreScan)
+R6-yield-newline-block-ok	control	script	compile	function*g(){yield\n{	if(a)			;}}		clean	yes	Range(PreScan)
+R6-labels-after-arrow-asi-ok	control	script	compile	x=>{}\n	l{i}:			;		clean	yes	Range(PreScan)
+R6-getter-kw-in-object-ok	control	script	compile	x={get if(){	if(a)			;}}		clean	yes	Range(PreScan)
+R6-async-comment-newline-arrow	14	script	compile	var async;async/*\n*/x=>await/1;	if(a)			;1/1	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R6-module-html-open-ok	control	module	compile	x=1<!--	if(a)			;		clean	no	Range(PreScan)
+R7-regex-escaped-v-flag	control	script	compile	/	[		]	/\\u0076		clean	no	Syntax
+R7-field-static-name-kwmethod	7	script	compile	class A{static=1\nif(){	if(a)			;}}	313281	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+R7-string-method-after-field-ok	control	script	compile	class A{x=1\n'm'(){	if(a)			;}}		clean	yes	Range(PreScan)
+R7-private-method-after-field-ok	control	script	compile	class A{x=1\n#m(){	if(a)			;}}		clean	yes	Range(PreScan)
+R7-object-number-key-method-ok	control	script	compile	x={1(){	if(a)			;}}		clean	yes	Range(PreScan)
+R7-kwmethod-case-after-field-ok	control	script	compile	class A{x=1\ncase(){	if(a)			;}}		clean	yes	Range(PreScan)
+R7-async-kwmethod-after-field-ok	control	script	compile	class A{x=1\nasync if(){	if(a)			;}}		clean	yes	Range(PreScan)
+R7-eval-hashbang-ok	control	script	eval	#!x\n	if(a)			;		clean	yes	Range(PreScan)
+R7-escaped-debugger-block-ok	control	script	compile	\\u0064ebugger\n{	if(a)			;}		clean	no	Range(PreScan)
+R7-kwmethod-extends-after-field-ok	control	script	compile	class A{x=1\nextends(){	if(a)			;}}		clean	yes	Range(PreScan)
+R7-regex-dv-flags-ok	control	script	compile	/	[		]	/dv		clean	yes	Range(PreScan)
+R7-function-ctor-params-while-ok	control	script	function-params	;	while(a)			;		clean	no	Syntax
+R8-arrow-asi-vclass	16	script	compile	x=>{}\n/"	[		]	"/v	300000	ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+C0-if	control	script	compile		if(a)			;		clean	yes	Range(PreScan)
+H2-typeargs-bang	K2	script	compile	x as 	A<B!,	B	>,B		100000	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H3-typeparam-default	control	script	compile	x as 	<T=B,U=	T	>()=>T,V			clean	no	Syntax
+H4-gt-regex-bang	K3	script	compile	x as A<B>/	!			a/1		ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H4b-gt-regex-array	K3	script	compile	x as A<B>/	[	0	]	/1		ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H4c-gt-regex-typeof	K3	script	compile	x satisfies A<B>/	typeof 			a/1		ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H5-phantom-brace-paren	K4	script	compile	(x=a\\u{);	if(a)			;	400000	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H5b-phantom-brace-bracket	K4	script	compile	[a\\u{];	if(a)			;		ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H6-zwnj-assign	control	script	compile	x=	a\u{200C}b=			0		clean	yes	Range(PreScan)
+H7-var-comma-pattern	K5	script	compile	var a,{b}\n/"/;	if(a)			;		ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H7b-let-comma-pattern	K5	script	compile	let a,{b}\n/"/;	if(a)			;		ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H1-deco-heritage	control	script	compile	x=	@a @a class extends 	B	{}			clean	no	Range(PreScan)@800000
+H1b-deco-paren	control	script	compile	x=	@(a) @(a) class extends 	B	{}			clean	no	Range(PreScan)@800000
+H1c-deco-stmt	control	script	compile		@a @a class A extends 	B	{}			clean	no	Range(PreScan)@800000
+H1-deco-heritage-carried	K1	script	compile	x={}\n{}\n/`/;x=	@a @a class extends 	B	{}	;/`/	200000	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H1b-deco-paren-carried	K1	script	compile	x={}\n{}\n/`/;x=	@(a) @(a) class extends 	B	{}	;/`/	800000	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H1c-deco-stmt-carried	K1	script	compile	x={}\n{}\n/`/;	@a @a class A extends 	B	{}	;/`/	800000	ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H6-zwnj-assign-carried	K6	script	compile	x={}\n{}\n/`/;x=	a\u{200C}b=			0;/`/		ABORT	yes	Range(StackLimit)|Range(Ast)|Range(Pass)
+H2-typeargs-bang-carried	K2	script	compile	x={}\n{}\n/`/;x as 	A<B!,	B	>,B	;/`/		ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+H7-var-comma-pattern-carried	K5	script	compile	x={}\n{}\n/`/;var a,{b}\n/"/;	if(a)			;;/`/		ABORT	no	Range(StackLimit)|Range(Ast)|Range(Pass)|Syntax
+C1-carrier-flat	control	script	compile	x={}\n{}\n/`/;	a;			;/`/		clean	yes	Ok
+A21-eval-as-chain	control	script	eval	x as a	.a					clean	no	Syntax;Syntax@4000000
+A21-eval-satisfies-chain	control	script	eval	x satisfies a	.a					clean	no	Syntax;Syntax@4000000
+A21-eval-import-qualifier-chain	control	script	eval	x as import("m").a	.a					clean	no	Syntax;Syntax@4000000

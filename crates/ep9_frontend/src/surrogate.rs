@@ -45,12 +45,12 @@ use oxc_ast::ast::{
 };
 use oxc_ast_visit::VisitMut;
 use oxc_diagnostics::{Diagnostics, OxcDiagnostic};
-use oxc_parser::config::TokensParserConfig;
 use oxc_parser::{Kind, Parser, Token};
 use oxc_regular_expression::{LiteralParser, Options};
 use oxc_span::{SourceType, Span};
 
 use crate::bytecodegen::CodegenError;
+use crate::l1::L1Config;
 
 /// The escape of the shim text (a noncharacter: Unicode keeps it for internal use).
 pub(crate) const ESC: char = '\u{FDD0}';
@@ -339,6 +339,7 @@ impl Shim {
             taken: HashSet::new(),
             next: 0,
             error: None,
+            stack_stop: false,
         };
         // S5: the numbers that a value of the placeholder form holds, then the patch walk.
         if note {
@@ -346,6 +347,11 @@ impl Shim {
             patcher.note = false;
         }
         patcher.visit_program(program);
+        if patcher.stack_stop {
+            return Err(
+                crate::CompileError::Range(crate::RangeError::stack_limit(text, None)).into(),
+            );
+        }
         match patcher.error {
             Some(e) => Err(CodegenError::Internal(e)),
             None => Ok(()),
@@ -469,6 +475,8 @@ struct Patcher<'s, 'a, 't> {
     /// The number of the next placeholder (before the skip of `taken`).
     next: u64,
     error: Option<String>,
+    /// Layer 1: a reparse stopped at the stack limit.
+    stack_stop: bool,
 }
 
 impl<'a> Patcher<'_, 'a, '_> {
@@ -541,8 +549,9 @@ impl<'a> Patcher<'_, 'a, '_> {
     /// reads from it, copied into the program's arena.
     ///
     /// The parse is the script `(source)` with the front end's own parser configuration
-    /// (`TokensParserConfig`, as `regex_check::parse`): a second configuration would link a
-    /// second copy of the oxc parser (+337 KB, and more start-up work in every run).
+    /// (`L1Config<true>`, as `regex_check::parse`): a second configuration would link a
+    /// second copy of the oxc parser (+337 KB, and more start-up work in every run). A layer-1
+    /// stop sets `stack_stop`: `patch` then gives RangeError(StackLimit).
     fn reparse<R>(
         &mut self,
         source: &str,
@@ -551,8 +560,12 @@ impl<'a> Patcher<'_, 'a, '_> {
         let scratch = Allocator::default();
         let script = format!("({source})");
         let parsed = Parser::new(&scratch, &script, SourceType::script())
-            .with_config(TokensParserConfig)
+            .with_config(L1Config::<true>::for_this_thread())
             .parse();
+        if parsed.stack_limit_hit {
+            self.stack_stop = true;
+            return None;
+        }
         let expression = match parsed.program.body.first() {
             Some(Statement::ExpressionStatement(s)) if !parsed.diagnostics.has_errors() => {
                 match &s.expression {

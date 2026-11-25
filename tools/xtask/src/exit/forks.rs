@@ -1,11 +1,11 @@
-//! FORK-CHECKOUT-ATTEST: the fork line of an input. The regress and icu4x pins and patch sets
+//! FORK-CHECKOUT-ATTEST: the fork line of an input. The regress, icu4x and oxc pins and patch sets
 //! are tree paths, so the fresh-path checks prove which fork code a tree names; cargo builds the
 //! git-ignored checkouts. The one check of a checkout, `fork_attest` of `scripts/sync-lib.sh`
 //! (the `.ep9-stamp` and `pinned_tree` rule), prints a line that the producers keep:
 //!
 //! ```text
-//! regress=pinned icu4x=pinned     one <fork>=<state> per fork of FORKS, in that order;
-//!                                 state pinned, stale or absent
+//! regress=pinned icu4x=pinned oxc=pinned     one <fork>=<state> per fork of FORKS, in that
+//!                                            order; state pinned, stale or absent
 //! ```
 //!
 //! | Input | Field | Who writes it |
@@ -24,7 +24,7 @@ use super::git;
 
 /// The forks the engine builds from git-ignored checkouts (`tools/test262/runner_build.rs`
 /// `FORK_BUILT`, `tools/bench/cross/kernels.mjs` `FORKS`; a test checks both).
-pub(crate) const FORKS: [&str; 2] = ["regress", "icu4x"];
+pub(crate) const FORKS: [&str; 3] = ["regress", "icu4x", "oxc"];
 
 /// The text whose presence in `scripts/sync-lib.sh` says that the tree has the check.
 const MARK: &str = "fork_attest() {";
@@ -77,17 +77,24 @@ mod tests {
 
     #[test]
     fn only_every_fork_pinned_passes() {
-        assert_eq!(check(Some("regress=pinned icu4x=pinned"), "f"), Ok(()));
         assert_eq!(
-            check(Some("regress=stale icu4x=pinned"), "f"),
-            Err("the regress fork checkout was not its pin plus its patches (f: regress=stale icu4x=pinned)".into())
+            check(Some("regress=pinned icu4x=pinned oxc=pinned"), "f"),
+            Ok(())
         );
         assert_eq!(
-            check(Some("regress=pinned icu4x=absent"), "f").unwrap_err(),
-            "the icu4x fork checkout was not its pin plus its patches (f: regress=pinned icu4x=absent)"
+            check(Some("regress=stale icu4x=pinned oxc=pinned"), "f"),
+            Err("the regress fork checkout was not its pin plus its patches (f: regress=stale icu4x=pinned oxc=pinned)".into())
+        );
+        assert_eq!(
+            check(Some("regress=pinned icu4x=absent oxc=pinned"), "f").unwrap_err(),
+            "the icu4x fork checkout was not its pin plus its patches (f: regress=pinned icu4x=absent oxc=pinned)"
+        );
+        assert_eq!(
+            check(Some("regress=pinned icu4x=pinned oxc=stale"), "f").unwrap_err(),
+            "the oxc fork checkout was not its pin plus its patches (f: regress=pinned icu4x=pinned oxc=stale)"
         );
         assert!(
-            check(Some("regress=stale icu4x=stale"), "f")
+            check(Some("regress=stale icu4x=stale oxc=pinned"), "f")
                 .unwrap_err()
                 .starts_with("the regress and icu4x fork checkout")
         );
@@ -100,10 +107,11 @@ mod tests {
         }
         for other in [
             "regress=pinned",
-            "icu4x=pinned regress=pinned",
-            "regress=pinned icu4x=pinned tsrs=pinned",
-            "regress=ok icu4x=pinned",
-            "regress pinned icu4x pinned",
+            "regress=pinned icu4x=pinned",
+            "icu4x=pinned regress=pinned oxc=pinned",
+            "regress=pinned icu4x=pinned oxc=pinned tsrs=pinned",
+            "regress=ok icu4x=pinned oxc=pinned",
+            "regress pinned icu4x pinned oxc pinned",
         ] {
             assert!(
                 check(Some(other), "f")
@@ -128,7 +136,7 @@ mod tests {
         assert_eq!(names, FORKS);
         let km = std::fs::read_to_string(root.join("tools/bench/cross/kernels.mjs")).unwrap();
         assert!(
-            km.contains(r#"export const FORKS = ["regress", "icu4x"];"#),
+            km.contains(r#"export const FORKS = ["regress", "icu4x", "oxc"];"#),
             "kernels.mjs FORKS"
         );
         assert!(required(&root), "this tree has the shared check");

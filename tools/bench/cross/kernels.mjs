@@ -34,13 +34,14 @@
 //
 // The JSON keeps what m1-exit needs for "15/15 on a fresh tree": the commit, the git tree ids
 // of crates, tools/bench, the root Cargo.toml, Cargo.lock and rust-toolchain.toml at HEAD and of
-// the regress and icu4x forks (third_party/regress.commit, third_party/patches/regress,
-// third_party/icu4x.commit, third_party/patches/icu4x; TREE_PATHS), and the
-// TREE_PATHS entries with uncommitted changes (`dirty`; not fresh when it is not empty). A CI
-// pull_request run names GitHub's merge commit, which a local repository does not have: m1-exit
-// item 1 then reads the 9 tree ids against HEAD's (plan v11 GF-1, X10). `forks` is the fork
-// line of the checkouts at the run (FORK-CHECKOUT-ATTEST; forkState): `regress=pinned
-// icu4x=pinned` when each git-ignored fork checkout is its pin plus its patch set, `stale` or
+// the regress, icu4x and oxc forks (third_party/regress.commit, third_party/patches/regress,
+// third_party/icu4x.commit, third_party/patches/icu4x, third_party/oxc.commit,
+// third_party/patches/oxc; TREE_PATHS), and the TREE_PATHS entries with uncommitted changes
+// (`dirty`; not fresh when it is not empty). A CI pull_request run names GitHub's merge commit,
+// which a local repository does not have: m1-exit item 1 then reads the 11 tree ids against
+// HEAD's (plan v11 GF-1, X10). `forks` is the fork line of the checkouts at the run
+// (FORK-CHECKOUT-ATTEST; forkState): `regress=pinned icu4x=pinned oxc=pinned` when each
+// git-ignored fork checkout is its pin plus its patch set, `stale` or
 // `absent` in its place otherwise, null when the check cannot run; m1-exit gives OPEN unless every
 // fork reads pinned. `ep9.engine_build` is the
 // build line of the checked binary's `--version` ("features <list>; preset <name>", M5-P0,
@@ -99,15 +100,21 @@ export const REGRESS_PATHS = ["third_party/regress.commit", "third_party/patches
 export const ICU4X_PATHS = ["third_party/icu4x.commit", "third_party/patches/icu4x"];
 
 /**
+ * The oxc fork (H01 layer 1, M12-P1): its pin and its patch set. ep9 builds oxc_parser from the
+ * checkout these two make (scripts/sync-oxc.sh), so m1-exit holds them fresh too (its OXC_PATHS).
+ */
+export const OXC_PATHS = ["third_party/oxc.commit", "third_party/patches/oxc"];
+
+/**
  * The forks ep9 builds from git-ignored checkouts (third_party/<fork>): the `fork_attest` names
  * (FORK-CHECKOUT-ATTEST; tools/test262/runner_build.rs FORK_BUILT, m1-exit exit::forks::FORKS).
  */
-export const FORKS = ["regress", "icu4x"];
+export const FORKS = ["regress", "icu4x", "oxc"];
 
 /**
  * The fork line of the checkouts under `root` (FORK-CHECKOUT-ATTEST): what `fork_attest` of
  * scripts/sync-lib.sh prints (the `.ep9-stamp` and `pinned_tree` rule), such as
- * "regress=pinned icu4x=stale"; null when the check cannot run or prints another form.
+ * "regress=pinned icu4x=stale oxc=pinned"; null when the check cannot run or prints another form.
  */
 export function forkState(root = ROOT) {
   const r = spawnSync("sh", ["-c", '. "$1/scripts/sync-lib.sh"; root=$1; shift; fork_attest "$@"', "sh", root, ...FORKS], { encoding: "utf8" });
@@ -117,8 +124,8 @@ export function forkState(root = ROOT) {
   return r.status === (line.split(" ").every((p) => p.endsWith("=pinned")) ? 0 : 1) ? line : null;
 }
 
-/** The paths whose git tree ids the JSON writes (`tree`): FRESH_PATHS, REGRESS_PATHS, ICU4X_PATHS. */
-export const TREE_PATHS = [...FRESH_PATHS, ...REGRESS_PATHS, ...ICU4X_PATHS];
+/** The paths whose git tree ids the JSON writes (`tree`): FRESH_PATHS, REGRESS_PATHS, ICU4X_PATHS, OXC_PATHS. */
+export const TREE_PATHS = [...FRESH_PATHS, ...REGRESS_PATHS, ...ICU4X_PATHS, ...OXC_PATHS];
 
 /** Rust target triples by node's platform-arch (the m1-exit column names; m1-exit item 2 reads it back, TRIPLE_PLATFORMS). */
 export const TRIPLES = {

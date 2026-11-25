@@ -53,3 +53,6 @@ panic = "abort"
 # workspace): run `bash scripts/sync-regress.sh` first. dep-guards check 16 checks this entry.
 [patch.crates-io]
 regress = { path = "../../third_party/regress" }
+# The oxc_parser fork, as in the root Cargo.toml (H01 layer 1; this workspace builds
+# ep9_frontend): run `bash scripts/sync-oxc.sh` first. dep-guards check 16 checks this entry.
+oxc_parser = { path = "../../third_party/oxc/crates/oxc_parser" }

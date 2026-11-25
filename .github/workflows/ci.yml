@@ -190,6 +190,9 @@ jobs:
       # H25-Q2 (C-26): no native word outside ExternalRef, frame.rs and the VM stack code, and
       # none copied from one field into a heap cell (tools/xtask/src/extref_lint.rs).
       - run: cargo xtask extref-lint
+      # T-SITES (H01 layer 1): every recursion of the patched oxc_parser checkout (synced by
+      # setup-rust) passes a stack check site; a cycle with no site fails (tools/xtask/src/oxc_sites.rs).
+      - run: cargo xtask oxc-sites
       # H20-Q6: the public API of ep9_vm from rustdoc JSON (the one nightly pin) against
       # crates/ep9_vm/tests/golden/public-api.txt; a new pub item fails: `cargo xtask api-list --bless`.
       - name: api-list
@@ -351,6 +354,16 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG_ASSERTIONS: "true"
           CARGO_TARGET_DIR: ${{ runner.temp }}/opt2
         run: cargo test -p ep9_vm --locked --lib tests::calls
+      # T-A and T-D (H01 B2), debug and release, on this target: the parse stack per pre-scan unit
+      # of every FORMS row ("T-A worst" gives PARSE_PER_UNIT, stack.rs), and at the pre-scan cap.
+      - name: T-A measure_forms (debug and release)
+        if: ${{ !cancelled() }}
+        run: |
+          rc1=0; rc2=0
+          cargo test --locked -p ep9_frontend --lib probe::measure_forms -- --ignored --exact --nocapture probe::parse_stack_at_the_cap 2>&1 | tee t-a.log || rc1=$?
+          CARGO_TARGET_DIR="$RUNNER_TEMP/t-a-release" cargo test --locked -p ep9_frontend --release --lib probe::measure_forms -- --ignored --exact --nocapture probe::parse_stack_at_the_cap 2>&1 | tee -a t-a.log || rc2=$?
+          grep '^T-[AD] ' t-a.log | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$rc1" = 0 ] && [ "$rc2" = 0 ]
 
   # H27: the default (jit), jitless and aot feature sets, one package at a time (a --workspace
   # build unifies features and would hide a jitless leak): build, clippy -D warnings and test,
@@ -517,8 +530,8 @@ jobs:
         run: |
           echo "m0-exit start: depth_tests" | tee nesting.log
           echo "m1-exit source: commit $(git rev-parse HEAD) dirty $(git status --porcelain --untracked-files=no | wc -l | tr -d ' ') made-by host:$(hostname)${GITHUB_RUN_ID:+ gh-run:$GITHUB_RUN_ID/$GITHUB_JOB}" | tee -a nesting.log
-          echo "m1-exit trees:$(for p in crates tools/bench Cargo.toml Cargo.lock rust-toolchain.toml tools/test262 third_party/test262.commit third_party/regress.commit third_party/patches/regress third_party/icu4x.commit third_party/patches/icu4x; do printf ' %s=%s' "$p" "$(git rev-parse --verify --quiet "HEAD:$p")"; done)" | tee -a nesting.log
-          echo "m1-exit forks: $(sh -c '. "$1/scripts/sync-lib.sh"; root=$1; fork_attest regress icu4x' sh "$PWD")" | tee -a nesting.log
+          echo "m1-exit trees:$(for p in crates tools/bench Cargo.toml Cargo.lock rust-toolchain.toml tools/test262 third_party/test262.commit third_party/regress.commit third_party/patches/regress third_party/icu4x.commit third_party/patches/icu4x third_party/oxc.commit third_party/patches/oxc; do printf ' %s=%s' "$p" "$(git rev-parse --verify --quiet "HEAD:$p")"; done)" | tee -a nesting.log
+          echo "m1-exit forks: $(sh -c '. "$1/scripts/sync-lib.sh"; root=$1; fork_attest regress icu4x oxc' sh "$PWD")" | tee -a nesting.log
           cargo test --locked -p ep9_frontend --lib depth_tests 2>&1 | tee -a nesting.log || rc1=$?
           echo "m0-exit status: ${rc1:-0}" | tee -a nesting.log
           echo "m0-exit start: nesting_caps cli" | tee -a nesting.log
@@ -1012,6 +1025,9 @@ jobs:
       # The root [patch.crates-io] icu_calendar path (third_party/icu4x) too (INTL W1 R2).
       - name: icu4x sync
         run: bash scripts/sync-icu4x.sh
+      # The root [patch.crates-io] oxc_parser path (third_party/oxc) too (H01 layer 1).
+      - name: oxc sync
+        run: bash scripts/sync-oxc.sh
       - run: cargo "+$MIRI_TOOLCHAIN" miri setup
       - run: cargo "+$MIRI_TOOLCHAIN" miri test --locked -p ep9_value -p ep9_heap -p ep9_math
       # The shared-memory accessors and the waiter list of ep9_platform (TypedArray TA-4,
@@ -1383,13 +1399,11 @@ jobs:
       - name: bench pins
         if: ${{ steps.mode.outputs.on == 'true' }}
         run: bash scripts/sync-bench.sh bench-v8v7 bench-octane
-      # Each tree with its own toolchain file and its own regress and icu4x forks (the
-      # setup-rust steps, per tree). Each binary's build line must name its commit, clean
-      # (bench-set.mjs checks it). Each side has its own target dir and its own jitless target
-      # dir (MC-w36-4; route BENCH-STALE-HEAD: with one shared dir, a head crate whose files are
-      # older than the base artifacts was fresh to cargo, so the head binary kept base code).
-      # The head rebuild guard (bench-set.mjs --rebuild-guard) reads the head builds' JSON
-      # messages: each package that differs from base must have been compiled for head.
+      # Each tree with its own toolchain file and its own regress, icu4x and oxc forks (the setup-rust
+      # steps, per tree); each build line must name its commit, clean (bench-set.mjs checks it). Own
+      # target dirs per side and build (MC-w36-4; route BENCH-STALE-HEAD); the head rebuild guard
+      # (bench-set.mjs --rebuild-guard): each head package that differs from base was compiled for head.
+      # Route BENCH-TREE-NEST: the trees build outside this checkout (cargo reads each parent dir's config).
       - name: build ep9 at base and head
         if: ${{ steps.mode.outputs.on == 'true' }}
         env:
@@ -1397,6 +1411,8 @@ jobs:
         run: |
           set -euo pipefail
           retry() { "$@" || { echo "::warning::$* failed; one retry in 20 s"; sleep 20; "$@"; }; }
+          # BENCH-TREE-NEST: no parent dir of a tree is this checkout; binaries and logs stay in $BENCH_DIR.
+          mkdir -p "$RUNNER_TEMP/bench"; mv bench/base bench/head "$RUNNER_TEMP/bench/"; cd "$RUNNER_TEMP"
           for side in base head; do
             target="$BENCH_DIR/target-$side" jitless="$BENCH_DIR/target-jitless-$side"
             pushd "bench/$side" > /dev/null
@@ -1405,16 +1421,22 @@ jobs:
             rustup toolchain install "$chan" --profile minimal ${comps:+--component "$comps"} --no-self-update
             retry bash scripts/sync-regress.sh
             if [ -f scripts/sync-icu4x.sh ]; then retry bash scripts/sync-icu4x.sh; fi
-            cargo build --release --locked -p ep9_cli --target-dir "$target" --message-format=json-render-diagnostics > "$BENCH_DIR/build-$side.jsonl"
-            cargo build --release --locked -p ep9_cli --no-default-features --target-dir "$jitless" --message-format=json-render-diagnostics > "$BENCH_DIR/build-jitless-$side.jsonl"
+            if [ -f scripts/sync-oxc.sh ]; then retry bash scripts/sync-oxc.sh; fi
+            { cargo build -v --release --locked -p ep9_cli --target-dir "$target" --message-format=json-render-diagnostics 2>&1 >&3 | tee "$BENCH_DIR/build-$side.err" >&2; } 3> "$BENCH_DIR/build-$side.jsonl"
+            { cargo build -v --release --locked -p ep9_cli --no-default-features --target-dir "$jitless" --message-format=json-render-diagnostics 2>&1 >&3 | tee "$BENCH_DIR/build-jitless-$side.err" >&2; } 3> "$BENCH_DIR/build-jitless-$side.jsonl"
             popd > /dev/null
-            cp "$target/release/ep9" "bench/ep9-$side"
-            cp "$jitless/release/ep9" "bench/ep9-jitless-$side"
-            "bench/ep9-$side" --version
-            "bench/ep9-jitless-$side" --version
+            cp "$target/release/ep9" "$BENCH_DIR/ep9-$side"
+            cp "$jitless/release/ep9" "$BENCH_DIR/ep9-jitless-$side"
+            "$BENCH_DIR/ep9-$side" --version
+            "$BENCH_DIR/ep9-jitless-$side" --version
+            # BENCH-TREE-NEST: how often the rustc line of the ep9 binary names the alignment flag.
+            for b in build build-jitless; do
+              n="$(grep -m1 -e '--crate-name ep9 ' "$BENCH_DIR/$b-$side.err" | grep -o -e '-align-all-functions=' | wc -l || true)"
+              echo "align-all-functions $side $b: $((n))" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
           done
           for b in build build-jitless; do
-            node .github/scripts/bench-set.mjs --rebuild-guard --base-tree bench/base --head-tree bench/head --cargo-json "bench/$b-head.jsonl"
+            node "$GITHUB_WORKSPACE/.github/scripts/bench-set.mjs" --rebuild-guard --base-tree bench/base --head-tree bench/head --cargo-json "$BENCH_DIR/$b-head.jsonl"
           done
       - name: count
         id: count

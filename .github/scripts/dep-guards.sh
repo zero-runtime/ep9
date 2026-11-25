@@ -337,7 +337,10 @@ fi
 #     must fail the rule and a sample with the path package must pass it, so a rule that always
 #     (or never) passes fails. The same for icu_calendar (INTL W1 R2; third_party/patches/icu4x)
 #     in the root and spikes/spike-c (not in spike-b and fuzz): the path package with the manifest
-#     third_party/icu4x/components/calendar/Cargo.toml (scripts/sync-icu4x.sh makes it).
+#     third_party/icu4x/components/calendar/Cargo.toml (scripts/sync-icu4x.sh makes it). The same
+#     for oxc_parser (H01 layer 1; third_party/patches/oxc) in all 4 workspaces (each builds
+#     ep9_frontend): the path package with the manifest third_party/oxc/crates/oxc_parser/Cargo.toml
+#     (scripts/sync-oxc.sh makes it).
 # fork_live <metadata json> [<package> <manifest path suffix>]: 0 when the graph has the
 # package (default regress) and each copy of it is the path package with that manifest.
 fork_live() {
@@ -349,14 +352,18 @@ fork_live() {
   done <<< "$rows"
 }
 icu_cal=/third_party/icu4x/components/calendar/Cargo.toml
+oxc_par=/third_party/oxc/crates/oxc_parser/Cargo.toml
 reg='{"packages":[{"name":"memchr","source":"registry+https://github.com/rust-lang/crates.io-index","manifest_path":"/c/registry/src/memchr-2.8.3/Cargo.toml"},{"name":"regress","source":"registry+https://github.com/rust-lang/crates.io-index","manifest_path":"/c/registry/src/regress-0.12.0/Cargo.toml"}]}'
 fork='{"packages":[{"name":"regress","source":null,"manifest_path":"/w/third_party/regress/Cargo.toml"}]}'
 icu_reg='{"packages":[{"name":"icu_calendar","source":"registry+https://github.com/rust-lang/crates.io-index","manifest_path":"/c/registry/src/icu_calendar-2.3.0/Cargo.toml"}]}'
 icu_fork='{"packages":[{"name":"icu_calendar","source":null,"manifest_path":"/w/third_party/icu4x/components/calendar/Cargo.toml"}]}'
+oxc_reg='{"packages":[{"name":"oxc_parser","source":"registry+https://github.com/rust-lang/crates.io-index","manifest_path":"/c/registry/src/oxc_parser-0.158.0/Cargo.toml"}]}'
+oxc_fork='{"packages":[{"name":"oxc_parser","source":null,"manifest_path":"/w/third_party/oxc/crates/oxc_parser/Cargo.toml"}]}'
 if fork_live "$reg" || ! fork_live "$fork" || fork_live '{"packages":[]}' \
   || fork_live "$icu_reg" icu_calendar "$icu_cal" || ! fork_live "$icu_fork" icu_calendar "$icu_cal" \
-  || fork_live "$fork" icu_calendar "$icu_cal"; then
-  bad "(16) control: the fork rule passes a crates.io regress or icu_calendar or an empty graph, or fails the path package, in a sample graph"
+  || fork_live "$fork" icu_calendar "$icu_cal" \
+  || fork_live "$oxc_reg" oxc_parser "$oxc_par" || ! fork_live "$oxc_fork" oxc_parser "$oxc_par"; then
+  bad "(16) control: the fork rule passes a crates.io regress, icu_calendar or oxc_parser or an empty graph, or fails the path package, in a sample graph"
 else
   for m in Cargo.toml spikes/spike-b/Cargo.toml spikes/spike-c/Cargo.toml fuzz/Cargo.toml; do
     if ! wmeta="$(cargo metadata --locked --format-version 1 --manifest-path "$m")"; then
@@ -366,6 +373,14 @@ else
     else
       found="$(jq -r '.packages[] | select(.name == "regress") | "\(.source // "path") \(.manifest_path)"' <<< "$wmeta" | paste -sd ';' -)"
       bad "(16) $m: regress must be only the third_party/regress path package; found: ${found:-no regress}"
+    fi
+    if [ -z "$wmeta" ]; then
+      :
+    elif fork_live "$wmeta" oxc_parser "$oxc_par"; then
+      ok "(16) $m: oxc_parser is the patched checkout third_party/oxc/crates/oxc_parser (path package, no registry source)"
+    else
+      found="$(jq -r '.packages[] | select(.name == "oxc_parser") | "\(.source // "path") \(.manifest_path)"' <<< "$wmeta" | paste -sd ';' -)"
+      bad "(16) $m: oxc_parser must be only the third_party/oxc/crates/oxc_parser path package (run scripts/sync-oxc.sh); found: ${found:-no oxc_parser}"
     fi
     [ "$m" = spikes/spike-b/Cargo.toml ] || [ "$m" = fuzz/Cargo.toml ] && continue
     if [ -z "$wmeta" ]; then

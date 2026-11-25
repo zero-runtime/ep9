@@ -11,7 +11,7 @@
 //! commit unknown                       no git, or not a checkout
 //! ```
 //!
-//! FORK-CHECKOUT-ATTEST: the regress and icu4x pins and patch sets are tree paths, but cargo
+//! FORK-CHECKOUT-ATTEST: the regress, icu4x and oxc pins and patch sets are tree paths, but cargo
 //! builds the git-ignored checkouts. The fork check is `fork_attest` of `scripts/sync-lib.sh`
 //! through `tools/test262/runner_build.rs` (the runner's build script uses the same file): a
 //! checkout left on an old patch set, edited, or on another HEAD is an uncommitted engine
@@ -35,9 +35,10 @@ mod build_watch;
 mod runner_build;
 
 /// The paths whose state is the engine's: `tools/bench/cross/kernels.mjs` `TREE_PATHS`
-/// (FRESH_PATHS, REGRESS_PATHS, ICU4X_PATHS) without `tools/bench` (the bench tools are not in
-/// the binary). The regress and icu_calendar forks are built from git-ignored checkouts of
-/// their pins and patch sets, so a pin or patch change is an engine change. The xtask test
+/// (FRESH_PATHS, REGRESS_PATHS, ICU4X_PATHS, OXC_PATHS) without `tools/bench` (the bench tools
+/// are not in the binary). The regress, icu_calendar and oxc_parser forks are built from
+/// git-ignored checkouts of their pins and patch sets, so a pin or patch change is an engine
+/// change. The xtask test
 /// `m2_exit::tests::the_build_line_engine_paths_are_the_bench_tree_paths` keeps the lists equal.
 const ENGINE_PATHS: &[&str] = &[
     "crates",
@@ -48,6 +49,8 @@ const ENGINE_PATHS: &[&str] = &[
     "third_party/patches/regress",
     "third_party/icu4x.commit",
     "third_party/patches/icu4x",
+    "third_party/oxc.commit",
+    "third_party/patches/oxc",
 ];
 
 fn main() {

@@ -23,11 +23,13 @@ fn opts(form: &Form) -> SourceOpts {
     }
 }
 
-/// AST depth of a small instance (on the test thread; small n only).
+/// AST depth of a small instance (on the test thread; small n only). The parse needs a layer-1
+/// limit on this thread (l1.rs); a test thread has at least 2 MiB.
 fn ast_depth(form: &Form, n: usize) -> u32 {
     let src = (form.build)(n);
     let allocator = Allocator::default();
-    let program = crate::parse(&allocator, &src, opts(form)).expect("small instances parse");
+    let program = crate::l1::with_limit(2 << 20, || crate::parse(&allocator, &src, opts(form)))
+        .expect("small instances parse");
     depth::check_ast_depth(&program, u32::MAX).expect("no cap")
 }
 
@@ -44,10 +46,23 @@ fn linear(form: &Form) -> (u32, u32) {
     (a, b)
 }
 
-/// The largest n with AST depth <= AST_CAP, or `None` for forms without AST depth (regex).
+/// The largest n with AST depth <= AST_CAP and pre-scan estimate <= PRESCAN_CAP, or `None` for
+/// forms without AST depth (regex).
 fn n_cap(form: &Form) -> Option<usize> {
     let (a, b) = linear(form);
-    (a > 0).then(|| usize::try_from((AST_CAP - b) / a).unwrap())
+    (a > 0).then(|| {
+        let ast = usize::try_from((AST_CAP - b) / a).unwrap();
+        // The new-expression forms count 2 pre-scan units per AST level, so PRESCAN_CAP binds
+        // before AST_CAP for them; route PRESCAN-NEW-COUNT.
+        let estimate =
+            |n: usize| crate::prescan::estimate((form.build)(n).as_bytes(), form.module).depth;
+        let (e10, e11) = (estimate(10), estimate(11));
+        let ea = e11 - e10;
+        let eb = e10 - 10 * ea;
+        (crate::PRESCAN_CAP - eb)
+            .checked_div(ea)
+            .map_or(ast, |fit| ast.min(usize::try_from(fit).unwrap()))
+    })
 }
 
 /// Every form at the cap: the unit compiles, or the form is a v0-unsupported construct.
@@ -106,7 +121,9 @@ fn codegen_bytes(form: &Form, n: usize) -> (u32, usize) {
     let src = (form.build)(n);
     let opts = opts(form);
     let allocator = Allocator::default();
-    let program = crate::parse(&allocator, &src, opts).expect("parses");
+    // On the 2 GiB probe thread: its layer-1 limit (l1.rs).
+    let program =
+        crate::l1::with_limit(2 << 30, || crate::parse(&allocator, &src, opts)).expect("parses");
     let ast = depth::check_ast_depth(&program, u32::MAX).expect("no cap");
     let semantic = oxc_semantic::SemanticBuilder::new_compiler()
         .build(&program)
@@ -153,8 +170,9 @@ fn measure_codegen_stack() {
                 }
                 writeln!(out, "| {} | {per:.0} | {a2} |", form.name).unwrap();
             }
-            // Budget: the worker stack (stack.rs) for AST_CAP levels, with the 1.5x margin.
-            let budget = crate::stack::WORKER_STACK_BYTES as f64 / f64::from(AST_CAP) / 1.5;
+            // Budget: the worker stack budget (stack.rs; the red zone of layer 1 is not budget)
+            // for AST_CAP levels, with the 1.5x margin.
+            let budget = crate::stack::BUDGET_BYTES as f64 / f64::from(AST_CAP) / 1.5;
             writeln!(
                 out,
                 "worst: {} at {:.0} B/level; budget {budget:.0} B/level",

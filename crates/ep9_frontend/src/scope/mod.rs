@@ -832,8 +832,15 @@ fn analyze_full(
 ) -> Result<ScopeAnalysis, CompileError> {
     let mut builder = collect::Builder::new(fe, cap);
     builder.collect(fe.program);
-    if let Some(at) = builder.too_deep {
-        return Err(RangeError::too_deep(DepthLayer::Pass, fe.source, Some(at)).into());
+    if let Some((at, stack_limit)) = builder.too_deep {
+        // Review R2 F1: a stop of the layer-1 backstop is StackLimit, as in layer 2 and
+        // BytecodeGen; a stop at the cap stays the layer-3 RangeError.
+        let error = if stack_limit {
+            RangeError::stack_limit(fe.source, Some(at))
+        } else {
+            RangeError::too_deep(DepthLayer::Pass, fe.source, Some(at))
+        };
+        return Err(error.into());
     }
     if eval.is_some() {
         // The walk made a Script root (collect.rs `visit_program`); its function 0 keeps

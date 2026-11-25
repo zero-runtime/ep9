@@ -57,7 +57,7 @@ use crate::bytecodegen::{self, CodegenError, CompileOptions, EVAL_RESULT};
 use crate::scope::{self, EvalKind, PrivateKind};
 use crate::surrogate::Shim;
 use crate::{
-    AST_CAP, ByteSpan, CompileError, DepthLayer, EarlyErrors, FrontEnd, Goal, LineMap, PRESCAN_CAP,
+    ByteSpan, CompileError, DepthLayer, EarlyErrors, FrontEnd, Goal, LineMap, PRESCAN_CAP,
     RangeError, RangeErrorKind, SourceOpts, Strictness, SyntaxError,
 };
 
@@ -78,6 +78,16 @@ pub fn compile_eval(
     ctx: &EvalContext,
     options: CompileOptions,
 ) -> Result<VerifiedUnit, CodegenError> {
+    compile_eval_at(source, ctx, options, crate::l1::WORKER)
+}
+
+/// [`compile_eval`] with the job on `stack` (a small worker in the small-stack tests).
+pub(crate) fn compile_eval_at(
+    source: &str,
+    ctx: &EvalContext,
+    options: CompileOptions,
+    stack: crate::l1::Stack,
+) -> Result<VerifiedUnit, CodegenError> {
     // E8: the shim text of a JS string (lone surrogates, U+FDD0) -> the parse text.
     let (source, mut shim) = crate::surrogate::decode(source);
     let estimate = crate::prescan::estimate(source.as_bytes(), false);
@@ -92,7 +102,7 @@ pub fn compile_eval(
         })?;
         shim.finish(unit)
     };
-    match crate::worker::run(crate::stack::WORKER_STACK_BYTES, job) {
+    match crate::l1::run(stack, job) {
         Ok(result) => result,
         Err(spawn) => Err(CompileError::Range(RangeError {
             kind: RangeErrorKind::StackUnavailable,
@@ -182,10 +192,11 @@ fn on_worker<R>(
     codegen: impl FnOnce(&FrontEnd<'_>, &scope::ScopeAnalysis) -> Result<R, CodegenError>,
 ) -> Result<R, CodegenError> {
     let allocator = Allocator::default();
-    // As crate::parse: oxc_parser, then the regex literal check (regex_check::parse).
+    // As crate::parse: oxc_parser, then the regex literal check (regex_check::parse). A
+    // layer-1 stop is read before the diagnostics.
     let mut parsed = match crate::regex_check::parse(&allocator, source, SourceType::script()) {
         Ok(parsed) => parsed,
-        Err(fatal) => return Err(syntax(source, fatal.errors())),
+        Err(stopped) => return Err(stopped.into_error(source).into()),
     };
     // E8, 07 §7 step 5: a regex literal with a lone surrogate is checked again.
     shim.check_regex_literals(source, &parsed.tokens, &mut parsed.diagnostics);
@@ -193,12 +204,13 @@ fn on_worker<R>(
     if parsed.fatal_error {
         return Err(syntax(source, parsed.diagnostics.errors()));
     }
-    // Layer 2 before any walk of the AST (the walks below recurse).
-    if let Err(deep) = crate::depth::check_ast_depth(&parsed.program, AST_CAP) {
+    // Layer 2 before any walk of the AST (the walks below recurse), and the run-time budget
+    // check of layer 1 (the oxc walks below have no backstop).
+    if let Err(range) = crate::check_depth(&parsed.program, source) {
         if has_parse_errors {
             return Err(syntax(source, parsed.diagnostics.errors()));
         }
-        return Err(too_deep(DepthLayer::Ast, source, deep.span.start));
+        return Err(CompileError::Range(range).into());
     }
     let allowed = Allowed::collect(&parsed.program, allow);
     if has_parse_errors {
@@ -215,15 +227,15 @@ fn on_worker<R>(
     shim.patch(&allocator, source, &mut parsed.program)?;
 
     let ast = AstBuilder::new(&allocator);
-    rewrite_completion(&ast, &mut parsed.program);
+    if !rewrite_completion(&ast, &mut parsed.program) {
+        return Err(stack_limit(source));
+    }
     if allow.strict {
         crate::force_strict(&allocator, &mut parsed.program);
     }
     // The rewrite adds at most 2 levels (an assignment and a sequence) around a statement's
     // expression: check again, so the worker stack stays within its budget.
-    if let Err(deep) = crate::depth::check_ast_depth(&parsed.program, AST_CAP) {
-        return Err(too_deep(DepthLayer::Ast, source, deep.span.start));
-    }
+    crate::check_depth(&parsed.program, source).map_err(CompileError::Range)?;
 
     let program = &parsed.program;
     let built = SemanticBuilder::new_compiler().build(program);
@@ -260,6 +272,11 @@ fn on_worker<R>(
     let mut analysis = scope::analyze_eval(&fe, kind)?;
     analysis.set_caller_private(allow.caller_private());
     codegen(&fe, &analysis)
+}
+
+/// Layer 1: the backstop of `rewrite_completion` stopped the walk.
+fn stack_limit(source: &str) -> CodegenError {
+    CodegenError::Compile(CompileError::Range(RangeError::stack_limit(source, None)))
 }
 
 fn too_deep(layer: DepthLayer, source: &str, at: u32) -> CodegenError {
@@ -580,14 +597,22 @@ impl<'a> Visit<'a> for PostWalk<'_> {
 /// `.result`. Walks statements backwards; `is_set` = every path from here on stores a value
 /// first, so the statement need not store; `breakable` = inside a loop, switch or labeled
 /// statement, where a `break` or `continue` can skip the later stores.
-fn rewrite_completion<'a>(ast: &AstBuilder<'a>, program: &mut Program<'a>) {
+///
+/// Returns false when the layer-1 backstop stopped the walk (l1.rs; only on a thread smaller than
+/// the budget). The program is then only partly rewritten and must not be used.
+#[must_use]
+fn rewrite_completion<'a>(ast: &AstBuilder<'a>, program: &mut Program<'a>) -> bool {
     let mut r = Rewriter {
         ast,
         is_set: false,
         breakable: false,
         backups: 0,
+        stopped: false,
     };
     r.process(&mut program.body);
+    if r.stopped {
+        return false;
+    }
     // Directives are ExpressionStatements too (`eval("'a'")` is "a"); they run first, so the
     // last one is the value only when no statement stores one.
     if !r.is_set
@@ -598,6 +623,7 @@ fn rewrite_completion<'a>(ast: &AstBuilder<'a>, program: &mut Program<'a>) {
         let store = r.store(value, last.span);
         program.body.insert(0, store);
     }
+    true
 }
 
 /// The front end of a Script compiled with its completion value
@@ -624,6 +650,20 @@ where
     R: Send + 'static,
     F: for<'f> FnOnce(&FrontEnd<'f>) -> Result<R, CodegenError> + Send + 'static,
 {
+    with_script_completion_at(source, strictness, crate::l1::WORKER, consumer)
+}
+
+/// [`with_script_completion`] with the job on `stack` (a small worker in the small-stack tests).
+pub(crate) fn with_script_completion_at<R, F>(
+    source: &str,
+    strictness: Strictness,
+    stack: crate::l1::Stack,
+    consumer: F,
+) -> Result<R, CodegenError>
+where
+    R: Send + 'static,
+    F: for<'f> FnOnce(&FrontEnd<'f>) -> Result<R, CodegenError> + Send + 'static,
+{
     let estimate = crate::prescan::estimate(source.as_bytes(), false);
     if estimate.depth > PRESCAN_CAP {
         return Err(too_deep(DepthLayer::PreScan, source, estimate.at));
@@ -633,13 +673,13 @@ where
         let allocator = Allocator::default();
         let sloppy = SourceOpts::script(Strictness::Sloppy);
         let mut program = crate::parse(&allocator, &owned, sloppy)?;
-        rewrite_completion(&AstBuilder::new(&allocator), &mut program);
+        if !rewrite_completion(&AstBuilder::new(&allocator), &mut program) {
+            return Err(stack_limit(&owned));
+        }
         if strictness == Strictness::Strict {
             crate::force_strict(&allocator, &mut program);
         }
-        if let Err(deep) = crate::depth::check_ast_depth(&program, AST_CAP) {
-            return Err(too_deep(DepthLayer::Ast, &owned, deep.span.start));
-        }
+        crate::check_depth(&program, &owned).map_err(CompileError::Range)?;
         let semantic = crate::semantic(&owned, &program)?;
         consumer(&FrontEnd {
             source: &owned,
@@ -648,7 +688,7 @@ where
             semantic: &semantic,
         })
     };
-    match crate::worker::run(crate::stack::WORKER_STACK_BYTES, job) {
+    match crate::l1::run(stack, job) {
         Ok(result) => result,
         Err(spawn) => Err(CompileError::Range(RangeError {
             kind: RangeErrorKind::StackUnavailable,
@@ -666,6 +706,8 @@ struct Rewriter<'r, 'a> {
     breakable: bool,
     /// Backup bindings made so far (`.result_backup0`, ...).
     backups: u32,
+    /// Layer 1: the backstop stopped the walk.
+    stopped: bool,
 }
 
 impl<'a> Rewriter<'_, 'a> {
@@ -743,6 +785,11 @@ impl<'a> Rewriter<'_, 'a> {
     /// Rewrites `s`. Returns true if `.result = undefined` must run just before it (V8
     /// `AssignUndefinedBefore`).
     fn visit(&mut self, s: &mut Statement<'a>) -> bool {
+        // Layer 1 backstop (l1.rs): the walk recurses with the statement nesting.
+        if self.stopped || crate::l1::below_limit() {
+            self.stopped = true;
+            return false;
+        }
         match s {
             Statement::BlockStatement(b) => {
                 self.process(&mut b.body);
@@ -899,9 +946,63 @@ fn is_function_like(e: &Expression<'_>) -> bool {
     }
 }
 
+/// Test only, the T-PASS columns of `probe::measure_forms`: the 4 walks of the eval path after
+/// layer 2 on the shim text `source`, in the order of `on_worker` (`Allowed::collect`,
+/// `Shim::patch`, `rewrite_completion`, `post_checks`), each one run by `measure`, which gives
+/// the stack bytes that it used. Give `source` a lone surrogate (shim text), else `Shim::patch`
+/// does not walk. `None` if the text has an error (it is no eval code).
+#[cfg(test)]
+pub(crate) fn measure_walks(
+    source: &str,
+    measure: &mut dyn FnMut(&mut dyn FnMut()) -> usize,
+) -> Option<[usize; 4]> {
+    let (text, mut shim) = crate::surrogate::decode(source);
+    let text: &str = &text;
+    let allocator = Allocator::default();
+    let mut parsed = crate::regex_check::parse(&allocator, text, SourceType::script()).ok()?;
+    if parsed.diagnostics.has_errors() {
+        return None;
+    }
+    let allow = Allow::from_context(&EvalContext::default());
+    let collect = measure(&mut || {
+        std::hint::black_box(Allowed::collect(&parsed.program, &allow));
+    });
+    let mut patched = Ok(());
+    let patch = measure(&mut || patched = shim.patch(&allocator, text, &mut parsed.program));
+    let ast = AstBuilder::new(&allocator);
+    let mut rewritten = true;
+    let rewrite = measure(&mut || rewritten = rewrite_completion(&ast, &mut parsed.program));
+    let mut checked = Ok(());
+    let post = measure(&mut || checked = post_checks(text, &parsed.program, &allow));
+    (patched.is_ok() && rewritten && checked.is_ok()).then_some([collect, patch, rewrite, post])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Layer 1: the backstop of `rewrite_completion` (l1.rs; T-PASS). With a limit 32 KiB below
+    /// the walk (as on a thread smaller than the budget), a deep block nest stops the rewrite
+    /// (`on_worker` then gives StackLimit); with the limit of the real worker it does not.
+    #[test]
+    fn the_rewrite_stops_at_the_stack_limit() {
+        let src = format!("{}0;{}", "{".repeat(3_000), "}".repeat(3_000));
+        let (stopped, full) = crate::worker::run(crate::stack::WORKER_STACK_BYTES, move || {
+            let allocator = Allocator::default();
+            let mut parsed = Parser::new(&allocator, &src, SourceType::script()).parse();
+            assert!(!parsed.diagnostics.has_errors());
+            let ast = AstBuilder::new(&allocator);
+            let stopped = {
+                let _tight = crate::l1::LimitScope::room(32 << 10);
+                !rewrite_completion(&ast, &mut parsed.program)
+            };
+            let mut again = Parser::new(&allocator, &src, SourceType::script()).parse();
+            (stopped, rewrite_completion(&ast, &mut again.program))
+        })
+        .unwrap();
+        assert!(stopped, "the rewrite did not stop at the limit");
+        assert!(full, "the rewrite stopped on the real worker");
+    }
 
     /// A direct eval in a plain function of a sloppy script.
     fn direct() -> EvalContext {
@@ -1443,7 +1544,8 @@ mod tests {
         let mut parsed = Parser::new(&allocator, src, SourceType::script()).parse();
         assert!(!parsed.diagnostics.has_errors(), "{src}");
         let ast = AstBuilder::new(&allocator);
-        rewrite_completion(&ast, &mut parsed.program);
+        // A test thread has no layer-1 limit: the backstop never stops the rewrite here.
+        assert!(rewrite_completion(&ast, &mut parsed.program), "{src}");
         let mut out = String::new();
         for s in &parsed.program.body {
             print_statement(src, s, &mut out);

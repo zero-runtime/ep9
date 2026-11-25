@@ -5,7 +5,7 @@
 //!
 //! FORK-CHECKOUT-ATTEST: the fork line of real fork checkouts that `sync_dep` made (temp git
 //! repos, no network): each fork reads `pinned` after a sync, and `stale` when its checkout is
-//! on an old patch set or edited (the negative control of each fork), with the other fork still
+//! on an old patch set or edited (the negative control of each fork), with the other forks still
 //! `pinned`.
 
 #[path = "../runner_build.rs"]
@@ -66,6 +66,8 @@ fn a_change_under_a_compiled_path_is_dirty() {
     write(&d, "third_party/patches/regress/README.md", "# p\n");
     write(&d, "third_party/icu4x.commit", "b\n");
     write(&d, "third_party/patches/icu4x/README.md", "# p\n");
+    write(&d, "third_party/oxc.commit", "b\n");
+    write(&d, "third_party/patches/oxc/README.md", "# p\n");
     write(&d, "docs/x.md", "doc\n");
     git(&d, &["init", "-q"]);
     git(&d, &["add", "-A"]);
@@ -86,6 +88,8 @@ fn a_change_under_a_compiled_path_is_dirty() {
         ("third_party/patches/regress/README.md", "# edited\n"),
         ("third_party/icu4x.commit", "c\n"),
         ("third_party/patches/icu4x/README.md", "# edited\n"),
+        ("third_party/oxc.commit", "c\n"),
+        ("third_party/patches/oxc/README.md", "# edited\n"),
     ] {
         assert!(watched(&watch, &d.join(file)), "{file}: {watch:?}");
         let old = std::fs::read_to_string(d.join(file)).unwrap();
@@ -151,7 +155,7 @@ fn sync(root: &Path, fork: &str, upstream: &Path) {
     assert!(out.status.success(), "sync {fork}: {out:?}");
 }
 
-/// A fake repo root with the real sync-lib.sh and both forks (each with an upstream of one
+/// A fake repo root with the real sync-lib.sh and every fork (each with an upstream of one
 /// commit, a pin and one patch), synced. Returns the root and the upstream dirs.
 #[cfg(unix)]
 fn fork_root(name: &str) -> (PathBuf, PathBuf) {
@@ -200,22 +204,26 @@ fn fork_root(name: &str) -> (PathBuf, PathBuf) {
 
 /// The fork line of synced checkouts reads pinned for each fork; per fork, a checkout on an
 /// old patch set (a patch joined the set after the sync) and an edited built file read stale,
-/// while the other fork stays pinned; a fork with no checkout reads absent. These fail on the
+/// while the other forks stay pinned; a fork with no checkout reads absent. These fail on the
 /// old runner build, which had no fork check (only the pin and patch files were watched).
 #[cfg(unix)]
 #[test]
 fn the_fork_line_is_pinned_only_for_a_synced_checkout() {
     let (root, d) = fork_root("forks");
     let line = fork_attest(&root);
-    assert_eq!(line.as_deref(), Some("regress=pinned icu4x=pinned"));
+    assert_eq!(
+        line.as_deref(),
+        Some("regress=pinned icu4x=pinned oxc=pinned")
+    );
     assert_eq!(forks_pinned(line.as_deref()), Some(true));
     for (k, (fork, built)) in FORK_BUILT.iter().enumerate() {
-        let other = FORK_BUILT[1 - k].0;
         let want = |state: &str| {
-            let mut v = [String::new(), String::new()];
-            v[k] = format!("{fork}={state}");
-            v[1 - k] = format!("{other}=pinned");
-            v.join(" ")
+            FORK_BUILT
+                .iter()
+                .enumerate()
+                .map(|(i, (f, _))| format!("{f}={}", if i == k { state } else { "pinned" }))
+                .collect::<Vec<_>>()
+                .join(" ")
         };
         // The negative control of the route: a checkout left on an old patch set.
         let rel = Path::new(built)
@@ -241,7 +249,7 @@ fn the_fork_line_is_pinned_only_for_a_synced_checkout() {
         sync(&root, fork, &d.join(format!("up-{fork}")));
         assert_eq!(
             fork_attest(&root).as_deref(),
-            Some("regress=pinned icu4x=pinned"),
+            Some("regress=pinned icu4x=pinned oxc=pinned"),
             "{fork} synced again"
         );
         // An edit of a built file (a stale build input with the stamp in place).
@@ -256,11 +264,14 @@ fn the_fork_line_is_pinned_only_for_a_synced_checkout() {
     }
     assert_eq!(
         fork_attest(&root).as_deref(),
-        Some("regress=pinned icu4x=pinned")
+        Some("regress=pinned icu4x=pinned oxc=pinned")
     );
     std::fs::remove_dir_all(root.join("third_party/icu4x")).unwrap();
     let line = fork_attest(&root);
-    assert_eq!(line.as_deref(), Some("regress=pinned icu4x=absent"));
+    assert_eq!(
+        line.as_deref(),
+        Some("regress=pinned icu4x=absent oxc=pinned")
+    );
     assert_eq!(forks_pinned(line.as_deref()), Some(false));
     std::fs::remove_dir_all(&d).unwrap();
 }

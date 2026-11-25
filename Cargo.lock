@@ -189,6 +189,7 @@ name = "ep9_frontend"
 version = "0.0.0"
 dependencies = [
  "ep9_bytecode",
+ "ep9_platform",
  "oxc_allocator",
  "oxc_ast",
  "oxc_ast_visit",
@@ -1041,8 +1042,6 @@ dependencies = [
 [[package]]
 name = "oxc_parser"
 version = "0.158.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7abfa2897dd082cd208a089692dd40e2e00166015de6993398689025ce8ea0ed"
 dependencies = [
  "bitflags",
  "cow-utils",

@@ -1,0 +1,29 @@
+item	ep9_read_box	ep9_box1	node_read_box	node_box1	mark	source
+wall ratio TS gate cell, end m11 (t(node)/t(ep9), jitless; box 1 / box 2)	0.972 / 0.980	-	-	-	M	PBe11 group A; DL M11-END-PATHB
+CPU-time ratio, same cell, end m11	0.989 / 0.997	-	-	-	M	PBe11:316
+wall ratio TS gate cell, end m12 (jitless; box 1 / box 2)	0.985 / 0.988	-	-	-	M	PBe12:85
+CPU-time ratio, same cell, end m12	0.997 / 1.001	-	-	-	M	PBe12:316
+CPU minus wall, points (jitless; jit), end m11	1.7 / 1.7; 1.7 / 1.6	-	-	-	D	PBe11:286, :316 and group A
+CPU minus wall, points (jitless; jit), end m12	1.2 / 1.3; 1.3 / 1.6	-	-	-	D	PBe12:286, :316 and group A
+all-thread cycles, TS (G)	25.135	25.178	25.355	25.222	M	TD3:21, :24; TD3-1:23, :26
+task-clock / wall	1.026	1.026	1.040	1.039	M	TD3:21, :24; TD3-1:23, :26
+node CPU per wall / ep9 CPU per wall	-	-	1.0136	1.0127	D	row above
+cycles / task-clock (GHz)	3.609	3.608	3.599	3.611	D	TD3:21-25; qjs 3.623
+JS-thread comm share of cycles samples (%)	ep9-isolate 89.94 of 92.81 listed	89.52 of 93.03	MainThread 88.02 of 92.83 listed	87.87 of 92.58	M	TD3:236, :239; TD3-1:238, :241
+helper comms (%)	marker 1.72, sweeper 0.66, frontend 0.50	2.17, 0.88, 0.48	V8Worker 4.82	4.72	M	same lines
+summary "off-main" share (%)	2.88	3.51	92.83 (name error: counts MainThread)	92.58	M (node value wrong)	TD3:399; DL M12-PRE-TD3-READ
+GC on the JS thread, % of all cycles samples (line G)	4.43 [4.38-4.47]	5.21 [5.02-5.31]	not measured (est. 1.3, range 0.5-2.2)	-	M (node G)	TD3:247, :395; TD3-1:249
+GC all threads (%)	6.81 [6.78-6.85]	8.26 [8.05-8.37]	ScavengeObject 3.60 (other GC rows not listed)	3.65	M	TD3:173, :247
+GC on the JS thread with 0 helpers (%)	7.27 [6.89-7.32]	6.98 [6.93-7.17]	-	-	M	TD3:249; TD3-1:251
+wall h0 / default (helpers save)	1.022 [1.010-1.064]	1.026 [1.004-1.073]	-	-	M	TD3:29; TD3-1:31
+GC count per TS run (e-jitless; e-jit; h0)	11; 13; 10	12; 13; 10	not measured	-	M (1 run per arm)	TD3:280-283
+main-thread cycles (G)	24.36	24.23	24.04	23.94	D	all-thread x JS-thread / listed
+main-thread GC (G)	1.11	1.31	0.33 (I)	0.33 (I)	D / I	line G x all-thread cycles; node 1.3% x cycles
+main-thread non-GC (G)	23.24	22.92	23.71	23.61	D / I	rows above
+main-thread GC excess ep9 - node (G; % of ep9 main)	0.78; 3.2 (range 0.56-0.99; 2.3-4.1)	0.98; 4.1	-	-	D / I	rows above
+GC per GC on the main thread (G; % of cycles)	0.10; 0.40	0.11; 0.43	-	-	D	TD3:281
+need at the m11-end low ends x1.035-1.048 as main-thread G (1 - 1/g)	0.82-1.12 = 74-100% of ep9 main GC	0.82-1.11 = 62-85%	-	-	D	PBe11 low ends 0.966-0.954
+need at the m12-end low ends jitless x1.019-1.022, jit x1.041-1.042	jitless 0.45-0.52 = 41-47%; jit 0.96-0.98 = 86-88%	34-40%; 73-74%	-	-	D	PBe12:385-392
+TS cell on the TD-3 boxes, A/B form	0.997 [0.976-1.022]	0.994 [0.968-1.031]	-	-	M	TD3:27; TD3-1:29
+TS cell on the TD-3 boxes, Path B form (medians, not paired)	1.005	0.994	-	-	D	TD3:276-277; TD3-1:278-279
+Path B form / A/B form wall	1.035	0.997	1.038	1.003	M	TD3:400; TD3-1:402

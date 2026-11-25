@@ -5,7 +5,8 @@ description: >
   third_party/regress (the RX0 fork, V9-D15): the root, spikes/spike-b and spikes/spike-c
   workspaces build regress from that checkout through [patch.crates-io], so every cargo command
   there needs it first. It also syncs third_party/icu4x (the patched icu_calendar of the root and
-  spikes/spike-c). Callers run actions/checkout before this action.
+  spikes/spike-c) and third_party/oxc (the patched oxc_parser of the root, fuzz, spikes/spike-b
+  and spikes/spike-c). Callers run actions/checkout before this action.
 runs:
   using: composite
   steps:
@@ -49,4 +50,19 @@ runs:
           echo "::warning::scripts/sync-icu4x.sh failed; one retry in 20 s"
           sleep 20
           bash scripts/sync-icu4x.sh
+        }
+    # oxc_parser with the layer-1 recursion check (H01; third_party/patches/oxc): the root, fuzz,
+    # spikes/spike-b and spikes/spike-c workspaces build it from third_party/oxc/crates/oxc_parser
+    # through [patch.crates-io], so every cargo command there needs it too. Same cache key form.
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: third_party/oxc
+        key: oxc-${{ runner.os }}-${{ hashFiles('third_party/oxc.commit', 'third_party/patches/oxc/**') }}
+    - name: Sync third_party/oxc
+      shell: bash
+      run: |
+        bash scripts/sync-oxc.sh || {
+          echo "::warning::scripts/sync-oxc.sh failed; one retry in 20 s"
+          sleep 20
+          bash scripts/sync-oxc.sh
         }

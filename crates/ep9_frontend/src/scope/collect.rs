@@ -129,8 +129,8 @@ pub(super) struct Builder<'a> {
     pattern_expressions: bool,
     depth: u32,
     cap: u32,
-    /// Start of the first node deeper than the cap.
-    pub(super) too_deep: Option<u32>,
+    /// Where the walk stopped, and why: true = the layer-1 backstop (StackLimit), false = the cap.
+    pub(super) too_deep: Option<(u32, bool)>,
 }
 
 impl<'a> Builder<'a> {
@@ -310,8 +310,10 @@ impl<'a> Builder<'a> {
         if self.too_deep.is_some() {
             return false;
         }
-        if self.depth > self.cap {
-            self.too_deep = Some(span.start);
+        // Layer 1 backstop (l1.rs): on a thread smaller than the budget the walk stops here too;
+        // the result is RangeError StackLimit (review R2 F1; scope/mod.rs), at the cap TooDeep.
+        if self.depth > self.cap || crate::l1::backstop(self.depth) {
+            self.too_deep = Some((span.start, self.depth <= self.cap));
             return false;
         }
         true
