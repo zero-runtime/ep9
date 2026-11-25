@@ -2587,10 +2587,10 @@ pub(crate) const S1_GROW_CAP: usize = 144 << 20;
 /// M13-P1-GC-VERDICT). A minor GC sweeps every page and traces the logged old hosts again, so
 /// a larger budget runs fewer of them: octane-typescript runs 6 GCs, not 12, on x86-64.
 ///
-/// The bound: from 38.4 MiB to 288 MiB of old bytes the budget is 144 MiB (the base gave
-/// 72 MiB at most there), so before a minor GC the heap holds at most the old bytes + 144 MiB
-/// of young bytes. This also holds when `next_major` is set after a low-survival minor GC: the
-/// pending major GC waits for at most 144 MiB more allocation (72 MiB with the base alone).
+/// The bound: from 38.4 MiB to 288 MiB of old bytes the budget is 144 MiB, so below 288 MiB of
+/// old bytes (base alone: below 144 MiB) the heap holds at most the old bytes + 144 MiB before a
+/// minor GC (72 MiB with the base alone), and a major GC that a low-survival minor GC set pending
+/// (`next_major`) waits for at most 144 MiB more (72 MiB); above that the budget is old bytes / 2.
 pub(crate) fn s1_budget(initial: usize, old_bytes: usize) -> usize {
     let base = old_bytes.min(MAX_S1_BUDGET).max(old_bytes / 2).max(initial);
     if old_bytes <= S1_KNEE {
