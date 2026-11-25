@@ -1,0 +1,28 @@
+ep9: gc collections=10 freed_cells=3408477 allocated_bytes=420581936
+ep9 ic-stats: load hit=357003892 miss=990310 (no-vector=78956 uninit=37475 mono=1244 poly=2576 mega=870059)
+ep9 ic-stats: store hit=64824446 miss=3359872 (no-vector=13802 uninit=2091 mono=565783 poly=199893 mega=2578303)
+ep9 ic-stats: load-global hit=6592369 miss=1146 (no-vector=1099 uninit=46 mono=1 poly=0 mega=0)
+ep9 ic-stats: store-global hit=0 miss=21 (no-vector=6 uninit=15 mono=0 poly=0 mega=0)
+ep9 ic-stats: stub-cache load hit=29127965 miss=33275
+ep9 ic-stats: stub-cache store hit=11200750 miss=152327
+ep9 ic-stats: store grow=1467508
+ep9 ic-stats: mega-site store AST@12 miss=773909
+ep9 ic-stats: mega-site load @274 miss=191605
+ep9 ic-stats: mega-site load @501 miss=188541
+ep9 ic-stats: mega-site store @499 miss=188541
+ep9 ic-stats: mega-site store @506 miss=188541
+ep9 ic-stats: mega-site store @272 miss=188511
+ep9 ic-stats: mega-site store @279 miss=188511
+ep9 ic-stats: mega-site store @280 miss=188511
+ep9 ic-stats: mega-site store @285 miss=188511
+ep9 ic-stats: mega-site load @267 miss=144723
+ep9 ic-stats: uninit-site load @9 miss=21098
+ep9 ic-stats: uninit-site load @0 miss=752
+ep9 ic-stats: uninit-site load @2 miss=374
+ep9 ic-stats: uninit-site load @4 miss=337
+ep9 ic-stats: uninit-site load @1 miss=336
+ep9 ic-stats: uninit-site load @5 miss=261
+ep9 ic-stats: uninit-site load @8 miss=243
+ep9 ic-stats: uninit-site load @7 miss=228
+ep9 ic-stats: uninit-site load @3 miss=215
+ep9 ic-stats: uninit-site load @11 miss=215
