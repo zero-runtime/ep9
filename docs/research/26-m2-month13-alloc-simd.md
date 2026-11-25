@@ -305,7 +305,7 @@ CC also confirms: the kill and pick reads quote FD correctly; both builds were r
 | L4 (a) | plan v19 | 0 |
 | L7 | K6: page faults with a measured cost | 0 |
 | SHAPE-LOOKUP-CACHE | a set member in plan v19, priced at x1.007 | 0 |
-| the jit cell | JIT-DELTA (GitHub bench mode, base = head 5c3e1e11): what the jit build runs more, priced by the removed-unit model | 0 |
+| the jit cell | JIT-DELTA ran (run 45606203565, §11): no jit-only lever (no designer-jit run); plan v19 decides the jit half | 0 |
 | line M | route LINE-M-READ-FIX, rides TD-4 | rides TD-4 |
 
 ## 10. Not verified
@@ -318,3 +318,61 @@ CC also confirms: the kill and pick reads quote FD correctly; both builds were r
 - The K1 class patterns are the orchestrator's, read on mangled names; the tail under the list cutoff (7.2% of cycles) is not split (K1R:3).
 - The SHAPE-LOOKUP hit rates are an upper bound (no flush simulated).
 - The G8 readings of L1 (+1 likely) and of L3, L5 (H09 fill, 0) can be disputed by a reviewer (FD:281).
+
+---
+
+## 11. JIT-DELTA (run 45606203565)
+
+The count of plan v18 §4.5 (P18:269): GitHub bench mode, ref `m2/m13`, base = head = 5c3e1e11, octane-typescript, linux-x64 cachegrind with `--branch-sim`, both builds; both bench json files PASS. The table: [jit-delta-table.txt](artifacts/m2-month13-alloc-simd/jit-delta-table.txt) (all rows as tsv: [handlers](artifacts/m2-month13-alloc-simd/jit-delta-handlers.tsv), [hooks by site](artifacts/m2-month13-alloc-simd/jit-delta-hooks-by-site.tsv), [hooks](artifacts/m2-month13-alloc-simd/jit-delta-hooks.tsv)). The read: [jit-delta-read.md](artifacts/m2-month13-alloc-simd/jit-delta-read.md) (JDR). Price model: est. = C / (C - dIr x k), C = 25.17 G cycles (jit Ir / IPC 2.071), k = 0.05 / 0.241 / 0.483 cycles per Ir; x1.010 at the center = 1,032 M Ir.
+
+```
+ jit - jitless Ir      +612.49 M = +1.189%   (positive rows +688.38 M, negative rows -75.89 M)
+ best group (center)   compare record +285.5 M -> x1.0027;  keyed record +282.6 M -> x1.0027
+ all positive rows     x1.0014 / x1.0066 / x1.0134
+ lever line            x1.010 at center: no group reaches it; the whole delta does not reach it
+```
+
+**The top rows (M; jit - jitless, Ir in M; est. center):**
+
+| Handler | jit | jitless | jit - jitless | center |
+|---|---:|---:|---:|---:|
+| TestEqual | 938.42 | 804.49 | +133.93 | x1.0013 |
+| GetKeyedProperty_cold | 264.73 | 133.31 | +131.42 | x1.0013 |
+| record_pair_next::<76> | 129.78 | 0.00 | +129.78 | x1.0012 |
+| string::array_index | 144.59 | 80.29 | +64.30 | x1.0006 |
+| GetKeyedProperty | 489.93 | 439.33 | +50.60 | x1.0005 |
+| CallProperty0 | 2190.10 | 2146.14 | +43.96 | x1.0004 |
+| SetKeyedProperty_cold | 47.26 | 23.49 | +23.77 | x1.0002 |
+| CallProperty1 | 2059.19 | 2037.98 | +21.21 | x1.0002 |
+| TestEqual_cold | 172.13 | 151.32 | +20.81 | x1.0002 |
+
+**The groups by fact kind (D; the whole group removed; low / center / high):**
+
+| Group | dIr (M) | est. |
+|---|---:|---|
+| compare record (TestEqual, TestEqual_cold, record_pair_next, ...) | 285.5 | x1.0006 / x1.0027 / x1.0055 |
+| keyed cold record (GetKeyedProperty_cold, SetKeyedProperty_cold, string::array_index) | 219.5 | x1.0004 / x1.0021 / x1.0042 |
+| call window (CallProperty*, record_call_next, ...) | 107.8 | x1.0002 / x1.0010 / x1.0021 |
+| keyed hit kind (GetKeyedProperty, SetKeyedProperty) | 63.2 | x1.0001 / x1.0006 / x1.0012 |
+| all positive rows | 688.4 | x1.0014 / x1.0066 / x1.0134 |
+
+Reads (JDR §1-§2):
+
+1. **The A/A totals differ for the same sha (M).** jit +778,595 Ir (+1.49e-5), jitless +906,988 Ir (+1.76e-5): above the 1e-5 line of the IDENTITY clause (P18:140). The difference is in glibc malloc (`_int_malloc` +0.54 M in each build) and the front end; no handler row moves. A likely cause (I, not proved): the per-process std `RandomState` seed. No effect on this read (700x smaller than the delta). A plan finding for the null ledger (rule 104), handed back.
+2. **3 rows checked by hand (M):** TestEqual, GetKeyedProperty_cold and string::array_index equal the fn= totals of the `.out` files; the fn= sum equals the `summary:` line in both files.
+3. **The jit build does not take GetKeyedProperty_cold more often (M).** Its entries are 2,380,543 in both builds (K2 counted 2,380,650 on the Mac, §6). The +131 M is `record_keyed_cold` work per entry (about 55 Ir); `string::array_index` +64 M is its `keyed_key` call for string keys (about 27 Ir more per entry).
+4. **TestEqual (M):** the same 43.7 M entries; the jit build adds the pair test of the `x == null` arm and its inlined std code (about 3.1 Ir per entry). `record_pair_next` runs 2.53 M times at about 51 Ir.
+5. **Ir does not explain the wall gap (D).** End read m12-p1: jit 0.968, jitless 0.985 (the jit build about 1.8% slower; box 2: 0.8%). The net Ir delta explains 0.59% at the center (1.19% at high). TD-3 perf gave the jit build +1.0% instructions but +2.5% cycles (R18S §3).
+6. **The Bim column points the other way (M, I).** jit - jitless Bim -32.0 M (about -1.65% of cycles at 13 cycles per miss), mostly in handlers with no record code (`LdaUndefined` -10.5 M): a layout effect in the simulator's simple indirect predictor. What Ir and this column do not see: real branch misses, I-cache and iTLB misses of the larger handlers, the record stores. The counts that would see them: `--cache-sim=yes` in the same bench mode (0 boxes), and a perf pair per build on an x86 box (the TD-4 form).
+
+**The call: JIT-DELTA prices no jit-only lever (no designer-jit run).** For the jit cells (P18:75): the jit half still has no designed lever, and the month-14 and month-15 estimates stay unwritten. A cut of all the jit-only Ir is x1.0059 at the center, against a need of x1.041 / x1.042: the jit half needs levers in both builds or a lever on cycles that Ir does not see (a plan v19 decision). JIT-REC (P18:257) stays "not priced".
+
+**Candidate ideas for plan v19 (E; each at its full group, a real cut is smaller):**
+
+| # | Idea | dIr bound (M) | est. low / center / high |
+|---|---|---:|---|
+| 1 | compare record lean: a no-change test before the full `compare_bits` in `record_pair_next` (the LEVER-8 form, today only on the `TestEqual` nullish arm) | 285.5 | x1.0006 / x1.0027 / x1.0055 |
+| 2 | keyed cold record pre-test: test for "no new bit possible" before `keyed_key`, so `string::array_index` and the kind reads run only when a bit can change | 219.5 | x1.0004 / x1.0021 / x1.0042 |
+| 3 | window tests off the hot path: `keyed_hit_kind` on the keyed hit and `call_window_after_unit` on each call (needs a MODES design row: it changes when a fact is read) | 171.0 | x1.0003 / x1.0016 / x1.0033 |
+
+All 3 at their bound: 676 M, x1.0065 at the center (D).
