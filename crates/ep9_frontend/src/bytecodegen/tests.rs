@@ -2616,8 +2616,9 @@ pub(crate) fn star_dst_expand(f: &ep9_bytecode::Function) -> (ep9_bytecode::Func
                     target: None,
                 });
             }
+            // A `Far` twin goes back to its near form; the encoding below picks the form again.
             None => out.push(StarInsn {
-                op: i.opcode,
+                op: i.opcode.near_form(),
                 vals,
                 target: i.jump_target().map(new_index),
             }),
@@ -2641,10 +2642,24 @@ pub(crate) fn star_dst_expand(f: &ep9_bytecode::Function) -> (ep9_bytecode::Func
             s
         })
         .collect();
+    // The builder rule (`FunctionBuilder::finish`, ABI 8): with bit 0 on, a jump with a `Far`
+    // twin at scale `Wide` is the twin (Near 2 bytes -> Far 3 -> ExtraWide 6). Bit 0 is on if
+    // the switch of this thread says so or if `f` holds a twin.
+    let far = super::FAR_JUMPS_TEST
+        .with(|c| c.get())
+        .unwrap_or_else(|| super::wide_forms() & 1 != 0)
+        || insns.iter().any(|i| i.opcode.near_form() != i.opcode);
+    let form = |x: &StarInsn, s: OperandScale| -> (Opcode, OperandScale) {
+        match x.op.far_twin() {
+            Some(t) if far && s == OperandScale::Wide => (t, OperandScale::Single),
+            _ => (x.op, s),
+        }
+    };
     let mut offsets = vec![0u64; out.len() + 1];
     loop {
         for i in 0..out.len() {
-            offsets[i + 1] = offsets[i] + out[i].op.info().size(scales[i]) as u64;
+            let (op, s) = form(&out[i], scales[i]);
+            offsets[i + 1] = offsets[i] + op.info().size(s) as u64;
         }
         let mut changed = false;
         for i in 0..out.len() {
@@ -2663,17 +2678,18 @@ pub(crate) fn star_dst_expand(f: &ep9_bytecode::Function) -> (ep9_bytecode::Func
     }
     let mut code = Vec::with_capacity(offsets[out.len()] as usize);
     for (i, x) in out.iter().enumerate() {
-        if let Some(p) = Opcode::prefix_for(scales[i]) {
+        let (op, s) = form(x, scales[i]);
+        if let Some(p) = Opcode::prefix_for(s) {
             code.push(p as u8);
         }
-        code.push(x.op as u8);
-        for (spec, &v) in x.op.info().operands.iter().zip(&x.vals) {
+        code.push(op as u8);
+        for (spec, &v) in op.info().operands.iter().zip(&x.vals) {
             let v = if jump(spec.kind) {
                 offsets[i].abs_diff(offsets[x.target.expect("a jump")]) as i64
             } else {
                 v
             };
-            code.extend_from_slice(&(v as u32).to_le_bytes()[..spec.kind.size(scales[i])]);
+            code.extend_from_slice(&(v as u32).to_le_bytes()[..spec.kind.size(s)]);
         }
     }
     let new_off = |off: u32| offsets[new_index(off)] as u32;
@@ -3496,6 +3512,44 @@ fn far_jumps_over_try_generator_switch() {
         assert_eq!(a.mapped_parameters, b.mapped_parameters, "function {k}");
         assert!(b.bytecode.len() <= a.bytecode.len(), "function {k}");
     }
+}
+
+/// Codex 2 (M13-P2 fix r1): with bit 0 on, a function with a fused load
+/// (`GetNamedPropertyStar`) and a forward jump over more than 255 bytes (a `Far` twin). The
+/// STAR-DST expansion of the optimized unit decodes in full, holds the twin and no fused
+/// load, and the regopt guard (which reads the expansion) finds no difference.
+#[test]
+fn star_dst_expand_keeps_far_twins() {
+    use ep9_bytecode::Instructions;
+    let big: String = (0..60)
+        .map(|i| format!("o.p{i} = o.q{i} + {i};\n"))
+        .collect();
+    let src: &'static str = Box::leak(
+        format!("function f(o) {{\n  var a = o.p;\n  if (a) {{\n{big}  }}\n  return a;\n}}\nf;\n")
+            .into_boxed_str(),
+    );
+    let (opt, expanded, diffs) = super::with_far_jumps(true, move || {
+        let (_, opt, _) = super::compile_both(src, Sloppy.opts()).unwrap();
+        let expanded = star_dst_expand_unit(opt.unit());
+        (
+            opt.unit().clone(),
+            expanded,
+            regopt_differences(src, Sloppy.opts()),
+        )
+    });
+    let ops = |f: &ep9_bytecode::Function| -> Vec<Opcode> {
+        Instructions::new(&f.bytecode)
+            .map(|i| i.expect("the expansion decodes").opcode)
+            .collect()
+    };
+    let twin = |op: &Opcode| op.near_form() != *op;
+    let f = &opt.functions[1];
+    assert!(ops(f).contains(&Opcode::GetNamedPropertyStar));
+    assert!(ops(f).iter().any(twin), "a Far twin in the optimized unit");
+    let x = ops(&expanded.functions[1]);
+    assert!(!x.contains(&Opcode::GetNamedPropertyStar));
+    assert!(x.iter().any(twin), "a Far twin in the expansion");
+    assert_eq!(diffs, Vec::<String>::new());
 }
 
 // ---- WIDE-SET probe (ABI 8, F-a): bit 1 of EP9_WIDE_FORMS, the prefix Wide2 ----
