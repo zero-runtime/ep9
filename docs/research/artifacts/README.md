@@ -1,6 +1,6 @@
 # Research artifacts
 
-These are the research harnesses that the plan uses again, the decision inputs that later steps need, and the raw evidence of five rounds (`vm-lessons/`, `x86-ts-time/`, `m2-stuck/`, `m2-month11-levers/`, `m2-month12-offloop/`). All other harnesses stayed in a session scratchpad and were not kept. The reports in `../` describe their results.
+These are the research harnesses that the plan uses again, the decision inputs that later steps need, and the raw evidence of six rounds (`vm-lessons/`, `x86-ts-time/`, `m2-stuck/`, `m2-month11-levers/`, `m2-month12-offloop/`, `m2-month13-plan-research/`). All other harnesses stayed in a session scratchpad and were not kept. The reports in `../` describe their results.
 
 | Directory | What it does | Used by |
 |---|---|---|
@@ -13,6 +13,7 @@ These are the research harnesses that the plan uses again, the decision inputs t
 | `m2-stuck/` | The numbers of the 2026-11-21 "why M2 is stuck" round: the ranked causes and verdicts, the cycle buckets against node, the box-neutral TS series, the month-10 lever ledger, the per-host TS cells, the gate and process costs, the orchestrator decisions D1-D7 and the X1 and X2 experiment numbers (`findings.json`). See [m2-stuck/README.md](m2-stuck/README.md) | [../22-m2-stuck-causes.md](../22-m2-stuck-causes.md); plan v16 |
 | `m2-month11-levers/` | The numbers of the 2026-11-24 month-11 lever round: the lever reads predicted against measured, the time per 1% of instructions and the cycles per removed unit, the Path B series, the cycle map that is left, the candidate sums, the parser debug-stack measurement, the process numbers and the R22 addendum (`findings.json` and 3 TSV tables). See [m2-month11-levers/README.md](m2-month11-levers/README.md) | [../23-m2-month11-levers.md](../23-m2-month11-levers.md); plan v17 |
 | `m2-month12-offloop/` | The numbers of the 2026-11-25 month-12 round: the off-loop split of the TS gate cell (wall against CPU time, ep9 main-thread GC against node's helper threads), the month-12 lever reads, the Path B series with the read-to-read move, and the L1 parser stack check cost and review (`findings.json` and 4 TSV tables). See [m2-month12-offloop/README.md](m2-month12-offloop/README.md) | [../24-m2-month12-offloop.md](../24-m2-month12-offloop.md); plan v18 |
+| `m2-month13-plan-research/` | The numbers of the 2026-11-25 plan-v18 research round: the month-13 lever forecasts (low / center / high, G8, MERGE odds, cost) against the gate need, and each forecast read against the month-12 end Path B read (`findings.json` and 2 TSV tables). See [m2-month13-plan-research/README.md](m2-month13-plan-research/README.md) | [../25-m2-month13-plan-research.md](../25-m2-month13-plan-research.md); plan v18 |
 
 ## Build
 
