@@ -316,25 +316,47 @@ test("--patch writes the print into a heap.rs copy", (t) => {
 
 // ---- the merge check ---------------------------------------------------------------------------
 
-test("the merge check: GC counts equal to the read's B1, Ir within 1e-5", (t) => {
+// The merge-check fixture: both builds, the 20 rows (octane-typescript and the 19 BENCH-SET rows),
+// forms H1 and H0 (or `forms`), 3 counted runs per cell, one Ir per row, a sha256 per row.
+const MC_ROWS = [TS_WORKLOAD, ...BENCH_SET];
+function mcDoc(head, arm, { forms = ["H1", "H0"], builds = ["jit", "jitless"], rows = MC_ROWS, gcs = {}, ir = {}, sha = {} } = {}) {
   const cell = (med) => ({ runs: 3, counted: 3, median: med });
-  const row = (name, arm, med, ir) => ({ name, arms: { [arm]: { H1: cell(med), H0: cell(med) } }, ir: { [arm]: ir } });
-  const doc = (head, arm, rows) => ({ schema: SCHEMA, head, forms: ["H1", "H0"], builds: [{ build: "jitless", rows }] });
-  const read = doc("a", "1", [row(TS_WORKLOAD, "1", 6, 1_000_000_000), row("splay", "1", 5, 2_000_000_000)]);
-  let merge = doc("b", "0", [row(TS_WORKLOAD, "0", 6, 1_000_010_000), row("splay", "0", 5, 2_000_000_000)]);
+  return {
+    schema: SCHEMA,
+    head,
+    forms,
+    builds: builds.map((build) => ({
+      build,
+      rows: rows.map((name, i) => ({
+        name,
+        sha256: name in sha ? sha[name] : `sha-${name}`,
+        arms: { [arm]: Object.fromEntries(forms.map((f) => [f, cell(gcs[name] ?? (name === TS_WORKLOAD ? 6 : 5))])) },
+        ir: { [arm]: ir[name] ?? 1_000_000_000 + i * 1_000 },
+      })),
+    })),
+  };
+}
+
+test("the merge check: GC counts equal to the read's B1, Ir within 1e-5", (t) => {
+  assert.equal(MC_ROWS.length, 20);
+  const read = mcDoc("a", "1");
+  let merge = mcDoc("b", "0", { ir: { [TS_WORKLOAD]: 1_000_010_000 } });
   let c = compareReads(read, merge);
-  assert.equal(c.verdict, "PASS", JSON.stringify(c.rows));
-  merge = doc("b", "0", [row(TS_WORKLOAD, "0", 6, 1_000_010_001), row("splay", "0", 5, 2_000_000_000)]);
+  assert.equal(c.verdict, "PASS", JSON.stringify(c));
+  assert.equal(c.rows.length, 40);
+  assert.deepEqual(c.missing, []);
+  merge = mcDoc("b", "0", { ir: { [TS_WORKLOAD]: 1_000_010_001 } });
   c = compareReads(read, merge);
   assert.equal(c.verdict, "FAIL");
   assert.equal(c.rows[0].word, "FAIL");
-  merge = doc("b", "0", [row(TS_WORKLOAD, "0", 7, 1_000_000_000), row("splay", "0", 5, 2_000_000_000)]);
+  merge = mcDoc("b", "0", { gcs: { [TS_WORKLOAD]: 7 } });
   assert.equal(compareReads(read, merge).rows[0].word, "FAIL", "a GC count that differs");
-  merge = doc("b", "0", [row(TS_WORKLOAD, "0", 6, 1_000_000_000)]);
+  merge = mcDoc("b", "0", { rows: [TS_WORKLOAD] });
   c = compareReads(read, merge);
   assert.equal(c.verdict, "INCOMPLETE", "a row with no merge reading");
+  assert.ok(c.missing.includes("merge: jit splay"), c.missing.join("; "));
   // A merge cell with a failed run is no reading, even when its median equals the read.
-  merge = doc("b", "0", [row(TS_WORKLOAD, "0", 6, 1_000_000_000), row("splay", "0", 5, 2_000_000_000)]);
+  merge = mcDoc("b", "0");
   merge.builds[0].rows[1].arms["0"].H0.counted = 2;
   c = compareReads(read, merge);
   assert.equal(c.rows[1].word, "no reading");
@@ -343,10 +365,47 @@ test("the merge check: GC counts equal to the read's B1, Ir within 1e-5", (t) =>
   const dir = mkdtempSync(path.join(os.tmpdir(), "ep9-gc-count-cmp-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(path.join(dir, "r.json"), JSON.stringify(read));
-  writeFileSync(path.join(dir, "m.json"), JSON.stringify(doc("b", "0", [row(TS_WORKLOAD, "0", 6, 1_000_000_000), row("splay", "0", 5, 2_000_000_000)])));
+  writeFileSync(path.join(dir, "m.json"), JSON.stringify(mcDoc("b", "0")));
   const r = runScript(["--compare", path.join(dir, "r.json"), path.join(dir, "m.json")]);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Merge head = read code: PASS \(read a arm 1; merge b arm 0\)/);
+  writeFileSync(path.join(dir, "m1.json"), JSON.stringify(mcDoc("b", "0", { forms: ["H0"] })));
+  const r1 = runScript(["--compare", path.join(dir, "r.json"), path.join(dir, "m1.json")]);
+  assert.equal(r1.status, 1, r1.stdout);
+  assert.match(r1.stdout, /INCOMPLETE/);
+  assert.match(r1.stdout, /- missing \(INCOMPLETE\): merge: form H1/);
   writeFileSync(path.join(dir, "x.json"), "{}");
   assert.equal(runScript(["--compare", path.join(dir, "x.json"), path.join(dir, "m.json")]).status, 2);
+});
+
+test("the merge check: a merge run without a form of the read is INCOMPLETE (Codex r1, 1)", () => {
+  // The read has H1 and H0; the merge run has H0 only, with H0 counts equal and Ir in the band.
+  const c = compareReads(mcDoc("a", "1"), mcDoc("b", "0", { forms: ["H0"] }));
+  assert.equal(c.verdict, "INCOMPLETE", JSON.stringify(c.rows[0]));
+  assert.deepEqual(c.rows[0].counts.map((x) => x.form), ["H1", "H0"]);
+  assert.equal(c.rows[0].word, "no reading");
+});
+
+test("the merge check: a read with fewer rows or one build is INCOMPLETE (Codex r1, 1)", () => {
+  // A read of octane-typescript only (a bench_workloads run): it does not define the check set.
+  let c = compareReads(mcDoc("a", "1", { rows: [TS_WORKLOAD] }), mcDoc("b", "0"));
+  assert.equal(c.verdict, "INCOMPLETE", JSON.stringify(c.rows));
+  // A read of the jitless build only.
+  c = compareReads(mcDoc("a", "1", { builds: ["jitless"] }), mcDoc("b", "0"));
+  assert.equal(c.verdict, "INCOMPLETE", JSON.stringify(c.rows.slice(0, 2)));
+  // A merge run of the jit build only.
+  c = compareReads(mcDoc("a", "1"), mcDoc("b", "0", { builds: ["jit"] }));
+  assert.equal(c.verdict, "INCOMPLETE");
+});
+
+test("the merge check: a workload sha256 that differs is FAIL; no sha256 is no reading (Codex r1, 1)", () => {
+  let c = compareReads(mcDoc("a", "1", { sha: { splay: "x" } }), mcDoc("b", "0", { sha: { splay: "y" } }));
+  assert.equal(c.verdict, "FAIL", JSON.stringify(c.rows.filter((r) => r.name === "splay")));
+  assert.deepEqual(
+    c.rows.filter((r) => r.word !== "pass").map((r) => `${r.build} ${r.name} ${r.word}`),
+    ["jit splay FAIL", "jitless splay FAIL"],
+  );
+  c = compareReads(mcDoc("a", "1", { sha: { splay: null } }), mcDoc("b", "0"));
+  assert.equal(c.verdict, "INCOMPLETE");
+  assert.equal(c.rows.find((r) => r.name === "splay").word, "no reading");
 });

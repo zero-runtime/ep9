@@ -1480,7 +1480,8 @@ jobs:
       # heap.rs, and the copy builds in its own target dirs (the trace binaries; the head binaries
       # stay as built).
       # Per build, row (octane-typescript + the bench rows) and arm of EP9_GC_BUDGET (0, 1 = B1,
-      # 2 = B2): the GC count per helper form, the peak old bytes (O17), the GC decisions against
+      # 2 = B2; a head with no switch, as the GC-BUDGET merge head, runs B1 in every arm): the GC
+      # count per helper form, the peak old bytes (O17), the GC decisions against
       # arm 0, the earley-boyer peak RSS (G7 line) and the Ir of the head binary per arm (the
       # "merge head equals the read code" input: gc-count.mjs --compare). The "off" leg runs the
       # script tests only; the linux-arm64 leg skips the step.

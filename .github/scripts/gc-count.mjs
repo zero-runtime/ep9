@@ -2,7 +2,8 @@
 // The GC count run of the bench mode (ci.yml job bench-set, step "gc count"; route GC-X86-COUNT,
 // plan v18 section 4.2, G-4 and G-6). A COUNT RUN: it reads counts only and is never a timed
 // run. On x86-64 Linux it gives, per build, workload row and arm of the GC-BUDGET probe switch
-// (EP9_GC_BUDGET = 0, 1 = B1, 2 = B2; crates/ep9_heap/src/heap.rs gc_budget_arm):
+// (EP9_GC_BUDGET = 0, 1 = B1, 2 = B2; heap.rs gc_budget_arm of the read head f224a030). The
+// merge head has no switch: every arm runs its one S1 budget (B1), and --compare reads it:
 //
 //   - the GC count and the per-GC trace of a trace binary (the head tree with one print per GC,
 //     --patch below), per helper form, several runs;
@@ -63,7 +64,7 @@ import { expandWorkloads, materialize, TS_WORKLOAD, WORKLOADS } from "../../tool
 import { hostInfo } from "../../tools/bench/lib/host.mjs";
 
 export const SCHEMA = "ep9-gc-count/v1";
-/** The arms of EP9_GC_BUDGET (heap.rs budget_arm_from): "0" = arm 0, "1" = B1, "2" = B2. */
+/** The arms of EP9_GC_BUDGET (read head heap.rs budget_arm_from): "0" = arm 0, "1" = B1, "2" = B2. */
 export const ARMS = ["0", "1", "2"];
 /** Helper forms: the EP9_GC_HELPERS value, or null = not set (the host default). */
 export const FORMS = { H0: "0", H1: "1", HD: null };
@@ -597,18 +598,41 @@ export async function run(o, { log = (s) => process.stderr.write(`${s}\n`) } = {
 
 // ---- the merge check ---------------------------------------------------------------------------
 
+/** The builds of the merge check: both, always (plan v18 section 4.2). */
+export const MERGE_BUILDS = ["jit", "jitless"];
+/** The rows of the merge check: octane-typescript and the 19 BENCH-SET rows, always. */
+export const MERGE_ROWS = [TS_WORKLOAD, ...BENCH_SET];
+
 /**
  * "The merge head equals the read code" (plan v18 section 4.2): for every build and row of the
- * read, the merge run's GC count (median, each form) equals the read's arm --read-arm, and its
- * Ir (arm --merge-arm) is within 1e-5 of the read's Ir at --read-arm.
+ * read, the merge run's GC count (median, each form of the read) equals the read's arm
+ * --read-arm, and its Ir (arm --merge-arm) is within 1e-5 of the read's Ir at --read-arm.
+ * The check set is fixed, not taken from the read: both builds (MERGE_BUILDS) and the 20 rows
+ * (MERGE_ROWS) must be in the read and in the merge run, and every form of the read must be in
+ * the merge run; else the verdict is INCOMPLETE (`missing` names each gap). A row whose
+ * workload sha256 differs between the 2 runs is FAIL; a row with no sha256 on a side is no
+ * reading.
  */
 export function compareReads(read, merge, { readArm = "1", mergeArm = "0" } = {}) {
   const rows = [];
-  for (const rb of read.builds) {
-    const mb = merge.builds.find((b) => b.build === rb.build);
+  const missing = [];
+  const forms = read.forms ?? [];
+  if (!forms.length) missing.push("read: no form");
+  for (const f of forms) if (!(merge.forms ?? []).includes(f)) missing.push(`merge: form ${f}`);
+  for (const [side, doc] of [["read", read], ["merge", merge]]) {
+    for (const build of MERGE_BUILDS) {
+      const b = doc.builds?.find((x) => x.build === build);
+      if (!b) {
+        missing.push(`${side}: build ${build}`);
+        continue;
+      }
+      for (const name of MERGE_ROWS) if (!b.rows.some((r) => r.name === name)) missing.push(`${side}: ${build} ${name}`);
+    }
+  }
+  for (const rb of read.builds ?? []) {
+    const mb = merge.builds?.find((b) => b.build === rb.build);
     for (const rr of rb.rows) {
       const mr = mb?.rows.find((r) => r.name === rr.name);
-      const forms = read.forms.filter((f) => merge.forms.includes(f));
       // A cell with a failed run is no reading on either side (the compare never uses a part set).
       const counts = forms.map((f) => ({ form: f, read: fullMedian(rr.arms[readArm]?.[f]), merge: fullMedian(mr?.arms[mergeArm]?.[f]) }));
       const ir0 = rr.ir?.[readArm] ?? null;
@@ -619,12 +643,18 @@ export function compareReads(read, merge, { readArm = "1", mergeArm = "0" } = {}
       const irOk = have && (BigInt(ir1) - BigInt(ir0)) * (ir1 >= ir0 ? 1n : -1n) * BigInt(Math.round(1 / IR_BAND)) <= BigInt(ir0);
       const countOk = counts.length > 0 && counts.every((c) => c.read !== null && c.read === c.merge);
       const countMissing = !counts.length || counts.some((c) => c.read === null || c.merge === null);
-      const word = countMissing || !have ? "no reading" : countOk && irOk ? "pass" : "FAIL";
-      rows.push({ build: rb.build, name: rr.name, counts, ir_read: ir0, ir_merge: ir1, ir_rel: rel, word });
+      // The workload text: the same sha256 on both sides, else the 2 runs did not run one text.
+      const sha = !mr ? null : rr.sha256 && mr.sha256 ? (rr.sha256 === mr.sha256 ? "equal" : "DIFFERS") : "missing";
+      const word = sha === "DIFFERS" ? "FAIL" : countMissing || !have || sha !== "equal" ? "no reading" : countOk && irOk ? "pass" : "FAIL";
+      rows.push({ build: rb.build, name: rr.name, sha256: sha, counts, ir_read: ir0, ir_merge: ir1, ir_rel: rel, word });
     }
   }
-  const verdict = rows.some((r) => r.word === "FAIL") ? "FAIL" : rows.length && rows.every((r) => r.word === "pass") ? "PASS" : "INCOMPLETE";
-  return { read_head: read.head, merge_head: merge.head, read_arm: readArm, merge_arm: mergeArm, verdict, rows };
+  const verdict = rows.some((r) => r.word === "FAIL")
+    ? "FAIL"
+    : !missing.length && rows.length && rows.every((r) => r.word === "pass")
+      ? "PASS"
+      : "INCOMPLETE";
+  return { read_head: read.head, merge_head: merge.head, read_arm: readArm, merge_arm: mergeArm, verdict, missing, rows };
 }
 
 // ---- tables ------------------------------------------------------------------------------------
@@ -678,12 +708,14 @@ export function renderMarkdown(res) {
 
 export function renderCompare(c) {
   const L = [`### Merge head = read code: ${c.verdict} (read ${c.read_head ?? "-"} arm ${c.read_arm}; merge ${c.merge_head ?? "-"} arm ${c.merge_arm})`, ""];
-  L.push("| build | row | GCs read / merge | Ir read | Ir merge | Ir rel | word |");
-  L.push("|---|---|---|---|---|---|---|");
+  for (const m of c.missing ?? []) L.push(`- missing (INCOMPLETE): ${m}`);
+  if (c.missing?.length) L.push("");
+  L.push("| build | row | workload sha256 | GCs read / merge | Ir read | Ir merge | Ir rel | word |");
+  L.push("|---|---|---|---|---|---|---|---|");
   for (const r of c.rows) {
     const g = r.counts.map((x) => `${x.form} ${x.read ?? "-"}/${x.merge ?? "-"}`).join(", ");
     const rel = r.ir_rel === null ? "-" : r.ir_rel.toExponential(2);
-    L.push(`| ${r.build} | ${r.name} | ${g} | ${num(r.ir_read)} | ${num(r.ir_merge)} | ${rel} | ${r.word} |`);
+    L.push(`| ${r.build} | ${r.name} | ${r.sha256 ?? "-"} | ${g} | ${num(r.ir_read)} | ${num(r.ir_merge)} | ${rel} | ${r.word} |`);
   }
   return `${L.join("\n")}\n`;
 }
