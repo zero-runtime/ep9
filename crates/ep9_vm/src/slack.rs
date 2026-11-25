@@ -408,7 +408,11 @@ pub(crate) fn slack_arm() -> u8 {
         return 0;
     }
     static ARM: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *ARM.get_or_init(|| slack_arm_from(std::env::var("EP9_SLACK_ARM").ok().as_deref()))
+    // bench-only: never merged (an unset switch gives 1; an explicit 0 still gives 0).
+    *ARM.get_or_init(|| match std::env::var("EP9_SLACK_ARM") {
+        Err(std::env::VarError::NotPresent) => 1,
+        v => slack_arm_from(v.ok().as_deref()),
+    })
 }
 
 /// The arm of an `EP9_SLACK_ARM` value ([`slack_arm`]): `"1"`, `"2"`, `"3"` are arms 1-3;
