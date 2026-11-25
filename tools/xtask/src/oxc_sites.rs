@@ -24,7 +24,8 @@
 //!   `may_recurse` is a finding: a form that does not stop (no `return`), that calls more in its
 //!   condition, or that is not at the top level of the body would cut the graph falsely
 //!   -> the site table; a cycle (a strongly connected group, or a self call) that is left is a
-//!      finding, unless its edges are in ALLOW (name noise, each with its reason)
+//!      finding, unless its edges are in ALLOW (name noise: from, to, the use that makes the
+//!      edge, and the reason; an entry that leaves out no edge is a finding)
 //! ```
 //!
 //! The lexer byte handlers (`lexer/byte_handlers.rs`) are called through a table, and the graph
@@ -81,7 +82,8 @@
 //!   `--edges NAME` prints each edge out of one node.
 //!
 //! Exit codes: 0 no cycle; 1 a cycle, a loop that is missing or recursive, a fn of an impl of a
-//! trait of another crate that reaches a site, or a call of `may_recurse` that is not a site form;
+//! trait of another crate that reaches a site, a call of `may_recurse` that is not a site form,
+//! or an ALLOW entry that leaves out no edge;
 //! 2 usage error, a file that does not parse,
 //! a macro call that does not expand, or a form that the graph cannot see (the list above).
 //! Paths print relative to the source dir, with `/`.
@@ -146,49 +148,62 @@ const LOOPS: &[(&str, &str)] = &[
     ),
 ];
 
+/// An ALLOW entry: (from, to, the use that makes the edge as `--explain` prints it, reason).
+type Allow = (&'static str, &'static str, &'static str, &'static str);
+
 /// Edges that are name noise (a call whose receiver type the graph cannot see, joined with a
-/// same-name fn of another type): `(from, to, reason)`. An edge here is left out of the graph.
-const ALLOW: &[(&str, &str, &str)] = &[
+/// same-name fn of another type). An entry leaves out only the edge that its own use makes
+/// (another use that makes the same edge stays), and an entry that leaves out no edge is a
+/// finding (review R2 B2-4: after a bump it can hide a new call of the same name).
+const ALLOW: &[Allow] = &[
     (
         "ParserImpl::parse_regex_pattern",
         "Parser::parse",
+        r#"Method(None, "parse")"#,
         "`LiteralParser::new(..).parse()` is the oxc_regular_expression parser (another crate)",
     ),
     (
         "ParserImpl::parse_regex_pattern",
         "ParserImpl::parse",
+        r#"Method(None, "parse")"#,
         "`LiteralParser::new(..).parse()` is the oxc_regular_expression parser (another crate)",
     ),
     (
         "parse_float_with_underscores",
         "Parser::parse",
+        r#"Method(None, "parse")"#,
         "`s.cow_replace(..).parse::<f64>()` is `str::parse` (std)",
     ),
     (
         "parse_float_with_underscores",
         "ParserImpl::parse",
+        r#"Method(None, "parse")"#,
         "`s.cow_replace(..).parse::<f64>()` is `str::parse` (std)",
     ),
     (
         "JSXClosing::dummy",
         "JSXClosing::dummy",
+        r#"Path("Dummy", "dummy")"#,
         "`Dummy::dummy(allocator)` builds the `JSXClosingFragment` field (an oxc_ast type)",
     ),
     (
         "ModifierKind::from_usize_unchecked",
         "ModifierKinds::iter",
+        r#"Method(None, "iter")"#,
         "`Self::VARIANTS.iter()` (a debug_assert) is the slice iter of the const array that the \
          `fieldless_enum!` macro (oxc_data_structures) writes",
     ),
     (
         "ModifierKind::from_usize_unchecked",
         "Modifiers::iter",
+        r#"Method(None, "iter")"#,
         "`Self::VARIANTS.iter()` (a debug_assert) is the slice iter of the const array that the \
          `fieldless_enum!` macro (oxc_data_structures) writes",
     ),
     (
         "MODIFIER_LENGTHS",
         "ModifierKind::len",
+        r#"Method(None, "len")"#,
         "the static initializer calls `ModifierKind::VARIANTS.len()` and `kind.as_str().len()`: \
          slice and str `len` (std), run once at compile time",
     ),
@@ -249,6 +264,8 @@ pub(crate) struct Report {
     pub(crate) bad_checks: Vec<(String, String, usize, String)>,
     /// The graph after the cut: node -> the nodes it calls.
     pub(crate) edges: BTreeMap<String, BTreeMap<String, String>>,
+    /// (from, to, use) of each ALLOW entry that leaves out no edge.
+    pub(crate) unused_allow: Vec<(String, String, String)>,
 }
 
 impl Report {
@@ -257,6 +274,7 @@ impl Report {
             && self.loops.iter().all(|l| l.2)
             && self.implicit.is_empty()
             && self.bad_checks.is_empty()
+            && self.unused_allow.is_empty()
     }
 }
 
@@ -305,7 +323,7 @@ pub fn main(args: &[String]) -> Result<bool, String> {
         let text = fs::read_to_string(f).map_err(|e| format!("{rel}: {e}"))?;
         sources.push((rel, text));
     }
-    let r = run(&sources, &assume)?;
+    let r = run(&sources, &assume, ALLOW)?;
     print_report(&r, &src, explain);
     for name in &show {
         let found: Vec<&String> = r
@@ -377,6 +395,12 @@ fn print_report(r: &Report, src: &Path, explain: bool) {
             path.join(" -> ")
         );
     }
+    for (from, to, u) in &r.unused_allow {
+        println!(
+            "oxc-sites: UNUSED ALLOW entry: `{from}` -> `{to}` by `{u}` leaves out no edge \
+             (remove it, or fix it to the use that makes the edge now)"
+        );
+    }
     for (label, file, line, why) in &r.bad_checks {
         println!(
             "oxc-sites: NOT A SITE FORM at {file}:{line} in `{label}`: {why} (the 2 forms: \
@@ -396,10 +420,12 @@ fn print_report(r: &Report, src: &Path, explain: bool) {
     );
 }
 
-/// Builds the graph of `sources` (path, text) and finds the cycles that no site cuts.
+/// Builds the graph of `sources` (path, text) and finds the cycles that no site cuts; `allow`
+/// is [`ALLOW`] (a test gives its own entries).
 pub(crate) fn run(
     sources: &[(String, String)],
     assume: &BTreeSet<String>,
+    allow: &[Allow],
 ) -> Result<Report, String> {
     let mut asts = Vec::new();
     for (rel, text) in sources {
@@ -545,6 +571,7 @@ pub(crate) fn run(
     };
     let mut edges: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut places = BTreeMap::new();
+    let mut allow_used = vec![false; allow.len()];
     for f in &funcs {
         let out = edges.entry(f.key.clone()).or_default();
         let own_type = f.key.rsplit_once("::").map(|(t, _)| t);
@@ -561,9 +588,16 @@ pub(crate) fn run(
                 Use::Bare(n) => all(&free, n),
                 Use::Any(n) => all(&by_name, n),
             };
+            let text = format!("{u:?}");
             for k in to {
-                if !ALLOW.iter().any(|(a, b, _)| *a == f.key && *b == k) {
-                    out.entry(k).or_insert_with(|| format!("{u:?}"));
+                match allow
+                    .iter()
+                    .position(|(a, b, w, _)| *a == f.key && *b == k && *w == text)
+                {
+                    Some(i) => allow_used[i] = true,
+                    None => {
+                        out.entry(k).or_insert_with(|| text.clone());
+                    }
                 }
             }
         }
@@ -633,6 +667,12 @@ pub(crate) fn run(
         .collect();
     bad_checks.sort_by(|a, b| (&a.1, a.2).cmp(&(&b.1, b.2)));
     let data = funcs.iter().filter(|f| f.data).count();
+    let unused_allow = allow
+        .iter()
+        .zip(&allow_used)
+        .filter(|(_, used)| !**used)
+        .map(|((a, b, w, _), _)| (a.to_string(), b.to_string(), w.to_string()))
+        .collect();
     Ok(Report {
         files: sources.len(),
         funcs: funcs.len() - data,
@@ -645,6 +685,7 @@ pub(crate) fn run(
         implicit,
         bad_checks,
         edges,
+        unused_allow,
     })
 }
 
@@ -2110,7 +2151,7 @@ mod tests {
             .iter()
             .map(|(p, t)| (p.to_string(), t.to_string()))
             .collect();
-        run(&s, &BTreeSet::new()).expect("fixture parses")
+        run(&s, &BTreeSet::new(), &[]).expect("fixture parses")
     }
 
     fn keys(v: &[&str]) -> Vec<String> {
@@ -2354,13 +2395,49 @@ mod tests {
     #[test]
     fn a_field_of_an_fn_bound_parameter_fails() {
         let src = "struct S<F, G: Clone> where F: FnMut() -> u32 { f: Option<F>, g: G }";
-        let e = run(&[("w.rs".into(), src.into())], &BTreeSet::new()).unwrap_err();
+        let e = run(&[("w.rs".into(), src.into())], &BTreeSet::new(), &[]).unwrap_err();
         assert!(
             e.starts_with("w.rs:1: S.f: the field holds a fn value"),
             "{e}"
         );
         let ok = "struct S<G: Clone> { g: G }";
-        assert!(run(&[("w.rs".into(), ok.into())], &BTreeSet::new()).is_ok());
+        assert!(run(&[("w.rs".into(), ok.into())], &BTreeSet::new(), &[]).is_ok());
+    }
+
+    /// Review R2 B2-4: an ALLOW entry leaves out only the edge of its own use; an entry that
+    /// leaves out no edge is a finding.
+    #[test]
+    fn an_allow_entry_holds_only_its_own_use() {
+        const ENTRY: Allow = (
+            "JSXClosing::dummy",
+            "JSXClosing::dummy",
+            r#"Path("Dummy", "dummy")"#,
+            "the oxc_ast impl of the same name",
+        );
+        let src = "struct JSXClosing; impl Dummy for JSXClosing { fn dummy(a: u32) -> Self { CALL } }
+                   impl<C> ParserImpl<C> { fn set_pure_on_call_or_new_expr() {} fn jsx_member_expression_eq() {} }";
+        let run_with = |call: &str| {
+            let s = vec![("d.rs".to_string(), src.replace("CALL", call))];
+            run(&s, &BTreeSet::new(), &[ENTRY]).expect("fixture parses")
+        };
+        // The use of the entry: the edge is left out, and the entry is used.
+        let r = run_with("Dummy::dummy(a)");
+        assert!(r.ok(), "{:?} {:?}", r.cycles, r.unused_allow);
+        // Another use of the same edge: a cycle, and the entry is unused.
+        let r = run_with("Self::dummy(a)");
+        assert_eq!(r.cycles, vec![keys(&["JSXClosing::dummy"])]);
+        assert_eq!(
+            r.unused_allow,
+            vec![(
+                ENTRY.0.to_string(),
+                ENTRY.1.to_string(),
+                ENTRY.2.to_string()
+            )]
+        );
+        // Both uses: the edge of `Self::dummy` stays.
+        let r = run_with("{ Dummy::dummy(a); Self::dummy(a) }");
+        assert_eq!(r.cycles, vec![keys(&["JSXClosing::dummy"])]);
+        assert!(r.unused_allow.is_empty());
     }
 
     /// Fixture 5: the macro expander. A macro with nested repetitions writes an enum, an impl
@@ -2441,13 +2518,13 @@ mod tests {
     #[test]
     fn what_the_graph_cannot_see_fails() {
         let field = "type Handler = fn(u32) -> u32;\nstruct S { h: Option<Handler> }";
-        let e = run(&[("f.rs".into(), field.into())], &BTreeSet::new()).unwrap_err();
+        let e = run(&[("f.rs".into(), field.into())], &BTreeSet::new(), &[]).unwrap_err();
         assert!(
             e.starts_with("f.rs:2: S.h: the field holds a fn value"),
             "{e}"
         );
         let foreign = "other_crate::make_fns! { fn hidden() { parse_a() } }";
-        let e = run(&[("i.rs".into(), foreign.into())], &BTreeSet::new()).unwrap_err();
+        let e = run(&[("i.rs".into(), foreign.into())], &BTreeSet::new(), &[]).unwrap_err();
         assert!(e.contains("make_fns! is a macro of another crate"), "{e}");
         let drop = r#"
             struct Guard<C> { p: ParserImpl<C> }

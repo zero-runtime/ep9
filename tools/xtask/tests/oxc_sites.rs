@@ -98,3 +98,23 @@ fn b2_3_a_gate_of_a_fixed_config_type_is_not_a_site() {
     );
     assert_cycle(&out, &["parse_a"]);
 }
+
+/// B2-4: an ALLOW entry removes only the edge of its own use, and an entry that removes no edge
+/// is a finding.
+#[test]
+fn b2_4_allow_holds_only_its_own_use() {
+    let (code, out, _) = oxc_sites("b2_4_allow_by_use");
+    assert_eq!(code, Some(1));
+    assert_cycle(&out, &["JSXClosing::dummy"]);
+    assert!(
+        has_line(
+            &out,
+            "oxc-sites: UNUSED ALLOW entry: ",
+            &[
+                "`JSXClosing::dummy` -> `JSXClosing::dummy`",
+                "Path(\"Dummy\", \"dummy\")"
+            ]
+        ),
+        "{out}"
+    );
+}
