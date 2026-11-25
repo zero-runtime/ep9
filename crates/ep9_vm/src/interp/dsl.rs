@@ -906,6 +906,13 @@ macro_rules! expand_threaded {
             #[unsafe(export_name = concat!("ep9h__", $exp, "__tail__", stringify!($name)))]
             #[allow(non_snake_case, unused_mut, unused_variables, unused_unsafe, unreachable_code)]
             pub(crate) fn $name(cx, pc, fp, acc) {
+                $crate::interp::dsl::if_wide2!($name {
+                    // F-a: `Wide2` is one table step (no fast body); the rest is dead code.
+                    // SAFETY: verified code: `Wide2` is followed by an opcode of the wide list.
+                    let h = WIDE[unsafe { *pc.add(1) } as usize];
+                    // SAFETY: every `WIDE` entry takes the state of a prefix handler.
+                    unsafe { $tail h(cx, pc, fp, acc) }
+                } else {});
                 #[cfg(debug_assertions)]
                 $crate::interp::dsl::debug_native_stack_check(cx);
                 // SAFETY: the verifier checked every operand of this instruction (registers in
@@ -1695,23 +1702,34 @@ pub(crate) fn count_w2(i: usize) {
     });
 }
 
-/// The W-2 part of an [`expand_threaded`] expansion (WIDE-SET probe; the `Wide` handler of
-/// today stays, and arm 0 runs it):
+/// `if_wide2!(Name { tokens if Name is Wide2 } else { tokens if not })` (F-a): the threaded
+/// handler of `Wide2` is one table step through `WIDE` ([`expand_threaded`]).
+macro_rules! if_wide2 {
+    (Wide2 { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
+    ($other:ident { $($y:tt)* } else { $($n:tt)* }) => { $($n)* };
+}
+pub(crate) use if_wide2;
+
+/// The W-2 part of an [`expand_threaded`] expansion (WIDE-SET probe, shape F-a; the `Wide`
+/// handler and its cold handler do not change, and arm 0 runs them):
 ///
+/// - The `Wide2` handler (`ep9h__<exp>__tail__Wide2`, in `TABLE` by its generic row): one tail
+///   jump to `WIDE[next byte]` with the same state, no fast body ([`if_wide2`]). The builder
+///   writes `Wide2` only before the wide list with bit 1 of `EP9_WIDE_FORMS` (a front-end bit);
+///   the verifier rejects it before any other opcode.
 /// - `w2::<Op>` (`ep9h__<exp>__tail__<Op>_w2`) for each opcode of `ops::if_wide!`: the fast
 ///   handler of `<Op>` with its operands at scale 2 (`decode!(S2, ..)`). `pc` stays on the
 ///   prefix byte, the base of a jump offset, the exception pc and the position (as in
 ///   `interp::scaled::step`). One fast body run; `Flow::Cold` goes to `w2::cold::<Op>`.
 /// - `w2::cold::<Op>` (`..._w2_cold`): the cold body of `<Op>` at scale 2, once. `ics_only`:
 ///   a tail jump to the one of the `full` table of the same `$tail`, as [`cold_handler`].
-/// - `wide_w` (`ep9h__<exp>__tail__Wide_w`): the `Wide` handler with the same fast body (its
-///   inline cases do not change); its cold exit is a tail jump to `WIDE[next byte]`. It is not
-///   in `TABLE`: `Isolate::new_with` writes it into entry `Wide` with bit 1 of `EP9_WIDE_FORMS`.
-/// - `WIDE`: an opcode of the wide list where `ops::prefix_runs_fast` is false gets its `_w2`
-///   handler; every other byte (a byte that is no opcode too) the `Wide` cold handler, the
-///   path of today.
+/// - `WIDE`: an opcode of the wide list gets its `_w2` handler where `ops::prefix_runs_fast` is
+///   false, and the `Wide` handler of this expansion where it is true (aarch64:
+///   `GetNamedProperty`, `JumpLoop`; the `Wide` fast body runs their fast body once, its cold
+///   block their cold body at most once); every other byte `BadOpcode` (verified code never
+///   reaches it).
 ///
-/// 7 handlers more per expansion: `ep9_vm::internals::THREADED_HANDLERS`.
+/// 6 handlers more per expansion: `ep9_vm::internals::THREADED_HANDLERS`.
 macro_rules! expand_wide {
     ( [$tail:tt, $exp:literal, $mode:ident]
       $( $name:ident = $code:literal ($($oname:ident : $okind:ident),*); )*
@@ -1725,8 +1743,8 @@ macro_rules! expand_wide {
                     /// The scale-2 (`Wide`) handler of the opcode with the same name.
                     ///
                     /// # Safety
-                    /// Only the `WIDE` table calls this, from `wide_w`, with `pc` the `Wide`
-                    /// prefix of this opcode in verified code of the live top frame `fp`.
+                    /// Only the `WIDE` table calls this, from the `Wide2` handler, with `pc` the
+                    /// `Wide2` prefix of this opcode in verified code of the live top frame `fp`.
                     #[unsafe(export_name = concat!("ep9h__", $exp, "__tail__", stringify!($name), "_w2"))]
                     #[allow(non_snake_case, unused_mut, unused_variables, unused_unsafe, unreachable_code)]
                     pub(crate) fn $name(cx, pc, fp, acc) {
@@ -1782,55 +1800,16 @@ macro_rules! expand_wide {
             }
         }
 
-        $crate::interp::dsl::handler! {
-            /// The `Wide` handler with the wide table (W-2): the same fast body as `Wide` (its
-            /// inline cases), then the cold exit through `WIDE`. Not in `TABLE`.
-            ///
-            /// # Safety
-            /// Only the dispatch table calls this, with `pc` a `Wide` prefix of verified code.
-            #[unsafe(export_name = concat!("ep9h__", $exp, "__tail__Wide_w"))]
-            #[allow(unused_mut, unused_variables, unused_unsafe, unreachable_code)]
-            pub(crate) fn wide_w(cx, pc, fp, acc) {
-                #[cfg(debug_assertions)]
-                $crate::interp::dsl::debug_native_stack_check(cx);
-                // SAFETY: as in the `Wide` handler (no operand).
-                let (len, ()) = unsafe { $crate::interp::dsl::decode!($crate::interp::dsl::S1, pc;) };
-                // SAFETY: as in the `Wide` handler.
-                let mut st = unsafe { St::new(cx, pc, fp, acc, pc.add(len)) };
-                let next: *const u8 = match $crate::interp::dsl::fast_body!($mode, Wide, st;) {
-                    Flow::Next => st.next,
-                    Flow::Jump(t) => t,
-                    Flow::Cold => {
-                        let St { cx, pc, fp, acc, .. } = st;
-                        // SAFETY: verified code: a prefix is followed by an opcode byte.
-                        let h = WIDE[unsafe { *pc.add(1) } as usize];
-                        // SAFETY: every entry takes the state of the `Wide` cold handler.
-                        unsafe { $tail h(cx, pc, fp, acc) }
-                    }
-                    Flow::Record(r) => $crate::interp::dsl::record_exit!($tail, $mode, Wide, st, r),
-                    Flow::RecordPair(p) => {
-                        $crate::interp::dsl::record_pair_exit!($tail, $mode, Wide, st, p)
-                    }
-                    Flow::JumpRecordCall(t, s) => {
-                        $crate::interp::dsl::record_call_exit!($tail, $mode, Wide, st, t, s)
-                    }
-                };
-                let St { cx, fp, acc, .. } = st;
-                let to = $crate::interp::dsl::dispatch_pc_of!(Wide, next);
-                // SAFETY: `to` is an instruction start of verified code or a VM stub.
-                let h = cx.table[unsafe { *to } as usize];
-                // SAFETY: the table holds handlers of this expansion; the state is valid.
-                unsafe { $tail h(cx, to, fp, acc) }
-            }
-        }
-
-        /// The wide table of this expansion (W-2): the entry of the byte after a `Wide` prefix.
+        /// The wide table of this expansion (W-2, F-a): the entry of the byte after a `Wide2`
+        /// prefix.
         pub(crate) static WIDE: [Handler; 256] = {
-            let mut t = [cold::Wide as Handler; 256];
+            let mut t = [bad_opcode as Handler; 256];
             $( $crate::interp::ops::if_wide!($name {
-                if !$crate::interp::ops::prefix_runs_fast($code) {
-                    t[$code] = w2::$name as Handler;
-                }
+                t[$code] = if $crate::interp::ops::prefix_runs_fast($code) {
+                    Wide as Handler
+                } else {
+                    w2::$name as Handler
+                };
             } else {}); )*
             t
         };

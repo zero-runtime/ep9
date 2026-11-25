@@ -314,6 +314,7 @@ pub struct FunctionBuilder {
     error: Option<BuildError>,
     last_bind: Option<u32>, // rule O13 B2: the instruction index of the last `bind`
     far_jumps: bool,        // ABI 8 (WIDE-SET probe): `finish` may pick the `Far` twins
+    wide2: bool,            // ABI 8 (WIDE-SET probe, F-a): `Wide2` before the wide list
 }
 
 impl FunctionBuilder {
@@ -336,6 +337,7 @@ impl FunctionBuilder {
             error: None,
             last_bind: None,
             far_jumps: false,
+            wide2: false,
         }
     }
 
@@ -344,6 +346,13 @@ impl FunctionBuilder {
     /// prefix) instead of `Wide` + the base (4 bytes). Default off: today's bytes.
     pub fn set_far_jumps(&mut self, on: bool) {
         self.far_jumps = on;
+    }
+
+    /// (ABI 8, the WIDE-SET probe, F-a.) With `on`, `finish` writes the prefix `Wide2` in place
+    /// of `Wide` before an opcode of the wide list ([`Opcode::takes_wide2`]). Both prefixes
+    /// are 1 byte, so no size, offset or position changes. Default off: today's bytes.
+    pub fn set_wide2(&mut self, on: bool) {
+        self.wide2 = on;
     }
 
     /// (ABI 5.) Sets the mapped-parameter list ([`MappedParameters`]): for formal parameter
@@ -788,6 +797,12 @@ impl FunctionBuilder {
                 None => (insn.opcode, scales[i]),
             };
             if let Some(p) = Opcode::prefix_for(scale) {
+                // F-a: the same scale, another prefix byte (1 byte both).
+                let p = if self.wide2 && p == Opcode::Wide && opcode.takes_wide2() {
+                    Opcode::Wide2
+                } else {
+                    p
+                };
                 code.push(p as u8);
             }
             code.push(opcode as u8);
@@ -1475,6 +1490,72 @@ mod tests {
             );
             assert_eq!(jl.jump_target(), Some(0));
         }
+    }
+
+    /// F-a (ABI 8): a function with a prefixed `GetNamedProperty`, `SetNamedProperty` and
+    /// `JumpLoop`, a prefixed `LdaSmi` and a prefixed `JumpIfForInDone`, built with `wide2`.
+    fn wide2_function(wide2: bool) -> Vec<u8> {
+        let mut b = entry(0);
+        if wide2 {
+            b.set_wide2(true); // off: the default
+        }
+        let (i, n) = (b.new_register(), b.new_register());
+        let r = b.new_register();
+        for j in 0..300 {
+            b.string_constant(format!("k{j}").as_str());
+        }
+        let k = b.string_constant("far");
+        assert!(k.0 > 255);
+        let done = b.new_label();
+        let header = b.bound_label();
+        b.jump_if_for_in_done(done, i, n);
+        let (ls, ss) = (
+            b.feedback_slot(FeedbackSlotKind::LoadNamed),
+            b.feedback_slot(FeedbackSlotKind::StoreNamed),
+        );
+        b.get_named_property(r, k, ls).set_named_property(r, k, ss);
+        b.lda_smi(1000);
+        for _ in 0..300 {
+            b.lda_zero();
+        }
+        let slot = b.feedback_slot(FeedbackSlotKind::JumpLoop);
+        b.jump_loop(header, 0, slot);
+        b.bind(done);
+        b.return_();
+        b.finish().unwrap().bytecode().to_vec()
+    }
+
+    /// F-a (ABI 8): with `wide2` the prefix byte of each wide-list opcode at scale `Wide` is
+    /// `Wide2`, and every other byte equals the default output (the flag off).
+    #[test]
+    fn wide2_prefixes_only_the_wide_list() {
+        let (off, on) = (wide2_function(false), wide2_function(true));
+        assert_eq!(off.len(), on.len());
+        let insns_off: Vec<_> = Instructions::new(&off).map(|i| i.unwrap()).collect();
+        let insns_on: Vec<_> = Instructions::new(&on).map(|i| i.unwrap()).collect();
+        assert_eq!(insns_off.len(), insns_on.len());
+        let mut changed = Vec::new();
+        for (a, b) in insns_off.iter().zip(&insns_on) {
+            assert_eq!((a.offset, a.opcode, a.scale), (b.offset, b.opcode, b.scale));
+            assert_eq!(a.bytes[1..], b.bytes[1..]);
+            if a.bytes[0] != b.bytes[0] {
+                assert_eq!(
+                    (a.bytes[0], b.bytes[0]),
+                    (Opcode::Wide as u8, Opcode::Wide2 as u8)
+                );
+                changed.push(a.opcode);
+            } else if a.scale == OperandScale::Wide {
+                assert!(!a.opcode.takes_wide2(), "{}", a.opcode);
+            }
+        }
+        assert_eq!(
+            changed,
+            [
+                Opcode::GetNamedProperty,
+                Opcode::SetNamedProperty,
+                Opcode::JumpLoop
+            ]
+        );
     }
 
     #[test]

@@ -189,9 +189,9 @@ pub mod internals {
     /// Opcodes with a cold block in the interpreter DSL.
     pub const COLD_OPCODES: usize = crate::interp::ops::COLD_COUNT;
     /// Handlers per threaded expansion: one per opcode, one per cold block, `Exit`, `BadOpcode`,
-    /// `ConstructReturn`, 2 per wide-list opcode and `Wide_w` (the disasm-check `--expect` value).
+    /// `ConstructReturn` and 2 per wide-list opcode (the disasm-check `--expect` value).
     pub const THREADED_HANDLERS: usize =
-        ep9_bytecode::OPCODE_COUNT + COLD_OPCODES + 3 + 2 * crate::interp::ops::WIDE_COUNT + 1;
+        ep9_bytecode::OPCODE_COUNT + COLD_OPCODES + 3 + 2 * crate::interp::ops::WIDE_COUNT;
     /// The VM's own builtin table (block 0): for its id golden
     /// (`crates/ep9_vm/tests/golden/vm-builtin-ids.txt`) and table checks.
     pub static VM_BUILTINS: &crate::BuiltinTable = &crate::natives::VM_TABLE;

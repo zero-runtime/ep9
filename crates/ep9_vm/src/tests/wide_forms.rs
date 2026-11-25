@@ -1,11 +1,13 @@
-//! The WIDE-SET probe (ABI 8; DL M12-P2-WIDE-GRANTS): W-1, the `Far` jump twins, and W-2, the
-//! wide table (bit 1 of `EP9_WIDE_FORMS`, set here by the test override of `isolate.rs`).
+//! The WIDE-SET probe (ABI 8; DL M12-P2-WIDE-GRANTS): W-1, the `Far` jump twins, and W-2 in
+//! shape F-a, the prefix `Wide2` before the wide list and the wide table. Bit 1 of
+//! `EP9_WIDE_FORMS` is a front-end bit: here the test sets the builder flag `wide2` of the
+//! program (bit 1 on) or leaves it off (bit 1 off); the `Cx` table is the base table.
 //!
 //! T5: each of the 11 twins is taken and not taken in every dispatch expansion and in both
 //! feedback modes (`full` and `ics_only`: the two T0 handler tables), and gives what its base
 //! gives at `Wide` scale. The 2 ToBoolean twins also run their cold body (an object and a
 //! string accumulator). W-2: T13 (the table entries), T13b (check fix B1), T14 (more than 255
-//! slots), T16 (the parse rule and arm 0).
+//! slots), T16 (arm 0: the base table, no `Wide2` byte).
 
 use ep9_bytecode::{Instructions, Opcode, OperandScale, VerifiedUnit};
 
@@ -199,7 +201,6 @@ use ep9_bytecode::{FeedbackSlotKind, FunctionBuilder, FunctionId};
 use super::meta;
 use crate::interp::Handler;
 use crate::interp::ops::{WIDE_COUNT, if_wide, prefix_runs_fast};
-use crate::isolate::wide_forms::{self, with_wide_table};
 use crate::runtime::val;
 use crate::{IsolateConfig, Value, feedback};
 
@@ -237,18 +238,25 @@ fn wide_list() -> Vec<Opcode> {
         .collect()
 }
 
-/// The wide table of one expansion against what it must hold: the `_w2` handler of an opcode
-/// of the wide list where `prefix_runs_fast` is false, else the `Wide` cold handler (also for
-/// a byte that is no opcode).
-fn check_wide(name: &str, t: &[Handler; 256], generic: Handler, w2: [(Opcode, Handler); 3]) {
+/// The wide table of one expansion against what it must hold: for an opcode of the wide list
+/// its `_w2` handler where `prefix_runs_fast` is false, else the `Wide` handler of the
+/// expansion; every other byte (a byte that is no opcode too) `BadOpcode`.
+fn check_wide(
+    name: &str,
+    t: &[Handler; 256],
+    wide: Handler,
+    bad: Handler,
+    w2: [(Opcode, Handler); 3],
+) {
     let mut own = Vec::new();
     for (b, &h) in t.iter().enumerate() {
-        let want = w2
-            .iter()
-            .find(|(op, _)| *op as usize == b && !prefix_runs_fast(b as u8))
-            .map_or(generic, |&(_, h)| h);
+        let want = match w2.iter().find(|(op, _)| *op as usize == b) {
+            Some(_) if prefix_runs_fast(b as u8) => wide,
+            Some(&(_, h)) => h,
+            None => bad,
+        };
         assert_eq!(h as usize, want as usize, "{name}: entry {b:#04x}");
-        if h as usize != generic as usize {
+        if h as usize != bad as usize && h as usize != wide as usize {
             own.push(Opcode::from_u8(b as u8).unwrap());
         }
     }
@@ -265,14 +273,15 @@ fn check_wide(name: &str, t: &[Handler; 256], generic: Handler, w2: [(Opcode, Ha
     assert_eq!(own, want, "{name}: the _w2 entries");
     assert!(Opcode::from_u8(0xff).is_none());
     assert_eq!(
-        t[0xff] as usize, generic as usize,
+        t[0xff] as usize, bad as usize,
         "{name}: a byte that is no opcode"
     );
 }
 
-/// T13: every entry of each wide table outside the wide list, a byte that is no opcode too, is
-/// the `Wide` cold handler of its expansion; the entries of the list are the `_w2` handlers by
-/// check fix B1 (x86-64: all 3; aarch64: only `SetNamedProperty_w2`).
+/// T13: the wide list is `Opcode::takes_wide2`; each wide table holds the `_w2` handlers by
+/// check fix B1 (x86-64: all 3; aarch64: only `SetNamedProperty_w2`, and the `Wide` handler for
+/// `GetNamedProperty` and `JumpLoop`); every other entry is `BadOpcode`. `TABLE` holds the
+/// `Wide2` handler at 0xac, and the `Wide` handler at `Wide` as at the base.
 #[test]
 fn wide_table_entries() {
     assert_eq!(WIDE_COUNT, 3);
@@ -284,13 +293,26 @@ fn wide_table_entries() {
             Opcode::JumpLoop
         ]
     );
+    let by_opcode: Vec<Opcode> = (0..=255u8)
+        .filter_map(Opcode::from_u8)
+        .filter(|op| op.takes_wide2())
+        .collect();
+    assert_eq!(wide_list(), by_opcode);
     macro_rules! check {
         ($($m:ident),*) => {$({
             use crate::interp::$m as m;
+            // A byte that is no opcode (below the VM stub bytes).
+            let bad = m::TABLE[ep9_bytecode::OPCODE_COUNT];
+            let (wide, wide2) = (m::Wide as Handler as usize, m::Wide2 as Handler as usize);
+            assert_eq!(m::TABLE[Opcode::Wide as usize] as usize, wide);
+            assert_eq!(m::TABLE[Opcode::Wide2 as usize] as usize, wide2);
+            assert_ne!(wide2, wide);
+            assert_ne!(wide2, bad as usize);
             check_wide(
                 stringify!($m),
                 &m::WIDE,
-                m::cold::Wide as Handler,
+                m::Wide as Handler,
+                bad,
                 [
                     (Opcode::GetNamedProperty, m::w2::GetNamedProperty as Handler),
                     (Opcode::SetNamedProperty, m::w2::SetNamedProperty as Handler),
@@ -304,70 +326,65 @@ fn wide_table_entries() {
     check!(tail, tail_ics);
 }
 
-/// T16 (VM half): the parse rule of `EP9_WIDE_FORMS`, the same table as ep9_frontend.
-#[test]
-fn wide_forms_parse_table() {
-    use wide_forms::wide_forms_from as p;
-    for (v, want) in [("1", 1), ("2", 2), ("3", 3)] {
-        assert_eq!(p(Some(v)), want, "{v:?}");
-    }
-    assert_eq!(p(None), 0);
-    for v in ["0", "", "4", "01", " 1", "1 ", "x"] {
-        assert_eq!(p(Some(v)), 0, "{v:?}");
-    }
-}
-
-/// T16 (arm 0): with bit 1 off, the `Cx.table` of every expansion and feedback mode is
-/// `Dispatch::table` in all 256 entries (entry `Wide` = the `Wide` handler of today); with bit
-/// 1 on, only entry `Wide` differs, and it is the `Wide_w` handler of the same table.
+/// T16 (arm 0): the `Cx.table` of every expansion and feedback mode is `Dispatch::table` in
+/// all 256 entries (the VM reads no switch), and the programs built with bit 1 off (the
+/// builder default) hold no `Wide2` byte, so arm 0 runs no new handler.
 #[test]
 fn arm0_table_is_the_base_table() {
-    let wide = Opcode::Wide as usize;
     for &d in Dispatch::ALL {
         for f in [Feedback::FULL, Feedback::ICS_ONLY] {
-            let base = d.table(f);
+            let base = d.table(f).map(|h| h as usize);
             let label = format!("{} {f:?}", d.name());
-            let (off, iso_off, on, iso_on) = on_big_stack(move || {
-                let new = || {
-                    let iso =
-                        Isolate::new_with(config(d, false), ExecOptions::default().feedback(f))
-                            .unwrap();
-                    iso.cx.table.map(|h| h as usize)
-                };
-                (
-                    with_wide_table(false, || wide_forms::table(d, f).map(|h| h as usize)),
-                    with_wide_table(false, new),
-                    with_wide_table(true, || wide_forms::table(d, f).map(|h| h as usize)),
-                    with_wide_table(true, new),
-                )
+            let iso_table = on_big_stack(move || {
+                let iso = Isolate::new_with(config(d, false), ExecOptions::default().feedback(f))
+                    .unwrap();
+                iso.cx.table.map(|h| h as usize)
             });
-            let base = base.map(|h| h as usize);
-            assert_eq!(off, base, "{label}: bit 1 off");
-            assert_eq!(iso_off, base, "{label}: Cx.table with bit 1 off");
-            assert_eq!(on, iso_on, "{label}: Cx.table with bit 1 on");
-            for b in 0..256 {
-                if b == wide {
-                    assert_eq!(on[b], wide_forms::wide_w(d, f) as usize, "{label}");
-                    assert_ne!(on[b], base[b], "{label}");
-                } else {
-                    assert_eq!(on[b], base[b], "{label}: entry {b:#04x}");
-                }
-            }
+            assert_eq!(iso_table, base, "{label}: Cx.table");
+        }
+    }
+    for (off, on) in [
+        (wide_slots_program(false), wide_slots_program(true)),
+        (wide_loop_program(false), wide_loop_program(true)),
+        (
+            throw_program(false, false, T12_SRC),
+            throw_program(false, true, T12_SRC),
+        ),
+        (
+            throw_program(true, false, T12_SRC),
+            throw_program(true, true, T12_SRC),
+        ),
+    ] {
+        let prefixes = |u: &VerifiedUnit| -> Vec<(Opcode, u8)> {
+            Instructions::new(&u.functions[1].bytecode)
+                .map(|i| i.unwrap())
+                .filter(|i| i.scale != OperandScale::Single)
+                .map(|i| (i.opcode, i.bytes[0]))
+                .collect()
+        };
+        let (a, b) = (prefixes(&off), prefixes(&on));
+        assert!(!a.is_empty());
+        assert_eq!(a.len(), b.len());
+        for ((oa, pa), (ob, pb)) in a.into_iter().zip(b) {
+            assert_eq!((oa, pa), (ob, Opcode::Wide as u8));
+            assert_eq!(pb, Opcode::Wide2 as u8, "{oa}");
         }
     }
 }
 
 /// The script defines the global `f0(a, n)`: `for (i = 0; i < n; i++) { t = a.x; sum += t;
 /// a.y = i } return sum`. Its feedback slots 2-301 are not used, so the slot operands of the
-/// load, the store and the loop are past 255: each is a `Wide` instruction. The function
-/// has more than 255 slots (the H15 rule row of T14).
-pub(super) fn wide_slots_program() -> VerifiedUnit {
+/// load, the store and the loop are past 255: each is a prefixed instruction, `Wide` (bit 1
+/// off) or `Wide2` (`wide2`, bit 1 on). The function has more than 255 slots (the H15 rule row
+/// of T14).
+pub(super) fn wide_slots_program(wide2: bool) -> VerifiedUnit {
     let mut s = Asm::script(0);
     let k = s.b.function_constant(FunctionId(1));
     s.b.create_closure(k, s.closure, 0);
     s.sta_global("f0");
     s.b.lda_undefined().return_();
     let mut b = FunctionBuilder::new(meta("f0", 2, 0, 0, 0));
+    b.set_wide2(wide2);
     let (a, n) = (b.parameter(0), b.parameter(1));
     let cmp = b.feedback_slot(FeedbackSlotKind::CompareOp);
     let bin = b.feedback_slot(FeedbackSlotKind::BinaryOp);
@@ -415,14 +432,14 @@ pub(super) struct WideRun {
 
 /// Runs `f0` of [`wide_slots_program`] on the cases mono (one shape), poly (3 shapes), mega (6
 /// shapes, then the stub cache), a transition and a miss (a number receiver), in a new isolate
-/// of `c` and `f` with bit 1 = `on`; `budget` is the budget before the calls.
+/// of `c` and `f`, with the program of bit 1 = `on`; `budget` is the budget before the calls.
 pub(super) fn run_wide_cases(c: IsolateConfig, f: Feedback, on: bool, budget: i64) -> WideRun {
     use super::ic::{int, object_prototype, object_with};
-    with_wide_table(on, move || {
+    {
         let mut c = c;
         c.feedback_threshold = 0;
         let mut iso = Isolate::new_with(c, ExecOptions::default().feedback(f)).unwrap();
-        iso.with_cx_checkpoint(|cx| cx.run_script(wide_slots_program(), "w2.js").map(|_| ()))
+        iso.with_cx_checkpoint(|cx| cx.run_script(wide_slots_program(on), "w2.js").map(|_| ()))
             .unwrap();
         let fun = iso.global_raw("f0").unwrap();
         let mk = |iso: &Isolate, props: &[(&str, u64)]| {
@@ -487,7 +504,7 @@ pub(super) fn run_wide_cases(c: IsolateConfig, f: Feedback, on: bool, budget: i6
             ],
             w2,
         }
-    })
+    }
 }
 
 /// T14: a function with more than 255 feedback slots gives the same results, IC states,
@@ -497,20 +514,23 @@ pub(super) fn run_wide_cases(c: IsolateConfig, f: Feedback, on: bool, budget: i6
 /// handler runs.
 #[test]
 fn wide_forms_all_expansions_over_255_slots() {
-    let code = &wide_slots_program().functions[1].bytecode;
-    let prefixed: Vec<Opcode> = Instructions::new(code)
-        .map(|i| i.unwrap())
-        .filter(|i| i.scale == OperandScale::Wide)
-        .map(|i| i.opcode)
-        .collect();
-    assert_eq!(
-        prefixed,
-        [
-            Opcode::GetNamedProperty,
-            Opcode::SetNamedProperty,
-            Opcode::JumpLoop
-        ]
-    );
+    for on in [false, true] {
+        let code = &wide_slots_program(on).functions[1].bytecode;
+        let prefixed: Vec<(Opcode, u8)> = Instructions::new(code)
+            .map(|i| i.unwrap())
+            .filter(|i| i.scale == OperandScale::Wide)
+            .map(|i| (i.opcode, i.bytes[0]))
+            .collect();
+        let p = if on { Opcode::Wide2 } else { Opcode::Wide } as u8;
+        assert_eq!(
+            prefixed,
+            [
+                (Opcode::GetNamedProperty, p),
+                (Opcode::SetNamedProperty, p),
+                (Opcode::JumpLoop, p)
+            ]
+        );
+    }
     // The first run of each GC stress value (a GC clears the stub cache, so the probe hits
     // differ with stress).
     let mut firsts: [Option<WideRun>; 2] = [None, None];
@@ -552,11 +572,11 @@ fn wide_forms_all_expansions_over_255_slots() {
     }
 }
 
-/// T13b (check fix B1): where `prefix_runs_fast` is true (aarch64), a `GetNamedProperty.Wide`
-/// miss and a `JumpLoop.Wide` poll run their fast body once (in the `Wide` fast body) and their
-/// cold body once (`step_cold`), with bit 1 off and on: the wide table entry is the `Wide` cold
-/// handler, not `_w2` (a `_w2` entry would run the fast body a second time: 2 budget units, 2
-/// loop records, 2 `_w2` runs). Elsewhere the same counts come from the `_w2` handlers with
+/// T13b (check fix B1): where `prefix_runs_fast` is true (aarch64), a prefixed
+/// `GetNamedProperty` miss and a prefixed `JumpLoop` poll run their fast body once (in the
+/// `Wide` fast body) and their cold body once (`step_cold`), with bit 1 off and on: the wide
+/// table entry is the `Wide` handler, not `_w2` (no fast body runs twice: 1 budget unit, 1 loop
+/// record, no `_w2` run for them). Elsewhere the same counts come from the `_w2` handlers with
 /// bit 1 on.
 #[test]
 fn aarch64_wide_fast_set_runs_once() {
@@ -566,12 +586,12 @@ fn aarch64_wide_fast_set_runs_once() {
         for on in [false, true] {
             let label = format!("{} on={on}", d.name());
             let (budget, cold, w2, v) = on_big_stack(move || {
-                with_wide_table(on, move || {
+                {
                     let mut c = config(d, false);
                     c.feedback_threshold = 0;
                     let mut iso = Isolate::new_with(c, ExecOptions::default()).unwrap();
                     iso.with_cx_checkpoint(|cx| {
-                        cx.run_script(wide_slots_program(), "w2.js").map(|_| ())
+                        cx.run_script(wide_slots_program(on), "w2.js").map(|_| ())
                     })
                     .unwrap();
                     let fun = iso.global_raw("f0").unwrap();
@@ -593,7 +613,7 @@ fn aarch64_wide_fast_set_runs_once() {
                     assert_eq!(r.unwrap().to_bits(), int(9));
                     let w2 = [after.1[0] - before.1[0], after.1[1] - before.1[1]];
                     (budget, after.0[1] - before.0[1] + w2[1], w2, v)
-                })
+                }
             });
             // The cold bodies: the 2 misses and at least the poll.
             assert!(cold >= 3, "{label}: the cold body runs {cold}");
@@ -619,7 +639,7 @@ fn aarch64_wide_fast_set_runs_once() {
 // ---- W-2: the loop and the exception pc (T11, T12) ----------------------------------------
 
 /// The `_w2` handler of `op` (one of the wide list) of the `full` table of the threaded
-/// expansion `d` (`None` for the match loop, which runs `Wide` itself).
+/// expansion `d` (`None` for the match loop, which runs `Wide` and `Wide2` itself).
 fn w2_of(d: Dispatch, op: Opcode) -> Option<Handler> {
     macro_rules! pick {
         ($m:ident) => {{
@@ -640,15 +660,22 @@ fn w2_of(d: Dispatch, op: Opcode) -> Option<Handler> {
     }
 }
 
-/// The arms of the W-2 tests: bit 1 off, bit 1 on, and (threaded expansions) `Wide` -> the
-/// `_w2` handler of `op` directly in `Cx.table` (bit 1 off), so the `_w2` handler of an opcode
-/// whose wide table entry is the `Wide` cold handler on this target runs too. The program of
-/// such an arm has no other prefixed opcode.
+/// The arms of the W-2 tests: bit 1 off (`Wide`), bit 1 on (`Wide2`), and (threaded
+/// expansions) the bit-1-off program with the `_w2` handler of `op` directly in entry `Wide` of
+/// `Cx.table`, so the `_w2` handler of an opcode whose wide table entry is the `Wide` handler on
+/// this target runs too. The program of such an arm has no other prefixed opcode.
 #[derive(Clone, Copy, Debug)]
 enum Arm {
     Off,
     On,
     Direct(Opcode),
+}
+
+impl Arm {
+    /// The builder flag `wide2` of the program of this arm (bit 1).
+    fn wide2(self) -> bool {
+        matches!(self, Arm::On)
+    }
 }
 
 fn arms(d: Dispatch, op: Opcode) -> Vec<Arm> {
@@ -659,13 +686,12 @@ fn arms(d: Dispatch, op: Opcode) -> Vec<Arm> {
     a
 }
 
-/// A new isolate of dispatch `d` (eager feedback) for `arm`, with `print`; runs `u`.
+/// A new isolate of dispatch `d` (eager feedback) for `arm`, with `print`; runs `u` (the
+/// program of the arm, `Arm::wide2`).
 fn arm_isolate(d: Dispatch, arm: Arm, u: VerifiedUnit) -> Isolate {
     let mut c = config(d, false);
     c.feedback_threshold = 0;
-    let mut iso = with_wide_table(matches!(arm, Arm::On), || {
-        Isolate::new_with(c, ExecOptions::default()).unwrap()
-    });
+    let mut iso = Isolate::new_with(c, ExecOptions::default()).unwrap();
     if let Arm::Direct(op) = arm {
         iso.cx.table[Opcode::Wide as usize] = w2_of(d, op).unwrap();
     }
@@ -677,14 +703,15 @@ fn arm_isolate(d: Dispatch, arm: Arm, u: VerifiedUnit) -> Isolate {
 
 /// The script defines the global `f0(n)`: `i = 0; while (i < n) i++; return i`. The loop slot
 /// is past 255 (slots 2-301 are not used), so the back edge is the only prefixed instruction:
-/// `JumpLoop.Wide`.
-fn wide_loop_program() -> VerifiedUnit {
+/// `JumpLoop` behind `Wide`, or behind `Wide2` with `wide2`.
+fn wide_loop_program(wide2: bool) -> VerifiedUnit {
     let mut s = Asm::script(0);
     let k = s.b.function_constant(FunctionId(1));
     s.b.create_closure(k, s.closure, 0);
     s.sta_global("f0");
     s.b.lda_undefined().return_();
     let mut b = FunctionBuilder::new(meta("f0", 1, 0, 0, 0));
+    b.set_wide2(wide2);
     let n = b.parameter(0);
     let cmp = b.feedback_slot(FeedbackSlotKind::CompareOp);
     let bin = b.feedback_slot(FeedbackSlotKind::BinaryOp);
@@ -712,7 +739,7 @@ type LoopArm = ([i64; 2], u64, u64, u64, (bool, u64));
 fn loop_arm(d: Dispatch, arm: Arm) -> LoopArm {
     use super::ic::int;
     on_big_stack(move || {
-        let mut iso = arm_isolate(d, arm, wide_loop_program());
+        let mut iso = arm_isolate(d, arm, wide_loop_program(arm.wide2()));
         let f = iso.global_raw("f0").unwrap();
         let call = |iso: &mut Isolate, n: i32| iso.call_raw(f, Value::UNDEFINED, &[val(int(n))]);
         let mut units = [0; 2];
@@ -740,10 +767,10 @@ fn loop_arm(d: Dispatch, arm: Arm) -> LoopArm {
     })
 }
 
-/// T11 (INV-8): a `JumpLoop.Wide` takes 1 budget unit per back edge (200 more turns take 200
-/// more units), polls when the budget runs out (an interrupt at the poll: a termination stops
-/// the run there), and writes one loop record, the same in every arm: bit 1 off, bit 1 on, and
-/// `JumpLoop_w2` run directly (aarch64 has no wide table entry for it).
+/// T11 (INV-8): a prefixed `JumpLoop` takes 1 budget unit per back edge (200 more turns take
+/// 200 more units), polls when the budget runs out (an interrupt at the poll: a termination
+/// stops the run there), and writes one loop record, the same in every arm: bit 1 off, bit 1
+/// on, and `JumpLoop_w2` run directly (aarch64 has no `_w2` wide table entry for it).
 #[test]
 fn wide_jump_loop_budget_and_record() {
     use super::ic::int;
@@ -786,14 +813,16 @@ fn throwing_accessor<'s>(
 }
 
 /// The script `f0(a)` of T12 (source `src`): `return a.x` (`store` false) or `a.x = 1` at the
-/// position of `a.x`, with the slot past 255, so the access is the only prefixed instruction.
-fn throw_program(store: bool, src: &str) -> VerifiedUnit {
+/// position of `a.x`, with the slot past 255, so the access is the only prefixed instruction
+/// (behind `Wide2` with `wide2`).
+fn throw_program(store: bool, wide2: bool, src: &str) -> VerifiedUnit {
     let mut s = Asm::script(src.len());
     let k = s.b.function_constant(FunctionId(1));
     s.b.create_closure(k, s.closure, 0);
     s.sta_global("f0");
     s.b.lda_undefined().return_();
     let mut b = FunctionBuilder::new(meta("f0", 1, 0, 0, src.len() as u32));
+    b.set_wide2(wide2);
     let a = b.parameter(0);
     for _ in 0..300 {
         b.feedback_slot(FeedbackSlotKind::BinaryOp);
@@ -814,15 +843,18 @@ fn throw_program(store: bool, src: &str) -> VerifiedUnit {
     unit(src, vec![s.finish(), b.finish().unwrap()])
 }
 
-/// T12 (INV-11): a throw from the cold body of a `_w2` handler (a getter behind
-/// `GetNamedProperty.Wide`, a setter behind `SetNamedProperty.Wide`): the getter sees the
+/// The source of the T12 programs.
+const T12_SRC: &str = "function f0(a) { return a.x; }";
+
+/// T12 (INV-11): a throw from the cold body of a `_w2` handler (a getter behind a prefixed
+/// `GetNamedProperty`, a setter behind a prefixed `SetNamedProperty`): the getter sees the
 /// offset of the prefix byte as the current instruction, and the exception (message, location,
 /// stack) is the same in every arm (bit 1 off, bit 1 on, the `_w2` handler directly).
 #[test]
 fn w2_cold_exception_pc_is_the_prefix() {
-    let src = "function f0(a) { return a.x; }";
+    let src = T12_SRC;
     for store in [false, true] {
-        let u = throw_program(store, src);
+        let u = throw_program(store, false, src);
         let op = if store {
             Opcode::SetNamedProperty
         } else {
@@ -840,7 +872,7 @@ fn w2_cold_exception_pc_is_the_prefix() {
                 let label = format!("{} {arm:?} {op}", d.name());
                 let (seen, e) = on_big_stack(move || {
                     use super::ic::object_prototype;
-                    let mut iso = arm_isolate(d, arm, throw_program(store, src));
+                    let mut iso = arm_isolate(d, arm, throw_program(store, arm.wide2(), src));
                     let f = iso.global_raw("f0").unwrap();
                     let rt = &iso.rt;
                     let acc =

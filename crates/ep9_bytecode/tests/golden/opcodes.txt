@@ -170,3 +170,4 @@
 0xa9 JumpIfNotUndefinedFar jump_if_not_undefined_far acc=Read flags=[Jump] (target: JumpFwd16)
 0xaa JumpIfUndefinedOrNullFar jump_if_undefined_or_null_far acc=Read flags=[Jump] (target: JumpFwd16)
 0xab JumpIfJSReceiverFar jump_if_js_receiver_far acc=Read flags=[Jump] (target: JumpFwd16)
+0xac Wide2 wide2 acc=None flags=[Prefix] ()

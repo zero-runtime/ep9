@@ -1280,3 +1280,175 @@ fn both_encodings_verify_on_the_probe() {
     let far = far_code(O::JumpIfTrueFar, 300, 300);
     assert_eq!(decode_at(&far, 0).unwrap().jump_target(), Some(300));
 }
+
+// ---- ABI 8: the second scale-2 prefix Wide2 (WIDE-SET probe, F-a) ----
+
+/// f1 with `extra` more feedback slots: s2.. alternate LoadNamed and StoreNamed, and the last
+/// one is a JumpLoop slot.
+fn with_wide2_slots(code: &[u8], extra: usize) -> CompiledUnit {
+    let mut u = with_code(code);
+    let slots = &mut u.functions[1].feedback_slots;
+    for i in 0..extra - 1 {
+        slots.push(if i % 2 == 0 {
+            FeedbackSlotKind::LoadNamed
+        } else {
+            FeedbackSlotKind::StoreNamed
+        });
+    }
+    slots.push(FeedbackSlotKind::JumpLoop);
+    u
+}
+
+/// The three wide-list instructions at scale `Wide` behind `prefix`: `GetNamedProperty r0, k0,
+/// s300` (LoadNamed), `SetNamedProperty r0, k0, s301` (StoreNamed), 300 LdaZero, then
+/// `JumpLoop` 316 back to offset 0 with the slot s303 (JumpLoop), then Return.
+fn wide2_code(prefix: Opcode) -> Vec<u8> {
+    let p = prefix as u8;
+    let mut code = vec![p, O::GetNamedProperty as u8, 0, 0, 0, 0, 0x2c, 0x01];
+    code.extend([p, O::SetNamedProperty as u8, 0, 0, 0, 0, 0x2d, 0x01]);
+    code.resize(316, O::LdaZero as u8);
+    code.extend([p, O::JumpLoop as u8, 0x3c, 0x01, 0, 0, 0x2f, 0x01]);
+    code.push(RET);
+    code
+}
+
+/// F-a: `Wide2` decodes as `Wide` before each wide-list opcode (the same opcode, scale and
+/// operands; only the first byte differs).
+#[test]
+fn wide2_decodes_at_scale_wide() {
+    let (w, w2) = (wide2_code(O::Wide), wide2_code(O::Wide2));
+    assert_eq!(w.len(), w2.len());
+    let a: Vec<_> = Instructions::new(&w).map(|i| i.unwrap()).collect();
+    let b: Vec<_> = Instructions::new(&w2).map(|i| i.unwrap()).collect();
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(&b) {
+        assert_eq!((x.offset, x.opcode, x.scale), (y.offset, y.opcode, y.scale));
+        assert_eq!(x.bytes[1..], y.bytes[1..]);
+        for k in 0..x.opcode.info().operands.len() {
+            assert_eq!(x.operand(k), y.operand(k));
+        }
+    }
+    let gnp = decode_at(&w2, 0).unwrap();
+    assert_eq!(
+        (gnp.opcode, gnp.scale, gnp.size(), gnp.bytes[0]),
+        (O::GetNamedProperty, OperandScale::Wide, 8, 0xac)
+    );
+    assert_eq!(gnp.unsigned(2), 300);
+    assert_eq!(decode_at(&w2, 316).unwrap().jump_target(), Some(0));
+    // Alone, before a prefix, before an opcode with no scalable operand.
+    assert_eq!(
+        decode_at(&[O::Wide2 as u8], 0).unwrap_err(),
+        DecodeError::BadPrefix
+    );
+    for p in [O::Wide, O::ExtraWide, O::Wide2] {
+        assert_eq!(
+            decode_at(&[O::Wide2 as u8, p as u8, O::LdaSmi as u8, 0, 0], 0).unwrap_err(),
+            DecodeError::BadPrefix
+        );
+        assert_eq!(
+            decode_at(&[p as u8, O::Wide2 as u8, O::LdaSmi as u8, 0, 0], 0).unwrap_err(),
+            DecodeError::BadPrefix
+        );
+    }
+    assert_eq!(
+        decode_at(&[O::Wide2 as u8, RET], 0).unwrap_err(),
+        DecodeError::PrefixWithoutScalableOperand(O::Return)
+    );
+}
+
+/// F-a: the verifier accepts `Wide2` before each wide-list opcode at its minimal scale, as it
+/// accepts `Wide`.
+#[test]
+fn wide2_before_the_wide_list_verifies() {
+    verify(with_wide2_slots(&wide2_code(O::Wide), 302)).unwrap();
+    verify(with_wide2_slots(&wide2_code(O::Wide2), 302)).unwrap();
+}
+
+/// F-a: `Wide2` before any other opcode is `Wide2Opcode`; at a larger scale than needed it is
+/// `NonMinimalScale`; after a prefix, alone, or before an opcode with no scalable operand it
+/// does not decode.
+#[test]
+fn wide2_before_another_opcode_is_rejected() {
+    let w2 = O::Wide2 as u8;
+    // Wide2 LdaSmi 1000: Wide would pass.
+    verify(with_code(&[
+        O::Wide as u8,
+        O::LdaSmi as u8,
+        0xe8,
+        0x03,
+        RET,
+    ]))
+    .unwrap();
+    assert_eq!(
+        err(with_code(&[w2, O::LdaSmi as u8, 0xe8, 0x03, RET])),
+        VerifyErrorKind::Wide2Opcode(O::LdaSmi)
+    );
+    // Wide2 Jump 300 (a forward jump; it has a Far twin, not a Wide2 form).
+    let mut code = vec![w2, O::Jump as u8, 0x2c, 0x01];
+    code.resize(300, O::LdaZero as u8);
+    code.push(RET);
+    assert_eq!(err(with_code(&code)), VerifyErrorKind::Wide2Opcode(O::Jump));
+    // Every opcode with a scalable operand that is not in the wide list, at its widest
+    // operand: Wide passes the scale check with the same bytes, so the Wide2 error is the
+    // rule of this opcode only. (The operands are not valid; the prefix rule runs first.)
+    for info in ep9_bytecode::OPCODES.iter() {
+        let op = info.opcode;
+        if op.takes_wide2() || !info.has_scalable_operands() || op.prefix_scale().is_some() {
+            continue;
+        }
+        let mut code = vec![w2, op as u8];
+        code.resize(2 + info.operands_size(OperandScale::Wide), 0xff);
+        code.push(RET);
+        let e = err(with_code(&code));
+        assert!(
+            e == VerifyErrorKind::Wide2Opcode(op)
+                || e == VerifyErrorKind::NonMinimalScale
+                || matches!(
+                    e,
+                    VerifyErrorKind::ReservedOpcode(_) | VerifyErrorKind::GeneratorOpcode(_)
+                ),
+            "{op}: {e:?}"
+        );
+    }
+    // A larger scale than needed: Wide2 GetNamedProperty r0, k0, s0.
+    assert_eq!(
+        err(with_code(&[
+            w2,
+            O::GetNamedProperty as u8,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            RET
+        ])),
+        VerifyErrorKind::NonMinimalScale
+    );
+    // After a prefix, alone, before Return.
+    for p in [O::Wide, O::ExtraWide, O::Wide2] {
+        assert_eq!(
+            err(with_code(&[
+                p as u8,
+                w2,
+                O::GetNamedProperty as u8,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                RET
+            ])),
+            VerifyErrorKind::Decode(DecodeError::BadPrefix)
+        );
+    }
+    assert_eq!(
+        err(with_code(&[O::LdaZero as u8, RET, w2])),
+        VerifyErrorKind::Decode(DecodeError::BadPrefix)
+    );
+    assert_eq!(
+        err(with_code(&[w2, RET])),
+        VerifyErrorKind::Decode(DecodeError::PrefixWithoutScalableOperand(O::Return))
+    );
+}

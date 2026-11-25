@@ -3426,13 +3426,21 @@ op!(JumpIfJSReceiverFar(st, target: Fwd) { JumpIfJSReceiver::fast(st, target) })
 
 // ---- the wide list (W-2, the WIDE-SET probe; DL M12-P2-WIDE-GRANTS) --------------------------
 
+// F-a: the second scale-2 prefix, only before the wide list (`Opcode::takes_wide2`). The match
+// loop runs the prefixed instruction out of line at scale 2 (`interp::scaled::step`: its fast
+// body once, its cold body at most once); no cold block, so `COLD_COUNT` does not move. A
+// threaded expansion does not run this body: its `Wide2` handler is one step through the wide
+// table (`interp::dsl::expand_wide`).
+op!(Wide2(st) { st.scaled::<S2>() });
+
 /// `if_wide!(Name { tokens if Name is in the wide list } else { tokens if not })`: the opcodes
 /// with a scale-2 handler `<Name>_w2` and its cold handler `<Name>_w2_cold` in every threaded
-/// expansion (`interp::dsl::expand_wide`). Their fast bodies return only `Next`, `Jump` or
-/// `Cold`, so a scale-2 handler needs no record exit (the record exits read the slot at its
-/// one-byte place). Each one has a cold body. The wide table entry of an opcode here is its
-/// `_w2` handler only where [`prefix_runs_fast`] is false: on aarch64 the `Wide` fast body runs
-/// `GetNamedProperty` and `JumpLoop`, so their entries stay the `Wide` cold handler there.
+/// expansion (`interp::dsl::expand_wide`), the opcodes of `Opcode::takes_wide2`. Their fast
+/// bodies return only `Next`, `Jump` or `Cold`, so a scale-2 handler needs no record exit (the
+/// record exits read the slot at its one-byte place). Each one has a cold body. The wide table
+/// entry (the byte after a `Wide2` prefix) of an opcode here is its `_w2` handler where
+/// [`prefix_runs_fast`] is false; on aarch64 the `Wide` fast body runs `GetNamedProperty` and
+/// `JumpLoop`, so their entries are the `Wide` handler there (its fast body runs theirs once).
 macro_rules! if_wide {
     (GetNamedProperty { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
     (SetNamedProperty { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };

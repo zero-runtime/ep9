@@ -307,7 +307,7 @@ impl Isolate {
         crate::exec::install(&rt, exec);
         realm::init(&rt);
         let mut cx = Box::new(Cx {
-            table: wide_forms::table(config.dispatch, crate::exec::feedback_mode(&rt)),
+            table: *config.dispatch.table(crate::exec::feedback_mode(&rt)),
             rt: &*rt,
             stack_limit: rt.stack().end(),
             budget: BUDGET,
@@ -1191,84 +1191,5 @@ impl Isolate {
         };
         self.rt.jobs.agent().block(max, stop);
         stop()
-    }
-}
-
-/// The switch `EP9_WIDE_FORMS`, bit 1 = W-2, the wide table (WIDE-SET probe only; the merge
-/// removes it). ep9_frontend reads bit 0 (W-1) by its own read of the same rule.
-pub(crate) mod wide_forms {
-    use crate::exec::Feedback;
-    use crate::interp::{Dispatch, Handler};
-
-    /// The parse rule: exactly `1`, `2` or `3` gives that value; unset, `0` or any other text
-    /// gives 0.
-    pub(crate) fn wide_forms_from(v: Option<&str>) -> u8 {
-        match v {
-            Some("1") => 1,
-            Some("2") => 2,
-            Some("3") => 3,
-            _ => 0,
-        }
-    }
-
-    /// `EP9_WIDE_FORMS`, read once per process (the only read of this crate).
-    fn wide_forms() -> u8 {
-        static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-        *V.get_or_init(|| wide_forms_from(std::env::var("EP9_WIDE_FORMS").ok().as_deref()))
-    }
-
-    #[cfg(test)]
-    thread_local! {
-        /// A test-only override of bit 1 on this thread (no env), so one test process runs
-        /// both values.
-        static WIDE_TABLE_TEST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-    }
-
-    /// Runs `f` with bit 1 of `EP9_WIDE_FORMS` set to `on` for the isolates that `f` makes on
-    /// this thread (tests only).
-    #[cfg(test)]
-    pub(crate) fn with_wide_table<T>(on: bool, f: impl FnOnce() -> T) -> T {
-        struct Restore(Option<bool>);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                WIDE_TABLE_TEST.with(|c| c.set(self.0));
-            }
-        }
-        let _restore = Restore(WIDE_TABLE_TEST.with(|c| c.replace(Some(on))));
-        f()
-    }
-
-    /// True if bit 1 is set (the test override first, in tests).
-    fn wide_table_on() -> bool {
-        #[cfg(test)]
-        if let Some(on) = WIDE_TABLE_TEST.with(|c| c.get()) {
-            return on;
-        }
-        wide_forms() & 2 != 0
-    }
-
-    /// The `Wide_w` handler of the expansion and feedback mode (the pick of
-    /// `Dispatch::table`: `ics_only` gives the second table of the expansion).
-    pub(crate) fn wide_w(d: Dispatch, f: Feedback) -> Handler {
-        use crate::interp::{sib_ics, sibling};
-        let ics = f == Feedback::ICS_ONLY;
-        match d {
-            Dispatch::Match | Dispatch::Sibling if ics => sib_ics::wide_w as Handler,
-            Dispatch::Match | Dispatch::Sibling => sibling::wide_w as Handler,
-            #[cfg(feature = "become")]
-            Dispatch::Become if ics => crate::interp::tail_ics::wide_w as Handler,
-            #[cfg(feature = "become")]
-            Dispatch::Become => crate::interp::tail::wide_w as Handler,
-        }
-    }
-
-    /// The `Cx` table of a new isolate: `Dispatch::table`, and with bit 1 `Wide_w` in entry
-    /// `Wide` (W-2). Bit 1 off: the table of today.
-    pub(crate) fn table(d: Dispatch, f: Feedback) -> [Handler; 256] {
-        let mut t = *d.table(f);
-        if wide_table_on() {
-            t[ep9_bytecode::Opcode::Wide as usize] = wide_w(d, f);
-        }
-        t
     }
 }

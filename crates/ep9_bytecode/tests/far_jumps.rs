@@ -1,7 +1,7 @@
 //! ABI 8, the WIDE-SET probe (T4): units with `Far` jump twins. The builder makes a twin only
 //! in `finish` with `far_jumps` on; such a unit round-trips, verifies, disassembles and builds
 //! to the same bytes twice, and its instruction list is the `far_jumps`-off list after
-//! `near_form`.
+//! `near_form`. F-a: units with the prefix `Wide2` (`wide2` on), the same checks.
 
 mod common;
 
@@ -128,4 +128,72 @@ fn near_form_of_the_on_unit_is_the_off_unit() {
                 .all(|i| i.as_ref().unwrap().opcode.near_form() == i.as_ref().unwrap().opcode)
         );
     }
+}
+
+// ---- F-a: the second scale-2 prefix Wide2 (ABI 8, the WIDE-SET probe) ----
+
+/// One script function with a prefixed `GetNamedProperty`, `SetNamedProperty` and `JumpLoop`
+/// (a name constant past 255, a loop over 300 bytes) and a prefixed `LdaSmi`, built with
+/// `wide2` on or off (off: the default, no setter call).
+fn wide2_unit(wide2: bool) -> CompiledUnit {
+    let src = "x";
+    let mut u = UnitBuilder::new(src, common::script_options(false));
+    let mut b = FunctionBuilder::new(FunctionMeta::entry(CodeKind::Script, false, 1));
+    if wide2 {
+        b.set_wide2(true);
+    }
+    let r = b.new_register();
+    for j in 0..300 {
+        b.string_constant(format!("k{j}").as_str());
+    }
+    let k = b.string_constant("far");
+    let (ls, ss) = (
+        b.feedback_slot(FeedbackSlotKind::LoadNamed),
+        b.feedback_slot(FeedbackSlotKind::StoreNamed),
+    );
+    let jl = b.feedback_slot(FeedbackSlotKind::JumpLoop);
+    b.set_statement_position(0);
+    b.lda_undefined().star(r);
+    let done = b.new_label();
+    let header = b.bound_label();
+    b.lda_true().jump_if_true(done);
+    b.get_named_property(r, k, ls).set_named_property(r, k, ss);
+    b.lda_smi(1000);
+    for _ in 0..300 {
+        b.lda_zero();
+    }
+    b.jump_loop(header, 0, jl);
+    b.bind(done);
+    b.return_();
+    u.set_function(FunctionId(0), b.finish().unwrap());
+    u.finish().unwrap().into_inner()
+}
+
+/// F-a (T4 form): the `wide2` unit verifies, round-trips, disassembles the same, builds to the
+/// same bytes twice, and differs from the off unit only in the 3 prefix bytes of the wide list.
+#[test]
+fn wide2_unit_round_trips_and_is_deterministic() {
+    let (on, off) = (wide2_unit(true), wide2_unit(false));
+    verify(on.clone()).unwrap();
+    verify(off.clone()).unwrap();
+    let bytes = on.to_bytes();
+    let back = CompiledUnit::from_bytes(&bytes).unwrap();
+    assert_eq!(*back, on);
+    assert_eq!(back.to_bytes(), bytes);
+    assert_eq!(disassemble(&back), disassemble(&on));
+    assert_eq!(wide2_unit(true).to_bytes(), bytes);
+    assert_eq!(wide2_unit(true).content_hash(), on.content_hash());
+    assert_ne!(on.content_hash(), off.content_hash());
+    let (fon, foff) = (&on.functions[0].bytecode, &off.functions[0].bytecode);
+    assert_eq!(fon.len(), foff.len());
+    let diff: Vec<usize> = (0..fon.len()).filter(|&i| fon[i] != foff[i]).collect();
+    assert_eq!(diff.len(), 3);
+    for i in diff {
+        assert_eq!((foff[i], fon[i]), (Opcode::Wide as u8, Opcode::Wide2 as u8));
+        let insn = decode_at(fon, i as u32).unwrap();
+        assert!(insn.opcode.takes_wide2(), "{}", insn.opcode);
+    }
+    assert_eq!(on.functions[0].positions, off.functions[0].positions);
+    // The off unit has no Wide2 byte as a prefix.
+    assert!(Instructions::new(foff).all(|i| i.unwrap().bytes[0] != Opcode::Wide2 as u8));
 }

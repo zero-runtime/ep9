@@ -6,8 +6,9 @@
 //! the opcodes ep9 shares with V8. ADR H02 lists what ep9 changes: feedback-slot operands on
 //! arithmetic and compares (V8 now embeds that feedback), no `*Constant` jump variants (the
 //! builder relaxes sizes; `Far` twins hold u16), forward-only jumps except `JumpLoop`, a reserved
-//! `TailCall` (D7), generator opcodes only in generator and async functions (ABI 3), and
-//! `CallRuntimeForPair` with a [`RegOutPair`](crate::OperandKind::RegOutPair) output (ABI 3).
+//! `TailCall` (D7), generator opcodes only in generator and async functions (ABI 3),
+//! `CallRuntimeForPair` with a [`RegOutPair`](crate::OperandKind::RegOutPair) output (ABI 3), and
+//! a third prefix `Wide2` (scale `Wide`) only before the wide list (the WIDE-SET probe, F-a).
 
 /// Calls `$m!` with the full opcode list. Tokens in `[...]` are passed through first.
 ///
@@ -595,6 +596,12 @@ macro_rules! for_each_opcode {
             /// `JumpIfJSReceiver` with a 16-bit offset
             JumpIfJSReceiverFar = 0xab, jump_if_js_receiver_far, acc: Read, flags: [Jump],
                 operands: (target: JumpFwd16);
+
+            // ---- the second scale-2 prefix (ABI 8, the WIDE-SET probe, F-a) ------------------
+
+            /// Prefix: the next instruction's scalable operands are 2 bytes, as `Wide`; only
+            /// before an opcode of the wide list ([`Opcode::takes_wide2`])
+            Wide2 = 0xac, wide2, acc: None, flags: [Prefix], operands: ();
         }
     };
 }
@@ -640,7 +647,7 @@ impl AccUse {
 pub struct OpcodeFlags(pub u16);
 
 impl OpcodeFlags {
-    /// `Wide` or `ExtraWide`.
+    /// `Wide`, `ExtraWide` or `Wide2` (F-a: scale `Wide`, only before [`Opcode::takes_wide2`]).
     pub const PREFIX: OpcodeFlags = OpcodeFlags(1 << 0);
     /// Has a jump operand ([`crate::OperandKind::JumpFwd`] or [`crate::OperandKind::JumpBack`]).
     pub const JUMP: OpcodeFlags = OpcodeFlags(1 << 1);
@@ -932,8 +939,20 @@ impl Opcode {
         match self {
             Opcode::Wide => Some(OperandScale::Wide),
             Opcode::ExtraWide => Some(OperandScale::ExtraWide),
+            Opcode::Wide2 => Some(OperandScale::Wide),
             _ => None,
         }
+    }
+
+    /// The wide list (ABI 8, the WIDE-SET probe, F-a): the opcodes that a `Wide2` prefix may
+    /// precede, `GetNamedProperty`, `SetNamedProperty` and `JumpLoop`. The builder emits
+    /// `Wide2` in place of `Wide` for them (`FunctionBuilder::set_wide2`), and the verifier
+    /// rejects `Wide2` before any other opcode.
+    pub const fn takes_wide2(self) -> bool {
+        matches!(
+            self,
+            Opcode::GetNamedProperty | Opcode::SetNamedProperty | Opcode::JumpLoop
+        )
     }
 
     /// The `Far` twin (ABI 8, the WIDE-SET probe) of one of the 11 one-operand forward jumps
@@ -1038,7 +1057,7 @@ mod tests {
 
     #[test]
     fn table_is_dense_and_round_trips() {
-        assert_eq!(OPCODE_COUNT, 0xac);
+        assert_eq!(OPCODE_COUNT, 0xad);
         for (i, info) in OPCODES.iter().enumerate() {
             assert_eq!(info.opcode as usize, i);
             assert_eq!(Opcode::from_u8(i as u8), Some(info.opcode));
@@ -1262,6 +1281,48 @@ mod tests {
         assert_eq!(Opcode::JumpIfForInDone.far_twin(), None);
         assert_eq!(Opcode::JumpLoop.near_form(), Opcode::JumpLoop);
         assert_eq!(Opcode::LdaSmi.near_form(), Opcode::LdaSmi);
+    }
+
+    /// ABI 8 (F-a): `Wide2` is the prefix at 0xac; it selects scale `Wide`, `prefix_for` never
+    /// gives it, and the wide list is `GetNamedProperty`, `SetNamedProperty` and `JumpLoop`,
+    /// each with a scalable operand.
+    #[test]
+    fn wide2_is_a_scale_2_prefix_of_the_wide_list() {
+        let info = Opcode::Wide2.info();
+        assert_eq!(Opcode::Wide2 as u8, 0xac);
+        assert_eq!(Opcode::from_u8(0xac), Some(Opcode::Wide2));
+        assert_eq!((info.name, info.snake), ("Wide2", "wide2"));
+        assert_eq!(info.acc, Opcode::Wide.info().acc);
+        assert_eq!(info.flags, OpcodeFlags::PREFIX);
+        assert!(info.operands.is_empty());
+        assert_eq!(info.size(OperandScale::Single), 1);
+        assert_eq!(Opcode::Wide2.prefix_scale(), Some(OperandScale::Wide));
+        for scale in OperandScale::ALL {
+            assert_ne!(Opcode::prefix_for(scale), Some(Opcode::Wide2));
+        }
+        let prefixes: Vec<Opcode> = OPCODES
+            .iter()
+            .filter(|i| i.flags.contains(OpcodeFlags::PREFIX))
+            .map(|i| i.opcode)
+            .collect();
+        assert_eq!(prefixes, [Opcode::Wide, Opcode::ExtraWide, Opcode::Wide2]);
+        let list: Vec<Opcode> = OPCODES
+            .iter()
+            .map(|i| i.opcode)
+            .filter(|o| o.takes_wide2())
+            .collect();
+        assert_eq!(
+            list,
+            [
+                Opcode::GetNamedProperty,
+                Opcode::SetNamedProperty,
+                Opcode::JumpLoop
+            ]
+        );
+        for op in list {
+            assert!(op.info().has_scalable_operands(), "{op}");
+            assert_eq!(op.far_twin(), None, "{op}");
+        }
     }
 
     #[test]

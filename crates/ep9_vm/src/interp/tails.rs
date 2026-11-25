@@ -57,7 +57,7 @@ pub(crate) use super::slow::load_global;
 /// handler runs the hit path itself (one save, as before: `rbx` on x86-64 SysV), and only the
 /// forward jumps share an indirect jump. Inline in optimized builds; out of line in debug
 /// builds. Not called where `PREFIXED_FAST` is true (the cold block runs `step_cold` there),
-/// nor for an `ops::if_wide!` opcode with bit 1 of `EP9_WIDE_FORMS` (its `_w2` handler, W-2).
+/// nor for an `ops::if_wide!` opcode behind `Wide2` (bit 1 of `EP9_WIDE_FORMS`: `_w2`, F-a).
 #[cfg_attr(debug_assertions, inline(never))]
 #[cfg_attr(not(debug_assertions), inline(always))]
 pub(crate) fn wide<S: crate::interp::dsl::Scale>(

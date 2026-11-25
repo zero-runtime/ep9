@@ -6,7 +6,7 @@
 //! | Rule | Detail |
 //! |---|---|
 //! | Decoding | Every instruction decodes, inside its function; no undefined, `Illegal` or reserved opcode; a generator opcode only in a function with the `GENERATOR` or `ASYNC` flag (ABI 3) |
-//! | Prefixes | A prefix precedes an opcode with a scalable operand; never two; never a larger scale than the operands need |
+//! | Prefixes | A prefix precedes an opcode with a scalable operand; never two; never a larger scale than the operands need; `Wide2` (ABI 8, F-a) only before an opcode of the wide list ([`Opcode::takes_wide2`]) |
 //! | Registers | Local `r<i>`: `i < register_count`. Parameter `a<k>`: `k < parameter_count`. Lists, pairs (read or written) and triples: locals only, inside the frame; an empty list is `r0, 0` |
 //! | Constants | Index in range; the kind matches the operand (`Const(..)` parameter) |
 //! | Feedback | Slot index in range; the slot kind matches the operand (`Slot(..)` parameter) |
@@ -114,6 +114,8 @@ pub enum VerifyErrorKind {
     MappedParameters(&'static str),
     /// The module records are invalid (ABI 5).
     ModuleRecords(&'static str),
+    /// A `Wide2` prefix before an opcode that is not in the wide list (ABI 8, F-a).
+    Wide2Opcode(Opcode),
 }
 
 /// A verifier error with its place.
@@ -428,6 +430,10 @@ fn verify_function(
         }
         if insn.scale != OperandScale::Single && required_scale(&insn) < insn.scale {
             return cx.err(Some(insn.offset), VerifyErrorKind::NonMinimalScale);
+        }
+        // ABI 8 (F-a): `Wide2` only before the wide list; the check above holds its scale minimal.
+        if insn.bytes[0] == Opcode::Wide2 as u8 && !insn.opcode.takes_wide2() {
+            return cx.err(Some(insn.offset), VerifyErrorKind::Wide2Opcode(insn.opcode));
         }
         if id == 0
             && matches!(
