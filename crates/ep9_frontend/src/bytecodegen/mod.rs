@@ -360,9 +360,10 @@ pub(crate) fn generate(
 }
 
 /// The value of the switch `EP9_WIDE_FORMS` (WIDE-SET probe only; the merge removes it): bit 0
-/// = W-1, the `Far` jump twins (this crate), bit 1 = W-2, the wide table (ep9_vm, its own
-/// read of the same rule). Exactly `1`, `2` or `3` gives that value; unset, `0` or any other
-/// text gives 0.
+/// = W-1, the `Far` jump twins, bit 1 = W-2 (F-a), the prefix `Wide2` before the wide list
+/// (`GetNamedProperty`, `SetNamedProperty`, `JumpLoop`), which ep9_vm runs through its wide
+/// table. Both bits are front-end bits (this crate). Exactly `1`, `2` or `3` gives that value;
+/// unset, `0` or any other text gives 0.
 pub(crate) fn wide_forms_from(v: Option<&str>) -> u8 {
     match v {
         Some("1") => 1,
@@ -383,6 +384,8 @@ thread_local! {
     /// A test-only override of bit 0 on this thread (no env), so one test process compiles
     /// both values.
     static FAR_JUMPS_TEST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// The same for bit 1 (F-a).
+    static WIDE2_TEST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// Runs `f` with bit 0 of `EP9_WIDE_FORMS` set to `on` (tests only). It runs on the
@@ -406,7 +409,25 @@ pub(crate) fn with_far_jumps<T: Send + 'static>(
     .expect("the front-end worker starts")
 }
 
-/// A function builder with the `far_jumps` flag of bit 0 (W-1; `Mode` does not change).
+/// Runs `f` with bit 1 of `EP9_WIDE_FORMS` set to `on` (tests only; F-a), as
+/// [`with_far_jumps`] does for bit 0.
+#[cfg(test)]
+pub(crate) fn with_wide2<T: Send + 'static>(on: bool, f: impl FnOnce() -> T + Send + 'static) -> T {
+    struct Restore(Option<bool>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            WIDE2_TEST.with(|c| c.set(self.0));
+        }
+    }
+    crate::worker::run(crate::stack::WORKER_STACK_BYTES, move || {
+        let _restore = Restore(WIDE2_TEST.with(|c| c.replace(Some(on))));
+        f()
+    })
+    .expect("the front-end worker starts")
+}
+
+/// A function builder with the `far_jumps` flag of bit 0 (W-1) and the `wide2` flag of bit 1
+/// (W-2, F-a); `Mode` does not change.
 pub(crate) fn function_builder(meta: ep9_bytecode::FunctionMeta) -> ep9_bytecode::FunctionBuilder {
     #[cfg(test)]
     let far = FAR_JUMPS_TEST
@@ -414,8 +435,15 @@ pub(crate) fn function_builder(meta: ep9_bytecode::FunctionMeta) -> ep9_bytecode
         .unwrap_or_else(|| wide_forms() & 1 != 0);
     #[cfg(not(test))]
     let far = wide_forms() & 1 != 0;
+    #[cfg(test)]
+    let wide2 = WIDE2_TEST
+        .with(|c| c.get())
+        .unwrap_or_else(|| wide_forms() & 2 != 0);
+    #[cfg(not(test))]
+    let wide2 = wide_forms() & 2 != 0;
     let mut b = ep9_bytecode::FunctionBuilder::new(meta);
     b.set_far_jumps(far);
+    b.set_wide2(wide2);
     b
 }
 

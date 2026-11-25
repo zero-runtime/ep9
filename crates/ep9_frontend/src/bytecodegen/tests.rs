@@ -3345,8 +3345,8 @@ fn star_dst_on_files() {
 
 // ---- WIDE-SET probe (ABI 8): bit 0 of EP9_WIDE_FORMS, the Far jump twins ----
 
-/// T16 (front-end half): the parse rule of `EP9_WIDE_FORMS`. The ep9_vm half pins the same
-/// table (`tests/wide_forms.rs`).
+/// T16: the parse rule of `EP9_WIDE_FORMS`. Bit 1 is a front-end bit too (F-a: the builder
+/// flag `wide2`); ep9_vm reads no switch.
 #[test]
 fn wide_forms_parse_table() {
     use super::wide_forms_from as p;
@@ -3496,4 +3496,71 @@ fn far_jumps_over_try_generator_switch() {
         assert_eq!(a.mapped_parameters, b.mapped_parameters, "function {k}");
         assert!(b.bytecode.len() <= a.bytecode.len(), "function {k}");
     }
+}
+
+// ---- WIDE-SET probe (ABI 8, F-a): bit 1 of EP9_WIDE_FORMS, the prefix Wide2 ----
+
+/// F-a: a loop over 150 named loads and stores (names and slots past 255, a back edge over
+/// 255 bytes) in a plain function and in a generator. With bit 1 on (the test override), each
+/// function is byte-equal to the bit-1-off build except the prefix byte of a prefixed
+/// `GetNamedProperty`, `SetNamedProperty` or `JumpLoop` (`Wide` -> `Wide2`); the positions,
+/// handlers, constants, slots and frame size are equal. No other opcode gets `Wide2`.
+#[test]
+fn wide2_prefixes_only_the_wide_list() {
+    use ep9_bytecode::{Instructions, OperandScale};
+    let big: String = (0..150)
+        .map(|i| format!("o.p{i} = o.q{i} + {i};\n"))
+        .collect();
+    let src: &'static str = Box::leak(
+        format!(
+            "function t(o, n) {{\n  let i = 0;\n  while (i < n) {{\n{big}    i = i + 1000;\n  }}\n  \
+             try {{ o.z = o.y; }} catch (e) {{ o.e = e; }}\n  return o;\n}}\n\
+             function* g(o) {{\n  for (const k of o.list) {{\n{big}    yield k;\n  }}\n}}\n"
+        )
+        .into_boxed_str(),
+    );
+    let off = super::with_wide2(false, move || compile_case(Sloppy, src)).unwrap();
+    let on = super::with_wide2(true, move || compile_case(Sloppy, src)).unwrap();
+    // With no override the process value of bit 1 decides (off when the switch is not set).
+    let default = compile_case(Sloppy, src).unwrap();
+    let process = if super::wide_forms() & 2 != 0 {
+        &on
+    } else {
+        &off
+    };
+    assert_eq!(default.to_bytes(), process.to_bytes());
+    assert_eq!(off.functions.len(), on.functions.len());
+    let mut changed = [0usize; 3];
+    for (k, (a, b)) in off.functions.iter().zip(&on.functions).enumerate() {
+        assert_eq!(a.bytecode.len(), b.bytecode.len(), "function {k}");
+        let ia: Vec<_> = Instructions::new(&a.bytecode).map(|i| i.unwrap()).collect();
+        let ib: Vec<_> = Instructions::new(&b.bytecode).map(|i| i.unwrap()).collect();
+        assert_eq!(ia.len(), ib.len(), "function {k}");
+        for (x, y) in ia.iter().zip(&ib) {
+            assert_eq!((x.offset, x.opcode, x.scale), (y.offset, y.opcode, y.scale));
+            assert_eq!(x.bytes[1..], y.bytes[1..], "function {k} at {}", x.offset);
+            let wide = x.scale == OperandScale::Wide;
+            assert_ne!(x.bytes[0], Opcode::Wide2 as u8);
+            if wide && x.opcode.takes_wide2() {
+                assert_eq!(
+                    (x.bytes[0], y.bytes[0]),
+                    (Opcode::Wide as u8, Opcode::Wide2 as u8)
+                );
+                changed[match x.opcode {
+                    Opcode::GetNamedProperty => 0,
+                    Opcode::SetNamedProperty => 1,
+                    _ => 2,
+                }] += 1;
+            } else {
+                assert_eq!(x.bytes[0], y.bytes[0], "function {k} at {}", x.offset);
+            }
+        }
+        assert_eq!(a.positions, b.positions, "function {k}");
+        assert_eq!(a.handlers, b.handlers, "function {k}");
+        assert_eq!(a.constants, b.constants, "function {k}");
+        assert_eq!(a.feedback_slots, b.feedback_slots, "function {k}");
+        assert_eq!(a.register_count, b.register_count, "function {k}");
+    }
+    // Each of the 3 forms is there, in both functions.
+    assert!(changed.iter().all(|&n| n >= 2), "{changed:?}");
 }
