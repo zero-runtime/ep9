@@ -384,7 +384,7 @@ where
     F: for<'a> FnOnce(&FrontEnd<'a>) -> Result<R, CompileError> + Send + 'static,
 {
     let estimate = prescan::estimate(source.as_bytes(), opts.goal == Goal::Module);
-    if estimate.depth > PRESCAN_CAP {
+    if estimate.depth > PRESCAN_CAP && !depth::layer0_off() {
         return Err(RangeError::too_deep(DepthLayer::PreScan, source, Some(estimate.at)).into());
     }
     let owned = source.to_owned();

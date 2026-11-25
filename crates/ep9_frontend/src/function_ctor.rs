@@ -71,7 +71,7 @@ pub fn compile_function_ctor(
     // Layer 0 on the caller's thread, in the spec order (parameters, body, whole).
     for text in [&texts.params, &texts.body, &texts.joined] {
         let estimate = crate::prescan::estimate(text.as_bytes(), false);
-        if estimate.depth > PRESCAN_CAP {
+        if estimate.depth > PRESCAN_CAP && !crate::depth::layer0_off() {
             return Err(too_deep(DepthLayer::PreScan, text, estimate.at));
         }
     }

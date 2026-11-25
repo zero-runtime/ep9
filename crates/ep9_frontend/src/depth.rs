@@ -227,6 +227,27 @@ impl<'a, const BACKSTOP: bool> Visit<'a> for DepthPass<BACKSTOP> {
     }
 }
 
+/// T-NO-L0 (test builds only): the env var of a child of the unit-test binary that runs with the
+/// layer-0 compare off (`depth_tests::t_no_l0_layers_1_and_2_stop_every_deep_input`).
+#[cfg(test)]
+pub(crate) const NO_L0_CHILD: &str = "EP9_NO_L0_CHILD";
+
+/// Is the layer-0 compare off? In a test build only in a T-NO-L0 child (its env var set): then the
+/// 4 compares (`with_front_end_at`, `compile_eval_at`, `with_script_completion_at`,
+/// `compile_function_ctor`) do not reject, so the parse runs past [`PRESCAN_CAP`] and only layers
+/// 1 and 2 stop it. [`PRESCAN_CAP`] keeps its value: it sizes the worker stack (stack.rs) and a
+/// const assert (probe.rs). No Cargo feature: a build that is not a test build has no bypass.
+#[cfg(test)]
+pub(crate) fn layer0_off() -> bool {
+    std::env::var_os(NO_L0_CHILD).is_some()
+}
+
+/// Outside a test build layer 0 is always on.
+#[cfg(not(test))]
+pub(crate) const fn layer0_off() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use oxc_allocator::Allocator;

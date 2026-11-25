@@ -1752,3 +1752,374 @@ fn chain_walk_cost() {
         .join()
         .unwrap();
 }
+
+// ---------------------------------------------------------------------------------------------
+// T-NO-L0 (plan v18 section 5, PATCH-PREP task 3): layers 1 and 2 alone stop every deep input.
+// A child of this unit-test binary runs with the layer-0 compare off (`depth::layer0_off`, on
+// only when the child env var is set; `PRESCAN_CAP` keeps its value). Each T-HOLES abort row of
+// tests/stack_holes.tsv (at its `n_abort` and at 2,000,000 levels) and each FORMS row (at
+// 2,000,000 levels) must give a RangeError of layer 1 or 2 in its child: never a signal, never
+// `Range(PreScan)`. The one exception is the T-HOLES row rule: an abort row whose text is not a
+// valid program (`valid` no) may also give a SyntaxError (a parse that fits the stack ends at
+// the error). Before them, 4 site jobs show that each of the 4 compares is off in a child and
+// on in this process.
+
+/// The T-HOLES table (`tests/stack_holes.tsv`; its header has the column rules).
+const NO_L0_TABLE: &str = include_str!("../tests/stack_holes.tsv");
+/// The T-HOLES full size.
+const NO_L0_BIG: usize = 2_000_000;
+/// A child may not take longer than this (the T-HOLES time-out).
+const NO_L0_TIME_OUT: std::time::Duration = std::time::Duration::from_secs(600);
+/// A child takes one slot per this many bytes of text (the T-HOLES rule).
+const NO_L0_BYTES_PER_SLOT: usize = 8 << 20;
+
+/// One child: what it compiles and at which size.
+#[derive(Clone)]
+enum NoL0Job {
+    /// One of the 4 layer-0 compares (0 compile, 1 eval, 2 script completion, 3 Function).
+    Site(usize),
+    /// A T-HOLES abort row: (name, path, goal, [prefix, open, mid, close, suffix], n, the
+    /// allowed kinds of its `expect` column).
+    Row(
+        &'static str,
+        &'static str,
+        &'static str,
+        [String; 5],
+        usize,
+        &'static str,
+    ),
+    /// A FORMS row at n levels.
+    Form(&'static Form, usize),
+}
+
+impl NoL0Job {
+    fn spec(&self) -> String {
+        match self {
+            NoL0Job::Site(i) => format!("site:{i}"),
+            NoL0Job::Row(name, _, _, _, n, _) => format!("row:{name}:{n}"),
+            NoL0Job::Form(form, n) => format!("form:{}:{n}", form.name),
+        }
+    }
+
+    /// The text length, near enough for the slot weight.
+    fn text_len(&self) -> usize {
+        match self {
+            NoL0Job::Site(_) => 64 << 10,
+            NoL0Job::Row(_, _, _, [p, o, m, c, s], n, _) => {
+                p.len() + m.len() + s.len() + (o.len() + c.len() + 7) * n
+            }
+            NoL0Job::Form(form, n) => (form.build)(16).len() * n / 16,
+        }
+    }
+
+    fn text(&self) -> String {
+        match self {
+            NoL0Job::Site(_) => no_l0_site_text(),
+            NoL0Job::Row(_, _, _, [prefix, open, mid, close, suffix], n, _) => {
+                let mut s = String::new();
+                s.push_str(prefix);
+                no_l0_repeat(&mut s, open, *n);
+                s.push_str(mid);
+                no_l0_repeat(&mut s, close, *n);
+                s.push_str(suffix);
+                s
+            }
+            NoL0Job::Form(form, n) => (form.build)(*n),
+        }
+    }
+}
+
+/// `part` x n; `{i}` is the level index (the T-HOLES rule).
+fn no_l0_repeat(s: &mut String, part: &str, n: usize) {
+    match part.split_once("{i}") {
+        Some((head, tail)) => {
+            for i in 0..n {
+                s.push_str(head);
+                s.push_str(&i.to_string());
+                s.push_str(tail);
+            }
+        }
+        None => s.push_str(&part.repeat(n)),
+    }
+}
+
+/// The escapes of the table: `\n \r \t \\ \u{HEX}`.
+fn no_l0_unescape(field: &str) -> String {
+    let mut out = String::new();
+    let mut chars = field.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('\\') => out.push('\\'),
+            Some('u') => {
+                assert_eq!(chars.next(), Some('{'), "{field}: a \\u escape");
+                let hex: String = chars.by_ref().take_while(|&c| c != '}').collect();
+                let code = u32::from_str_radix(&hex, 16).expect("hex digits");
+                out.push(char::from_u32(code).expect("a scalar value"));
+            }
+            other => panic!("{field}: the escape \\{other:?}"),
+        }
+    }
+    out
+}
+
+/// The site jobs' text: `bracket-paren` 10 levels past the pre-scan cap (a layer-0 reject with
+/// layer 0 on; a layer-2 reject with it off).
+fn no_l0_site_text() -> String {
+    let form = form("bracket-paren");
+    let text = (form.build)(PRESCAN_CAP as usize + 10);
+    assert!(prescan::estimate(text.as_bytes(), false).depth > PRESCAN_CAP);
+    text
+}
+
+/// Is `word` a right T-NO-L0 result of `job`? A RangeError of layer 1 or 2; for an abort row
+/// also a kind of its `expect` column (STOP, and Syntax when the text is not valid).
+fn no_l0_allowed(job: &NoL0Job, word: &str) -> bool {
+    let range = matches!(word, "Range(StackLimit)" | "Range(Ast)" | "Range(Pass)");
+    match job {
+        NoL0Job::Row(.., expect) => {
+            expect.split('|').any(|k| k == word)
+                && (range || (word == "Syntax" && expect.ends_with("|Syntax")))
+        }
+        _ => range,
+    }
+}
+
+/// The jobs: the 4 sites, the T-HOLES abort rows, the FORMS rows.
+fn no_l0_jobs() -> Vec<NoL0Job> {
+    let mut jobs: Vec<NoL0Job> = (0..4).map(NoL0Job::Site).collect();
+    for line in NO_L0_TABLE.lines().filter(|l| !l.starts_with('#')) {
+        let cols: Vec<&'static str> = line.split('\t').collect();
+        assert_eq!(cols.len(), 13, "a T-HOLES row has 13 columns: {line}");
+        if cols[10] != "ABORT" {
+            continue;
+        }
+        let parts: [String; 5] = std::array::from_fn(|i| no_l0_unescape(cols[4 + i]));
+        let mut sizes = Vec::new();
+        if let Ok(n) = cols[9].parse::<usize>()
+            && n != NO_L0_BIG
+        {
+            sizes.push(n);
+        }
+        sizes.push(NO_L0_BIG);
+        for n in sizes {
+            jobs.push(NoL0Job::Row(
+                cols[0],
+                cols[3],
+                cols[2],
+                parts.clone(),
+                n,
+                cols[12],
+            ));
+        }
+    }
+    for form in FORMS {
+        jobs.push(NoL0Job::Form(form, NO_L0_BIG));
+    }
+    jobs
+}
+
+/// The result kind as a word (the T-HOLES words).
+fn no_l0_word(result: &Result<ep9_bytecode::VerifiedUnit, crate::CodegenError>) -> String {
+    use crate::CodegenError as E;
+    match result {
+        Ok(_) => "Ok".to_owned(),
+        Err(E::Compile(CompileError::Syntax(_))) => "Syntax".to_owned(),
+        Err(E::Compile(CompileError::Range(e))) => match e.kind {
+            RangeErrorKind::TooDeep(DepthLayer::PreScan) => "Range(PreScan)".to_owned(),
+            RangeErrorKind::TooDeep(DepthLayer::Ast) => "Range(Ast)".to_owned(),
+            RangeErrorKind::TooDeep(DepthLayer::Pass) => "Range(Pass)".to_owned(),
+            RangeErrorKind::StackLimit => "Range(StackLimit)".to_owned(),
+            RangeErrorKind::StackUnavailable => "Range(StackUnavailable)".to_owned(),
+        },
+        Err(E::Unsupported(_)) => "Unsupported".to_owned(),
+        Err(E::Limit(_)) => "Limit".to_owned(),
+        Err(E::Internal(_)) => "Internal".to_owned(),
+    }
+}
+
+/// Compile the job's text by its path (the public entries; the T-HOLES path rules).
+fn no_l0_run(job: &NoL0Job) -> String {
+    use ep9_bytecode::{EvalContext, FunctionCtorKind};
+    let options = crate::CompileOptions::default();
+    let direct = EvalContext {
+        direct: true,
+        ..EvalContext::default()
+    };
+    let text = job.text();
+    let script = SourceOpts::script(Strictness::Sloppy);
+    let result = match job {
+        NoL0Job::Site(0) => crate::compile(&text, script, options),
+        NoL0Job::Site(1) => crate::compile_eval(&text, &direct, options),
+        NoL0Job::Site(2) => crate::compile_script_with_completion(&text, Strictness::Sloppy),
+        NoL0Job::Site(3) => {
+            crate::compile_function_ctor(FunctionCtorKind::Normal, "", &text, options)
+        }
+        NoL0Job::Site(i) => panic!("site {i}"),
+        NoL0Job::Row(name, path, goal, ..) => match (*path, *goal) {
+            ("compile", "script") => crate::compile(&text, script, options),
+            ("compile", "strict") => {
+                crate::compile(&text, SourceOpts::script(Strictness::Strict), options)
+            }
+            ("compile", "module") => crate::compile(&text, SourceOpts::module(), options),
+            ("eval", "script") => crate::compile_eval(&text, &direct, options),
+            ("function", "script") => {
+                crate::compile_function_ctor(FunctionCtorKind::Normal, "", &text, options)
+            }
+            ("function-params", "script") => {
+                crate::compile_function_ctor(FunctionCtorKind::Normal, &text, "", options)
+            }
+            (path, goal) => panic!("{name}: path {path}, goal {goal}"),
+        },
+        NoL0Job::Form(form, _) => crate::compile(&text, opts(form), options),
+    };
+    no_l0_word(&result)
+}
+
+#[test]
+fn t_no_l0_layers_1_and_2_stop_every_deep_input() {
+    use std::io::Read;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Condvar, Mutex};
+    use std::time::Instant;
+    let jobs = no_l0_jobs();
+    if let Ok(spec) = std::env::var(depth::NO_L0_CHILD) {
+        assert!(depth::layer0_off(), "the child env var turns layer 0 off");
+        let job = jobs
+            .iter()
+            .find(|j| j.spec() == spec)
+            .unwrap_or_else(|| panic!("no T-NO-L0 job {spec}"));
+        println!("NO-L0 {spec} -> {}", no_l0_run(job));
+        return;
+    }
+    // In this process layer 0 is on: each site rejects the site text at the pre-scan.
+    assert!(!depth::layer0_off(), "layer 0 is on with no child env var");
+    for i in 0..4 {
+        assert_eq!(no_l0_run(&NoL0Job::Site(i)), "Range(PreScan)", "site {i}");
+    }
+    let rows = jobs
+        .iter()
+        .filter(|j| matches!(j, NoL0Job::Row(..)))
+        .count();
+    let width = std::thread::available_parallelism().map_or(1, |n| n.get().min(4));
+    let used = Mutex::new(0usize);
+    let free = Condvar::new();
+    let next = AtomicUsize::new(0);
+    let results = Mutex::new(Vec::new());
+    let start = Instant::now();
+    std::thread::scope(|s| {
+        for _ in 0..width {
+            s.spawn(|| {
+                while let Some(job) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    let weight = (job.text_len() / NO_L0_BYTES_PER_SLOT + 1).min(width);
+                    {
+                        let mut u = used.lock().unwrap();
+                        while *u + weight > width {
+                            u = free.wait(u).unwrap();
+                        }
+                        *u += weight;
+                    }
+                    let spec = job.spec();
+                    let begin = Instant::now();
+                    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                        .args([
+                            "--exact",
+                            "depth_tests::t_no_l0_layers_1_and_2_stop_every_deep_input",
+                            "--nocapture",
+                            "--test-threads=1",
+                        ])
+                        .env(depth::NO_L0_CHILD, &spec)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .spawn()
+                        .unwrap();
+                    let mut out = child.stdout.take().unwrap();
+                    let mut err = child.stderr.take().unwrap();
+                    let out = std::thread::spawn(move || {
+                        let mut v = Vec::new();
+                        out.read_to_end(&mut v).ok();
+                        v
+                    });
+                    let err = std::thread::spawn(move || {
+                        let mut v = Vec::new();
+                        err.read_to_end(&mut v).ok();
+                        v
+                    });
+                    let status = loop {
+                        if let Some(status) = child.try_wait().unwrap() {
+                            break Some(status);
+                        }
+                        if begin.elapsed() > NO_L0_TIME_OUT {
+                            child.kill().ok();
+                            child.wait().ok();
+                            break None;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    };
+                    *used.lock().unwrap() -= weight;
+                    free.notify_all();
+                    let stdout = String::from_utf8_lossy(&out.join().unwrap()).into_owned();
+                    let stderr = String::from_utf8_lossy(&err.join().unwrap()).into_owned();
+                    // The harness prints "test ... " on the same line before the child's line.
+                    let mark = format!("NO-L0 {spec} -> ");
+                    let word = stdout
+                        .lines()
+                        .find_map(|l| l.find(&mark).map(|at| l[at + mark.len()..].to_owned()));
+                    let ok = status.is_some_and(|s| s.success())
+                        && word.as_deref().is_some_and(|w| no_l0_allowed(job, w));
+                    results
+                        .lock()
+                        .unwrap()
+                        .push((spec, status, word, stderr, begin.elapsed(), ok));
+                }
+            });
+        }
+    });
+    let mut results = results.into_inner().unwrap();
+    results.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut failures = Vec::new();
+    let mut kinds: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut syntax = Vec::new();
+    for (spec, status, word, stderr, _, ok) in &results {
+        if let Some(w) = word {
+            *kinds.entry(w.clone()).or_default() += 1;
+            if w == "Syntax" {
+                syntax.push(spec.as_str());
+            }
+        }
+        if !ok {
+            let tail: Vec<&str> = stderr.lines().rev().take(12).collect();
+            let tail: Vec<&str> = tail.into_iter().rev().collect();
+            failures.push(format!(
+                "{spec}: status {status:?}, kind {word:?}\nstderr tail:\n{}",
+                tail.join("\n")
+            ));
+        }
+    }
+    let slowest = results.iter().max_by_key(|r| r.4).unwrap();
+    println!(
+        "T-NO-L0: {} children (4 sites, {rows} abort-row jobs, {} forms) in {:.1} s, {width} at a \
+         time, slowest {} {:.1} s; kinds: {kinds:?}; {} failed",
+        results.len(),
+        FORMS.len(),
+        start.elapsed().as_secs_f64(),
+        slowest.0,
+        slowest.4.as_secs_f64(),
+        failures.len()
+    );
+    println!("T-NO-L0: SyntaxError rows (valid no): {syntax:?}");
+    assert!(
+        failures.is_empty(),
+        "{} of {} T-NO-L0 children failed:\n{}",
+        failures.len(),
+        results.len(),
+        failures.join("\n\n")
+    );
+}
