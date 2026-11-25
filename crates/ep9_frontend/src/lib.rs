@@ -410,6 +410,47 @@ where
     }
 }
 
+// FUZZ-SMALL-STACK (plan v18 §5): the sized compile entry of the cargo-fuzz target
+// `frontend_small_stack` (fuzz/fuzz_targets/frontend_small_stack.rs). Only `cargo fuzz build`
+// sets `cfg(fuzzing)`. Every other build has this impl block empty, so no public item changes and
+// no public entry gives a stack (H01 B1). The `allow` is on the impl block: the workspace
+// check-cfg list does not name `fuzzing`, and a lint level on the cfg item itself does not reach
+// this lint (the form of DL M2-P4-WIN-CFG).
+#[allow(
+    unexpected_cfgs,
+    reason = "cfg(fuzzing) comes only from cargo fuzz build"
+)]
+impl CompileOptions {
+    /// [`compile`] with the job on a small worker: 2 MiB of room above the layer-1 limit, then
+    /// RED. The result is the [`compile`] result, or RangeError StackLimit where the input needs
+    /// more stack than 2 MiB.
+    ///
+    /// Call it from one thread that makes no other front-end call: a thread keeps its larger
+    /// worker (worker.rs), and a job there would not test the small stack. The job asserts that.
+    ///
+    /// # Errors
+    ///
+    /// As [`compile`].
+    #[cfg(fuzzing)]
+    #[doc(hidden)]
+    pub fn fuzz_compile_small_stack(
+        self,
+        source: &str,
+        opts: SourceOpts,
+    ) -> Result<ep9_bytecode::VerifiedUnit, CodegenError> {
+        const SMALL_WORKER: usize = (2 << 20) + stack::RED;
+        with_front_end_at(source, opts, l1::Stack::Worker(SMALL_WORKER), move |fe| {
+            let room = l1::stack_address().saturating_sub(l1::thread_limit());
+            assert!(
+                room < SMALL_WORKER,
+                "the small-stack job ran on a larger worker"
+            );
+            let analysis = scope::analyze(fe)?;
+            Ok(bytecodegen::generate(fe, &analysis, self))
+        })?
+    }
+}
+
 /// Parse (with regex validation), make a strict script strict, and run layer 2.
 pub(crate) fn parse<'a>(
     allocator: &'a Allocator,
