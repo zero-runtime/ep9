@@ -23,7 +23,7 @@ main-thread non-GC (G)	23.24	22.92	23.71	23.61	D / I	rows above
 main-thread GC excess ep9 - node (G; % of ep9 main)	0.78; 3.2 (range 0.56-0.99; 2.3-4.1)	0.98; 4.1	-	-	D / I	rows above
 GC per GC on the main thread (G; % of cycles)	0.10; 0.40	0.11; 0.43	-	-	D	TD3:281
 need at the m11-end low ends x1.035-1.048 as main-thread G (1 - 1/g)	0.82-1.12 = 74-100% of ep9 main GC	0.82-1.11 = 62-85%	-	-	D	PBe11 low ends 0.966-0.954
-need at the m12-end low ends jitless x1.019-1.022, jit x1.041-1.042	jitless 0.45-0.52 = 41-47%; jit 0.98 = 88%	34-40%; 74%	-	-	D	PBe12:385-392
+need at the m12-end low ends jitless x1.019-1.022, jit x1.041-1.042	jitless 0.45-0.52 = 41-47%; jit 0.96-0.98 = 86-88%	34-40%; 73-74%	-	-	D	PBe12:385-392
 TS cell on the TD-3 boxes, A/B form	0.997 [0.976-1.022]	0.994 [0.968-1.031]	-	-	M	TD3:27; TD3-1:29
 TS cell on the TD-3 boxes, Path B form (medians, not paired)	1.005	0.994	-	-	D	TD3:276-277; TD3-1:278-279
 Path B form / A/B form wall	1.035	0.997	1.038	1.003	M	TD3:400; TD3-1:402

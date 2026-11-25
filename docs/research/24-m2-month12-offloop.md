@@ -49,10 +49,10 @@ Short forms:
 1. **The wall gap that is not CPU time matches node's extra helper CPU (M, D).** At both end reads the TS wall ratio sits 1.2-1.7 points under the CPU-time ratio. On the TD-3 boxes node runs 1.040 CPUs per wall second and ep9 1.026: node / ep9 = 1.0136 (1.4 points) (§1.1).
 2. **ep9 spends 4.43% of its TS cycles on GC on the JS thread (M; box 1 5.21%).** That is 1.11 G of 24.36 G main-thread cycles. Node's main-thread GC is not measured; at an estimate of 1.3% the excess is about 0.78 G = 3.2% (range 2.3-4.1%). In main-thread work that is not GC, ep9 is about 0.47 G ahead of node (D + I) (§1.2).
 3. **The 92.83% "node helper share" of the first summary is a thread-name error (M).** The summary script counted every node thread whose name is not `node` as a helper. Node's JS thread is named `MainThread` (88.02%). The real helper share is `V8Worker` 4.82% (§1.3).
-4. **`node --jitless` keeps every GC thread (M, V8 source).** `--jitless` turns off code generation only. Parallel scavenge, concurrent marking, concurrent sweeping and parallel compaction stay on; only `--single-threaded-gc` turns them off. ep9 on 2 CPUs has 1 mark helper that works only inside the stop-the-world pause, plus 1 sweeper thread (§1.4).
+4. **`node --jitless` keeps every GC thread (V8 source; I for node's own `-node.57` patches, not read; the `V8Worker` share is M).** `--jitless` turns off code generation only. Parallel scavenge, concurrent marking, concurrent sweeping and parallel compaction stay on; only `--single-threaded-gc` turns them off. ep9 on 2 CPUs has 1 mark helper that works only inside the stop-the-world pause, plus 1 sweeper thread (§1.4).
 5. **Month 12 merged no speed lever (M).** WIDE-SET read x1.023 on its decision cell, above its predicted high end, and closed GUARD-FAIL on one guard cell. GC-BUDGET met both of its conditions and was NOT RUN, because its guard line would most likely give a false GUARD-FAIL. LEVER-19 was NOT RUN by its pick rule. Rule 101: A/B product x1.0000, transfer NOT DEFINED (§2).
 6. **The end Path B on `m12-p1` does not fire the switch (M).** TS jit 0.968 / 0.980, jitless 0.985 [0.978-1.001] / 0.988 [0.981-0.998]. The need at the low ends is now jitless x1.019-1.022 and jit x1.041-1.042 (D) (§3).
-7. **The read-to-read move on nearly the same VM code is up to 1.3 points on the TS cells and up to 4.9 points on other gate cells (M, D).** The month-11 and month-12 end reads run the same runtime VM code; whole-run instructions moved by at most +0.005% per BENCH-SET row. 14 of the 16 cells moved up on both boxes. The move is a read draw or a placement effect, not instructions (§3.3).
+7. **The read-to-read move on nearly the same VM code is up to +1.3% (1.3 points) on the TS cells and up to +4.9% (5.5 points) on other gate cells (M, D).** The month-11 and month-12 end reads run the same ep9 runtime VM source; from the 2c5002c8 code to `m12-p1` whole-run instructions moved by at most +0.005% per BENCH-SET row in each phase; the DEPS-BUMP-2 lock step before 2c5002c8 has no whole-run read of its own tree here. 15 of the 16 per-box values moved up; 7 of the 8 cells moved up on both boxes. The move is most probably a read draw or a placement effect, not instructions (I; §3.3).
 8. **No off-loop lever list reaches the gate need in the center case (E).** The G8-0 items give about x1.008 in A/B terms at their centers. Only S2b (concurrent marking, a plan change) has a high end near the need (§4).
 9. **Layer 1 of the parser stack check is built and merged (M).** 22 sites in one oxc_parser patch, a per-thread limit, a gated depth walk with 11 gated points and a visitor-graph proof test, and T-HOLES with 321 rows. Parse-only cost +0.455% of instructions on Octane x20, under the +1.0% gate (§5).
 10. **A proof that enumerates the structure found more than the review did (M).** Review round 2 found one HIGH defect (an `eval` text that aborted the process) with 2 open chains. The visitor-graph proof then found 5 open cycle groups. The second-model review could not read the parser-stack code: its service filter stopped it (§5.3, §6).
@@ -89,7 +89,7 @@ Short forms:
 | GC count per TS run | e-jitless 11; e-jit 13; `EP9_GC_HELPERS=0` 10 (box 1: 12; 13; 10) | not measured | M (1 `--gc-stats` run per arm) | TD3:280-283; TD3-1:282-285 |
 | main-thread GC per GC | 1.11 G / 11 = 0.10 G = 0.40% of cycles (box 1 0.43%) | - | D | TD3:281 |
 | JS-thread GC with 0 helpers | 7.27% (box 1 6.98%): the helpers take 2.84 points (1.77) | - | M, D | TD3:249; TD3-1:251 |
-| wall, 0 helpers / default | 1.022 [1.010-1.064] (box 1 1.026 [1.004-1.073]) | - | M | TD3:29 |
+| wall, 0 helpers / default | 1.022 [1.010-1.064] (box 1 1.026 [1.004-1.073]) | - | M | TD3:29; TD3-1:31 |
 | all-thread cycles, 0 helpers / default | 0.992 [0.978-1.029] | - | M | TD3:30 |
 
 ```
@@ -146,9 +146,9 @@ No verdict line used the 92.83% value: it is a report number (DL M12-PRE-TD3-REA
 | old marking | concurrent on `V8Worker` threads while JS runs | inside the stop-the-world major GC | `crates/ep9_heap/src/parallel.rs:1-21` |
 | mark helpers on 2 CPUs | up to 7 tasks, bounded by the 4 workers | `min(cores - 1, MAX_HELPERS 4)` = 1; the heap's thread marks the first 64 K cells alone | `parallel.rs:93`, `:103`, `:125-128` |
 | sweeping | concurrent | 1 sweeper thread when >= 16 pages are queued | `parallel.rs:47-50`, `:697`, `:1032` |
-| thread names | `MainThread`, `V8Worker` | `ep9-isolate`, `ep9-gc-marker-1`, `ep9-gc-sweeper`, `ep9-frontend` | `crates/ep9_cli/src/run.rs:464-468`; `parallel.rs:541`, `:1032` |
+| thread names | `MainThread`, `V8Worker` | `ep9-isolate`, `ep9-gc-marker-1`, `ep9-gc-sweeper`, `ep9-frontend` | `crates/ep9_cli/src/run.rs:464-468`; `parallel.rs:541`, `:1032`; `crates/ep9_frontend/src/worker.rs:168` |
 
-So the only background work that `--jitless` removes is compile work (M). Node can overlap old-generation marking with JS; ep9 can overlap only the sweep (I).
+So the only background work that `--jitless` removes is compile work (I: from the V8 flags at the tag; node's `-node.57` patches were not read). Node can overlap old-generation marking with JS; ep9 can overlap only the sweep (I).
 
 ### 1.5 What an off-loop lever must remove
 
@@ -156,11 +156,11 @@ So the only background work that `--jitless` removes is compile work (M). Node c
 |---|---|---|---|
 | PBe11: jitless x1.035, jit x1.048 | 0.82-1.12 G; 0.82-1.11 G | 74-100%; 62-85% | DL M12-PLAN-D2 (the need); D |
 | PBe12: jitless x1.019-1.022 | 0.45-0.52 G | 41-47%; 34-40% | PBe12:391 (low ends 0.978 / 0.981); D |
-| PBe12: jit x1.041-1.042 | 0.98 G | 88%; 74% | PBe12:387 (low ends 0.961 / 0.960); D |
+| PBe12: jit x1.041-1.042 | 0.96-0.98 G | 86-88%; 73-74% | PBe12:387 (low ends 0.961 / 0.960); D |
 
 - R24B wrote the PBe11 need as 0.85-1.17 G = 77-105% (a linear form, g - 1). The form 1 - 1/g gives 0.82-1.12 G (D).
 - To close the jit need by the off-loop part alone, ep9 must take its main-thread GC to about node's level or lower (D + I). A budget value removes GCs, not the mark work of the GCs that stay: TS minor GCs promote 60-70% of the young bytes (R24B, from a trace build; not read again here).
-- The PBe12 need is smaller than the PBe11 need on the same VM code. That change is a read draw (§3.3), not a gain.
+- The PBe12 need is smaller than the PBe11 need on nearly the same VM code. That change is the read-to-read move of §3.3 (a read draw or a placement effect; I), not a code gain.
 
 ### 1.6 The TD-3 boxes do not show the gate gap
 
@@ -180,7 +180,7 @@ The harness form moves ep9 and node by the same amount (0.3-0.6% apart; DL M12-P
 | Lever (phase) | What it changes | Predicted A/B gain, TS jitless (low / center / high) | Measured same-binary A/B | Verdict row | Path B transfer (rule 101) |
 |---|---|---|---|---|---|
 | TD-3 (M12-PRE; a cause read) | nothing: a read of 2c5002c8 with GC arms and the Q1 harness arm | - | W +0.269 G PASS; G 4.43% PASS at 4%, FAIL at 6%; N +3.506 G PASS; M "not read" (box 1 VOID for line N, so box 2 is the read of every line); 11 rounds per box, 2 boxes, 0.91 box-h | DL M12-PRE-TD3-READ | n/a |
-| GC-BUDGET (M12-P1) | a larger first GC budget (arm B1) and S1 budget (arm B2); one binary, switch `EP9_GC_BUDGET` | x1.000 / x1.005 / x1.015 (G; P17 §4 row 1); R24B after TD-3: x1.001 / x1.003 / x1.010 (E) | **NOT RUN**, 0 boxes. Both conditions met: line G 4.43% (M) and the Mac E line 0.0221 (D). Bench TS Ir of arm B1: -1.295% jit, -1.306% jitless; BENCH-SET rows within +0.002% (runs 45349020669, 45349037862) | DL M12-P1-GC-NOT-RUN | no gain: not merged |
+| GC-BUDGET (M12-P1) | a larger S1 budget above 12 MiB of old bytes: arm B1 12 MiB + 5 x (old - 12 MiB), arm B2 6 x, cap 144 MiB; the first budget stays 8 MiB (the 32 MiB first budget was measured and dropped, DL M12-P1-GC-PREREG); one binary, switch `EP9_GC_BUDGET` | x1.000 / x1.005 / x1.015 (G; P17 §4 row 1); R24B after TD-3: x1.001 / x1.003 / x1.010 (E) | **NOT RUN**, 0 boxes. Both conditions met: line G 4.43% (M) and the Mac E line 0.0221 (D). Bench TS Ir of arm B1: -1.295% jit, -1.306% jitless; BENCH-SET rows within +0.002% (runs 45349020669, 45349037862) | DL M12-P1-GC-NOT-RUN | no gain: not merged |
 | WIDE-SET (M12-P2) | W-1: 11 far-jump twin opcodes with no prefix; W-2: a 256-entry wide table with `_w2` handlers; one binary, switch `EP9_WIDE_FORMS` | x1.007 / x1.013 / x1.020 (P17 §4 row 2; R23 §6.1) | decision cell **0.9775 [0.9712-0.9895] = x1.023**, 60 pairs, 2 boxes; cycles 0.9814; jit TS 0.9957; default form 0.9871; all 6 MERGE lines pass; guard t0-loop jit **1.0155 [1.0016-1.0245]** > 1.010; A/A 0.9913 [0.9739-1.0116]; 2.62 box-h | DL M12-P2-WIDE-VERDICT: **GUARD-FAIL** | no gain: not merged |
 | LEVER-19 (M12-P3) | the first candidate that meets its TD-3 line and an est. A/B gain >= x1.015 | every research estimate <= x1.010 (P17 §4.4) | **NOT RUN**: GC-2 out (line G < 6%); NL-1 stage 1 in the list (line N) but priced x1.005 (est.) / x1.004 (its check) < x1.015; MH closed (line M not read); JUMP-INVERT not open; F2 not fired | DL M12-P3-PICK | no gain |
 | **month product** | | **x1.013 merge-weighted center; x1.003-1.010 at the Path B** (DL M12-PLAN-D2) | **A/B product x1.0000** | | **Path B y1.0108 (box 1 1.0134, box 2 1.0081); transfer NOT DEFINED** (no merged set, ln x = 0; PBe12:401-405) |
@@ -198,7 +198,7 @@ Ride roles, not lever sets (PBe12:402): STACK-FORMS (FORMS 49 -> 75 forms, debug
 | box-1 A/A of t0-loop jit (same code) | 1.0190 [0.9862-1.0468] | M | WR:166 |
 | the NL-1 price | break-even 0.371 G = 0.86 cycles per IC run; center 0.10-0.123 G; the whole named-load cycle gap to node +0.244 G = x1.0098 | D, E | DL M12-P3-PICK |
 
-- **WIDE-SET is the first month-2 lever whose measured A/B is above its predicted high end** (x1.023 against x1.020). The guard line, not the gain, closed it. The guard line was registered before the data and is read as printed (DL M12-P2-WIDE-VERDICT).
+- **WIDE-SET's measured A/B is above its predicted high end** (x1.023 against x1.020), as LDAR-ELIDE was in month 11 (x1.043 against x1.021, R23 §2.3). The guard line, not the gain, closed it. The guard line was registered before the data and is read as printed (DL M12-P2-WIDE-VERDICT).
 - **GC-BUDGET is NOT RUN by a decision row, not by a condition miss.** A corrected guard line written after the WIDE-SET data would have been a moved goal post; that row was designed, attacked and rejected (DL M12-P1-GC-NOT-RUN).
 - R24B forecast that the E line would "likely fail" (B1 must remove at least 4 of 11 GCs). The Mac E line read 0.0221 (D), above 0.015. **That forecast is refuted.** With the box-1 values (5.21%, 12 GCs) B1 needs at most 8 GCs (E = 0.0174), not 7 as R24B wrote (D).
 
@@ -233,9 +233,9 @@ Sources: DL M10-END-D3; PBe11 group A; PBe12:27-30, :83-86. Rows are in [pathb-s
 |---|---|---|---|
 | runtime VM and heap (`crates/ep9_vm/src` outside tests, `crates/ep9_heap`) | none | none | `git diff --stat m11-p3 m12-p1 -- crates/ep9_vm/src crates/ep9_heap/src`: `tests/star_dst.rs` only |
 | bytecode generator | `func.rs` +6: a stack backstop at each depth step (compile time only) | none at run time; the corpus digest is equal (bytecode byte-equal) | `crates/ep9_frontend/src/bytecodegen/func.rs`; DL M12-P1-W58 (A2) |
-| front end | layer 1 (§5) and STACK-FORMS | parse only: +0.455% of front-end instructions on Octane x20 | L1S; DL M12-P1-LEDGER |
-| `Cargo.lock` | the DEPS-BUMP-2 patch-version moves; oxc_parser from the pinned checkout | not measured alone | DL §22 intro; DL M12-L1-START |
-| whole-run instructions, BENCH-SET 19 rows | largest cell +0.002% at `m12-p0` and +0.005% at `m12-p1` (each against its phase base) | at most about +0.007% in sum (D) | DL M12-P0-LEDGER (run 45434824785), M12-P1-LEDGER (run 45535516052) |
+| front end | layer 1 (§5) and STACK-FORMS | parse only: +0.455% of front-end instructions on Octane x20 for layer 1 alone (base: the STACK-FORMS code); STACK-FORMS not read alone | L1S; DL M12-P1-LEDGER |
+| `Cargo.lock` | the DEPS-BUMP-2 lock moves (oxc_index, hashbrown, smallvec, cc, pin-project-lite; m11-p3 -> 2c5002c8); oxc_parser from the pinned checkout | not measured alone: no whole-run Ir read of 2c5002c8 against `m11-p3` is cited here; the bench runs of the oxc 0.159.0 side head a540dd20 (not 2c5002c8) read every row within +0.003% | DL §22 intro; DL DEPS-BUMP-2, DEPS-BUMP-2-OXC-HOLD; DL M12-L1-START |
+| whole-run instructions, BENCH-SET 19 rows | largest cell +0.002% at `m12-p0` (base 4d52dd0d = the 2c5002c8 code) and +0.005% at `m12-p1` (base `m12-p0`) | at most about +0.007% in sum from 2c5002c8 to `m12-p1` (D) | DL M12-P0-LEDGER (run 45434824785; base: OL M6-ORCH-1507), M12-P1-LEDGER (run 45535516052) |
 | whole-run instructions, octane-typescript | -0.001% to +0.001% at `m12-p0`; +0.001% (linux-x64 jit and jitless) at `m12-p1` | about 0 | DL M12-P0-LEDGER (run 45455189674); OL M6-ORCH-1538 (run 45535526157) |
 
 ### 3.3 The read-to-read move on nearly the same VM code
@@ -256,10 +256,10 @@ R18S decision R18S-D7 registered this use before the month-12 end data: "the mov
 Sources: §3.1 values (D; the TS moves are the unrounded values of PBe12:408-409). The gross ep9 TS time rose from PBe11 to PBe12 on both boxes: jit x1.114 / x1.148, jitless x1.099 / x1.155 (PBe11:22-23, PBe12:22-23): the end-12 boxes ran slower.
 
 **Finding (M, D), with its limits:**
-- On the TS cells the same-code move is -0.24% to +1.34% (the 4 cells). On all 16 cells it is -0.2% to +4.9%, and 14 of 16 cells moved up on both boxes.
-- The code part of the move, in instructions, is at most about +0.007% (§3.2). So **the move is not an instruction change**. It is a read draw (box state, comparator state), a placement effect of the non-handler code that moved, or both. The data cannot split these (I). Note that splay (item 6) is a GC-heavy row and its instructions did not move (DL M12-P1-GC-NOT-RUN: splay in the BENCH-SET within +0.002%).
+- On the TS cells the same-code move is -0.24% to +1.34% (the 4 per-box values). On all 16 per-box values it is -0.2% to +4.9%: 15 of the 16 moved up, and 7 of the 8 cells moved up on both boxes (only TS jit box 1 moved down).
+- The code part of the move, in instructions, is at most about +0.007% from the 2c5002c8 code to `m12-p1` (§3.2); the DEPS-BUMP-2 lock step (`m11-p3` -> 2c5002c8) has no whole-run read of its own tree here. So **the move is most probably not an instruction change (I)**. It is a read draw (box state, comparator state), a placement effect of the non-handler code that moved, or both. The data cannot split these (I). Note that splay (item 6) is a GC-heavy row, and splay and octane-splay are BENCH-SET rows: the worst of the 19 rows moved +0.002% (M12-P0) and +0.005% (M12-P1) (DL M12-P0-LEDGER, M12-P1-LEDGER).
 - The same-code move of the TS jitless cell (+0.8% / +1.3%) is as large as the month-11 "jitless did not rise" gap (R23 §4.3: x0.998 / x1.007 against an expected x1.012). This supports R23 candidate O1 (the move is inside the read-to-read noise) (I).
-- R18S risk K1 forecast "1.5-3 points by box draw" for the end read. The TS cells moved -0.2 to +1.3 points: under that range; items 2 and 6 moved 2.2-4.9 points.
+- R18S risk K1 forecast "1.5-3 points by box draw" for the end read. The TS cells moved -0.2 to +1.3 points: under that range; items 2 and 6 moved +2.2% to +4.9% (2.6 to 5.5 points).
 
 **What it means for a cell that straddles 1.0 (I; a finding, not a rule change).** The jitless box-1 cell reads 0.985 [0.978-1.001]: its median is under 1.0 and its interval holds 1.0. The switch needs the low end at 1.000 or more, so this cell needs x1.022 at its low end (D). The largest same-code TS move seen is 1.3 points, and the 2 reads moved most cells in one direction. So a future switch read whose TS low ends pass by less than about 1.3 points cannot be told from a read draw with these 2 reads. M12-PRE-SWITCH already says that a straddling cell is not a pass and is not read again with more rounds; this report changes no line. Limits: 2 reads, 2 boxes each, 31 rounds; not a paired A/A in one session; one box type.
 
@@ -273,7 +273,7 @@ Rank rule of R24B: the expected gate gain per agent-day; GC-BUDGET first because
 
 | # | Lever | Mechanism | A/B low / center / high (E) | Gate (E) | Agent-days (E) | G8 | Basis | After month 12 |
 |---|---|---|---|---|---|---|---|---|
-| 1 | GC-BUDGET | fewer minor GCs: larger first and S1 budgets | x1.001 / x1.003 / x1.010 | x1.000-1.008 | 2.0-2.5 | 0 / +1 | 0.40% main-thread GC per GC (D); a marginal GC costs less because promotion work stays (I) | NOT RUN; carried. R18S re-estimates x1.007 / x1.012 / x1.017 from Mac counts (E): the 2 estimates conflict (O, Q3) |
+| 1 | GC-BUDGET | fewer minor GCs: a larger S1 budget (the registered arms; the first budget stays 8 MiB, DL M12-P1-GC-PREREG) | x1.001 / x1.003 / x1.010 | x1.000-1.008 | 2.0-2.5 | 0 / +1 | 0.40% main-thread GC per GC (D); a marginal GC costs less because promotion work stays (I) | NOT RUN; carried. R18S re-estimates x1.007 / x1.012 / x1.017 from Mac counts (E): the 2 estimates conflict (O, Q3) |
 | 2 | sweep share | every page of a GC goes to the sweeper; `SWEEP_START_PAGES` 16 -> 1-4 | x1.001 / x1.003 / x1.006 | x1.000-1.005 | 1.0-1.5 | 0 | sweeper comm 0.66% < 0.8 x `sweep_page_with` 1.19% (TD3:236, :87): the main thread still sweeps (D) | not in the month-12 pick (line G < 6%) |
 | 3 | helper policy on 2 CPUs | start the parallel drain earlier (`START_AFTER` 64 K -> 8-16 K); a shorter idle wait | x1.000 / x1.002 / x1.006 | x1.000-1.005 | 1.0-1.5 | 0 | today's helpers take 2.84 points of JS-thread GC and save x1.022 of wall (TD3:247, :249, :29) | same |
 | 4 | allocation cuts (runtime form) | fewer engine-made temporary cells on TS hot paths | x1.000 / x1.002 / x1.008 | x1.000-1.006 | 2.5-4.5 | 0 (runtime); +1 (layout) | `alloc_slow` 0.68% (TD3:98); the allocated bytes are not read | open: needs a site count |
@@ -290,7 +290,7 @@ Rank rule of R24B: the expected gate gain per agent-day; GC-BUDGET first because
 ```
 
 - In the center case no G8-0 set reaches the need. Only S2b has a high end (x1.020 A/B) near the jitless need, and S2b is M5 work (E).
-- The PBe12 need is smaller than the PBe11 need only by a read draw (§3.3). An estimate that uses the smaller need is not a basis for a merge or a date.
+- The PBe12 need is smaller than the PBe11 need only by the read-to-read move of §3.3 (I). An estimate that uses the smaller need is not a basis for a merge or a date.
 
 ### 4.2 Open questions for month 13
 
@@ -366,7 +366,7 @@ Not claimed (DL M12-P1-LEDGER): "no input aborts" is by design and tested for th
 
 | Lesson | Evidence | Number | Source |
 |---|---|---|---|
-| every code range needs a review round before the merge | M12-P0: 5 code ranges had no review round (logged after the tag); L1: the gap was found before the merge, and RV2 then found the HIGH A2-1 | 1 HIGH defect found by the late round | OL M6-ORCH-1515, -1527; DL M12-P0-LEDGER |
+| every code range needs a review round before the merge | M12-P0: 5 code ranges had no review round (logged after the merge, before the tag); L1: the gap was found before the merge, and RV2 then found the HIGH A2-1 | 1 HIGH defect found by the late round | OL M6-ORCH-1515, -1527; DL M12-P0-LEDGER |
 | a proof that enumerates the structure finds more than a reader | the visitor-graph proof against review RV2 | 5 open cycle groups against 2 chains | OL M6-ORCH-1531 |
 | a second-model review can be blocked by its service filter on parser-stack code | 3 stops on 2026-11-24 (2 STACK-FORMS, 1 L1); fallback: 2 Claude review lenses + a verifier, and the second model on the docs and pin slices only | 0 second-model results on that code | OL M6-ORCH-1515, -1533 |
 | a pre-registration draft checked at an earlier head needs its commands run again at the tag | one "no diff" claim of the health-run row was false at `m12-p1`: a comment line of `scripts/sync-lib.sh` (c99a1ee0) | 1 false claim, fixed before the row went public | OL M6-ORCH-1540 |
@@ -427,6 +427,7 @@ The planned box rows for month 12 were 4.98-7.00 box-h for the rows that always 
 - Node's main-thread GC share (an estimate, 0.5-2.2%); the excess of §1.2 rests on it.
 - The node v24.22.0 cites (pool size 4, the delayed-task thread): no checkout; node's `-node.57` V8 patches.
 - The cause of the read-to-read move of §3.3 (read draw against placement).
+- The whole-run instructions of the DEPS-BUMP-2 lock step (`m11-p3` -> 2c5002c8): no read of that tree is cited.
 - The cause of the box-1 to box-2 drift of TD-3 line G (5.21% -> 4.43%).
 - The estimates of §4.1 (R24B) and the conflicting R18S estimate for GC-BUDGET.
 - The review counts of §5.3 beyond the DL ledger row and the OL rows (the review files were read; the per-item fixing commits were not re-checked).
