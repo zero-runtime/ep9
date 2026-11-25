@@ -3434,13 +3434,14 @@ op!(JumpIfJSReceiverFar(st, target: Fwd) { JumpIfJSReceiver::fast(st, target) })
 op!(Wide2(st) { st.scaled::<S2>() });
 
 /// `if_wide!(Name { tokens if Name is in the wide list } else { tokens if not })`: the opcodes
-/// with a scale-2 handler `<Name>_w2` and its cold handler `<Name>_w2_cold` in every threaded
+/// with a scale-2 handler `<Name>_w2` and its cold handler `<Name>_w2_cold` in a threaded
 /// expansion (`interp::dsl::expand_wide`), the opcodes of `Opcode::takes_wide2`. Their fast
 /// bodies return only `Next`, `Jump` or `Cold`, so a scale-2 handler needs no record exit (the
 /// record exits read the slot at its one-byte place). Each one has a cold body. The wide table
 /// entry (the byte after a `Wide2` prefix) of an opcode here is its `_w2` handler where
 /// [`prefix_runs_fast`] is false; on aarch64 the `Wide` fast body runs `GetNamedProperty` and
-/// `JumpLoop`, so their entries are the `Wide` handler there (its fast body runs theirs once).
+/// `JumpLoop`, so their entries are the `Wide` handler there (its fast body runs theirs once),
+/// and no expansion builds their `_w2` handlers there (`interp::dsl::if_w2`).
 macro_rules! if_wide {
     (GetNamedProperty { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
     (SetNamedProperty { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
@@ -3449,7 +3450,8 @@ macro_rules! if_wide {
 }
 pub(crate) use if_wide;
 
-/// Opcodes of the wide list (the `if_wide!` list), for tests and the disasm-check count.
+/// Opcodes of the wide list (the `if_wide!` list), for tests.
+#[cfg(test)]
 pub(crate) const WIDE_COUNT: usize = {
     macro_rules! count_wide {
         ([] $( $(#[$doc:meta])* $name:ident = $code:literal, $snake:ident, acc: $acc:ident,

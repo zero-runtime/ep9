@@ -200,6 +200,7 @@ use ep9_bytecode::{FeedbackSlotKind, FunctionBuilder, FunctionId};
 
 use super::meta;
 use crate::interp::Handler;
+use crate::interp::dsl::if_w2;
 use crate::interp::ops::{WIDE_COUNT, if_wide, prefix_runs_fast};
 use crate::runtime::val;
 use crate::{IsolateConfig, Value, feedback};
@@ -239,21 +240,27 @@ fn wide_list() -> Vec<Opcode> {
 }
 
 /// The wide table of one expansion against what it must hold: for an opcode of the wide list
-/// its `_w2` handler where `prefix_runs_fast` is false, else the `Wide` handler of the
-/// expansion; every other byte (a byte that is no opcode too) `BadOpcode`.
+/// its `_w2` handler (`w2`: the built ones) where `prefix_runs_fast` is false, else the `Wide`
+/// handler of the expansion; every other byte (a byte that is no opcode too) `BadOpcode`.
 fn check_wide(
     name: &str,
     t: &[Handler; 256],
     wide: Handler,
     bad: Handler,
-    w2: [(Opcode, Handler); 3],
+    w2: &[(Opcode, Handler)],
 ) {
+    let list = wide_list();
     let mut own = Vec::new();
     for (b, &h) in t.iter().enumerate() {
-        let want = match w2.iter().find(|(op, _)| *op as usize == b) {
-            Some(_) if prefix_runs_fast(b as u8) => wide,
-            Some(&(_, h)) => h,
-            None => bad,
+        let want = if !list.iter().any(|&op| op as usize == b) {
+            bad
+        } else if prefix_runs_fast(b as u8) {
+            wide
+        } else {
+            w2.iter()
+                .find(|(op, _)| *op as usize == b)
+                .unwrap_or_else(|| panic!("{name}: no _w2 handler for {b:#04x}"))
+                .1
         };
         assert_eq!(h as usize, want as usize, "{name}: entry {b:#04x}");
         if h as usize != bad as usize && h as usize != wide as usize {
@@ -271,6 +278,7 @@ fn check_wide(
         ]
     };
     assert_eq!(own, want, "{name}: the _w2 entries");
+    assert_eq!(w2.len(), want.len(), "{name}: the built _w2 handlers");
     assert!(Opcode::from_u8(0xff).is_none());
     assert_eq!(
         t[0xff] as usize, bad as usize,
@@ -279,8 +287,8 @@ fn check_wide(
 }
 
 /// T13: the wide list is `Opcode::takes_wide2`; each wide table holds the `_w2` handlers by
-/// check fix B1 (x86-64: all 3; aarch64: only `SetNamedProperty_w2`, and the `Wide` handler for
-/// `GetNamedProperty` and `JumpLoop`); every other entry is `BadOpcode`. `TABLE` holds the
+/// check fix B1 (x86-64: all 3; aarch64: only `SetNamedProperty_w2`, the only one built there,
+/// and the `Wide` handler for `GetNamedProperty` and `JumpLoop`); every other entry is `BadOpcode`. `TABLE` holds the
 /// `Wide2` handler at 0xac, and the `Wide` handler at `Wide` as at the base.
 #[test]
 fn wide_table_entries() {
@@ -308,16 +316,48 @@ fn wide_table_entries() {
             assert_eq!(m::TABLE[Opcode::Wide2 as usize] as usize, wide2);
             assert_ne!(wide2, wide);
             assert_ne!(wide2, bad as usize);
-            check_wide(
-                stringify!($m),
-                &m::WIDE,
-                m::Wide as Handler,
-                bad,
-                [
-                    (Opcode::GetNamedProperty, m::w2::GetNamedProperty as Handler),
-                    (Opcode::SetNamedProperty, m::w2::SetNamedProperty as Handler),
-                    (Opcode::JumpLoop, m::w2::JumpLoop as Handler),
-                ],
+            let mut w2: Vec<(Opcode, Handler)> = Vec::new();
+            if_w2!(GetNamedProperty {
+                w2.push((Opcode::GetNamedProperty, m::w2::GetNamedProperty as Handler));
+            } else {});
+            if_w2!(SetNamedProperty {
+                w2.push((Opcode::SetNamedProperty, m::w2::SetNamedProperty as Handler));
+            } else {});
+            if_w2!(JumpLoop {
+                w2.push((Opcode::JumpLoop, m::w2::JumpLoop as Handler));
+            } else {});
+            check_wide(stringify!($m), &m::WIDE, m::Wide as Handler, bad, &w2);
+        })*};
+    }
+    check!(sibling, sib_ics);
+    #[cfg(feature = "become")]
+    check!(tail, tail_ics);
+}
+
+/// F2 (M13-P2 JIT review, fix r1): each `_w2` handler that an expansion builds is the wide
+/// table entry of its opcode on this target. `THREADED_HANDLERS` (the disasm-check count)
+/// holds 2 handlers (fast and cold) per distinct `_w2` entry of `WIDE`, so a built and counted
+/// `_w2` handler with no entry makes the count too large.
+#[test]
+fn every_built_w2_handler_has_a_wide_entry() {
+    use crate::internals::{COLD_OPCODES, THREADED_HANDLERS};
+    macro_rules! check {
+        ($($m:ident),*) => {$({
+            use crate::interp::$m as m;
+            let bad = m::TABLE[ep9_bytecode::OPCODE_COUNT] as usize;
+            let wide = m::Wide as Handler as usize;
+            let mut own: Vec<usize> = m::WIDE
+                .iter()
+                .map(|&h| h as usize)
+                .filter(|&h| h != bad && h != wide)
+                .collect();
+            own.sort_unstable();
+            own.dedup();
+            assert_eq!(
+                THREADED_HANDLERS,
+                ep9_bytecode::OPCODE_COUNT + COLD_OPCODES + 3 + 2 * own.len(),
+                "{}: the _w2 handlers counted against the _w2 entries of WIDE",
+                stringify!($m)
             );
         })*};
     }
@@ -639,31 +679,37 @@ fn aarch64_wide_fast_set_runs_once() {
 // ---- W-2: the loop and the exception pc (T11, T12) ----------------------------------------
 
 /// The `_w2` handler of `op` (one of the wide list) of the `full` table of the threaded
-/// expansion `d` (`None` for the match loop, which runs `Wide` and `Wide2` itself).
+/// expansion `d` (`None` for the match loop, which runs `Wide` and `Wide2` itself, and where
+/// this target builds no `_w2` handler for `op`: `if_w2!`).
 fn w2_of(d: Dispatch, op: Opcode) -> Option<Handler> {
     macro_rules! pick {
         ($m:ident) => {{
+            #[allow(unused_imports)]
             use crate::interp::$m::w2;
             match op {
-                Opcode::GetNamedProperty => w2::GetNamedProperty as Handler,
-                Opcode::SetNamedProperty => w2::SetNamedProperty as Handler,
-                Opcode::JumpLoop => w2::JumpLoop as Handler,
+                Opcode::GetNamedProperty => {
+                    if_w2!(GetNamedProperty { Some(w2::GetNamedProperty as Handler) } else { None })
+                }
+                Opcode::SetNamedProperty => {
+                    if_w2!(SetNamedProperty { Some(w2::SetNamedProperty as Handler) } else { None })
+                }
+                Opcode::JumpLoop => if_w2!(JumpLoop { Some(w2::JumpLoop as Handler) } else { None }),
                 other => unreachable!("{other}"),
             }
         }};
     }
     match d {
         Dispatch::Match => None,
-        Dispatch::Sibling => Some(pick!(sibling)),
+        Dispatch::Sibling => pick!(sibling),
         #[cfg(feature = "become")]
-        Dispatch::Become => Some(pick!(tail)),
+        Dispatch::Become => pick!(tail),
     }
 }
 
 /// The arms of the W-2 tests: bit 1 off (`Wide`), bit 1 on (`Wide2`), and (threaded
-/// expansions) the bit-1-off program with the `_w2` handler of `op` directly in entry `Wide` of
-/// `Cx.table`, so the `_w2` handler of an opcode whose wide table entry is the `Wide` handler on
-/// this target runs too. The program of such an arm has no other prefixed opcode.
+/// expansions that build the `_w2` handler of `op`) the bit-1-off program with that handler
+/// directly in entry `Wide` of `Cx.table`. The program of such an arm has no other prefixed
+/// opcode.
 #[derive(Clone, Copy, Debug)]
 enum Arm {
     Off,
@@ -770,7 +816,7 @@ fn loop_arm(d: Dispatch, arm: Arm) -> LoopArm {
 /// T11 (INV-8): a prefixed `JumpLoop` takes 1 budget unit per back edge (200 more turns take
 /// 200 more units), polls when the budget runs out (an interrupt at the poll: a termination
 /// stops the run there), and writes one loop record, the same in every arm: bit 1 off, bit 1
-/// on, and `JumpLoop_w2` run directly (aarch64 has no `_w2` wide table entry for it).
+/// on, and `JumpLoop_w2` run directly where it is built (not on aarch64: `if_w2!`).
 #[test]
 fn wide_jump_loop_budget_and_record() {
     use super::ic::int;

@@ -1710,6 +1710,37 @@ macro_rules! if_wide2 {
 }
 pub(crate) use if_wide2;
 
+/// `if_w2!(Name { tokens if Name has _w2 handlers } else { tokens if not })`, for an opcode of
+/// the wide list (F2, JIT review): the opcodes whose `WIDE` entry is their `_w2` handler, that
+/// is, where `ops::prefix_runs_fast` is false. On aarch64 the entries of `GetNamedProperty` and
+/// `JumpLoop` are the `Wide` handler, so no expansion builds their `_w2` handlers there.
+/// `expand_wide` checks at compile time that this list agrees with `prefix_runs_fast`.
+#[cfg(target_arch = "aarch64")]
+macro_rules! if_w2 {
+    (GetNamedProperty { $($y:tt)* } else { $($n:tt)* }) => { $($n)* };
+    (JumpLoop { $($y:tt)* } else { $($n:tt)* }) => { $($n)* };
+    ($other:ident { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
+}
+/// `if_w2!` off aarch64: every opcode of the wide list has its `_w2` handlers.
+#[cfg(not(target_arch = "aarch64"))]
+macro_rules! if_w2 {
+    ($other:ident { $($y:tt)* } else { $($n:tt)* }) => { $($y)* };
+}
+pub(crate) use if_w2;
+
+/// The opcodes of the wide list with `_w2` handlers on this target ([`if_w2`]); each has 2
+/// handlers (fast and cold) in every threaded expansion: `ep9_vm::internals::THREADED_HANDLERS`.
+pub(crate) const W2_COUNT: usize = {
+    macro_rules! count_built {
+        ([] $( $(#[$doc:meta])* $name:ident = $code:literal, $snake:ident, acc: $acc:ident,
+           flags: [$($flag:ident),*],
+           operands: ($($oname:ident : $okind:ident $(($oparam:tt))?),*); )*) => {
+            0 $( + $crate::interp::ops::if_wide!($name { if_w2!($name { 1 } else { 0 }) } else { 0 }) )*
+        };
+    }
+    ep9_bytecode::for_each_opcode!(count_built [])
+};
+
 /// The W-2 part of an [`expand_threaded`] expansion (WIDE-SET probe, shape F-a; the `Wide`
 /// handler and its cold handler do not change, and arm 0 runs them):
 ///
@@ -1727,9 +1758,11 @@ pub(crate) use if_wide2;
 ///   false, and the `Wide` handler of this expansion where it is true (aarch64:
 ///   `GetNamedProperty`, `JumpLoop`; the `Wide` fast body runs their fast body once, its cold
 ///   block their cold body at most once); every other byte `BadOpcode` (verified code never
-///   reaches it).
+///   reaches it). An expansion builds the `_w2` handlers only where they are the entry
+///   ([`if_w2`]): not those of `GetNamedProperty` and `JumpLoop` on aarch64.
 ///
-/// 6 handlers more per expansion: `ep9_vm::internals::THREADED_HANDLERS`.
+/// 2 x [`W2_COUNT`] handlers more per expansion (x86-64: 6, aarch64: 2):
+/// `ep9_vm::internals::THREADED_HANDLERS`.
 macro_rules! expand_wide {
     ( [$tail:tt, $exp:literal, $mode:ident]
       $( $name:ident = $code:literal ($($oname:ident : $okind:ident),*); )*
@@ -1738,7 +1771,7 @@ macro_rules! expand_wide {
         pub(crate) mod w2 {
             #[allow(unused_imports)]
             use super::*;
-            $( $crate::interp::ops::if_wide!($name {
+            $( $crate::interp::ops::if_wide!($name { $crate::interp::dsl::if_w2!($name {
                 $crate::interp::dsl::handler! {
                     /// The scale-2 (`Wide`) handler of the opcode with the same name.
                     ///
@@ -1786,17 +1819,17 @@ macro_rules! expand_wide {
                         unsafe { $tail h(cx, to, fp, acc) }
                     }
                 }
-            } else {}); )*
+            } else {}); } else {}); )*
 
             /// The cold handlers of the scale-2 handlers.
             pub(crate) mod cold {
                 #[allow(unused_imports)]
                 use super::*;
-                $( $crate::interp::ops::if_wide!($name {
+                $( $crate::interp::ops::if_wide!($name { $crate::interp::dsl::if_w2!($name {
                     $crate::interp::dsl::expand_wide!(
                         @cold [$tail, $exp, $mode] $name ($($oname: $okind),*)
                     );
-                } else {}); )*
+                } else {}); } else {}); )*
             }
         }
 
@@ -1805,11 +1838,16 @@ macro_rules! expand_wide {
         pub(crate) static WIDE: [Handler; 256] = {
             let mut t = [bad_opcode as Handler; 256];
             $( $crate::interp::ops::if_wide!($name {
-                t[$code] = if $crate::interp::ops::prefix_runs_fast($code) {
-                    Wide as Handler
+                // `if_w2!` agrees with `prefix_runs_fast` (a build error if not).
+                assert!(
+                    $crate::interp::ops::prefix_runs_fast($code)
+                        != $crate::interp::dsl::if_w2!($name { true } else { false })
+                );
+                $crate::interp::dsl::if_w2!($name {
+                    t[$code] = w2::$name as Handler;
                 } else {
-                    w2::$name as Handler
-                };
+                    t[$code] = Wide as Handler;
+                });
             } else {}); )*
             t
         };
