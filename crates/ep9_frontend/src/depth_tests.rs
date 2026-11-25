@@ -1003,8 +1003,10 @@ fn passes_stop_on_a_small_stack() {
 
 // The visitor-graph proof of the layer-2 walk (review R2 A2-1). `DepthPass` (depth.rs) stops
 // only at its gated visit functions. The walk is bounded only if every cycle of the oxc visitor
-// call graph passes through a gated node. This test reads the visitor source of the pinned oxc
-// checkout, so a new oxc pin with a new cycle fails here, before an input can abort the process.
+// call graph passes through a gated node. This test reads the visitor source that the build
+// compiles (rule 107: the registry source of the locked `oxc_ast_visit`, and the third_party/oxc
+// copy must be byte-equal to it), so a new oxc pin with a new cycle fails here, before an input
+// can abort the process.
 //
 // Why the graph is complete for `DepthPass`:
 // - The walk of `DepthPass` calls only the `Visit` trait methods. The trait default of each
@@ -1021,14 +1023,119 @@ fn passes_stop_on_a_small_stack() {
 // - A gate stops a cycle only if the depth grows on it: every cycle of the full graph must have
 //   a node whose walk calls `enter_node` (checked below).
 
-/// The oxc visitor source: `oxc_ast_visit` 0.158.0 of the crates.io package is byte-equal to
-/// the pinned checkout (the oxc_parser path dependency needs the checkout, so it is present).
+/// The workspace lock file: it names the `oxc_ast_visit` that the build compiles.
+const CARGO_LOCK: &str = include_str!("../../../Cargo.lock");
+
+/// The visit.rs path inside an `oxc_ast_visit` package.
+const VISIT_RS: &str = "src/generated/visit.rs";
+
+/// (version, source) of the one package `name` of [`CARGO_LOCK`].
+fn locked_package(name: &str) -> (String, String) {
+    let mut found = Vec::new();
+    for block in CARGO_LOCK.split("[[package]]").skip(1) {
+        let field = |key: &str| {
+            block.lines().find_map(|l| {
+                l.strip_prefix(key)
+                    .and_then(|v| v.strip_prefix(" = \""))
+                    .and_then(|v| v.strip_suffix('"'))
+                    .map(str::to_owned)
+            })
+        };
+        if field("name").as_deref() == Some(name) {
+            found.push((
+                field("version").unwrap_or_default(),
+                field("source").unwrap_or_default(),
+            ));
+        }
+    }
+    assert_eq!(found.len(), 1, "Cargo.lock: {name}: {found:?}");
+    found.pop().unwrap()
+}
+
+/// FNV-1a 64 of `text`: the content hash in the messages of [`same_visit_source`].
+fn content_hash(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// The compare of route OXC-VISIT-PROOF-SOURCE: `compiled` (each copy of the registry source
+/// that cargo can compile, one per registry index) is not empty and has one content, and the
+/// checkout copy has the same content. Gives the content hash.
+fn same_visit_source(checkout: &str, compiled: &[(String, String)]) -> Result<u64, String> {
+    let Some((first_path, first)) = compiled.first() else {
+        return Err(format!(
+            "no registry source of the locked oxc_ast_visit ({VISIT_RS}): the proof needs the \
+             source that the build compiles (run a cargo build first)"
+        ));
+    };
+    let hash = content_hash(first);
+    for (path, text) in compiled {
+        if text != first {
+            return Err(format!(
+                "{path} ({:016x}) differs from {first_path} ({hash:016x})",
+                content_hash(text)
+            ));
+        }
+    }
+    if checkout != first {
+        return Err(format!(
+            "the third_party/oxc visit.rs ({:016x}, {} bytes) differs from the compiled {first_path} \
+             ({hash:016x}, {} bytes): sync the checkout (bash scripts/sync-oxc.sh) or fix the pin",
+            content_hash(checkout),
+            checkout.len(),
+            first.len()
+        ));
+    }
+    Ok(hash)
+}
+
+/// The oxc visitor source that the build compiles (rule 107). `oxc_ast_visit` comes from
+/// crates.io at the version of Cargo.lock (only oxc_parser is a path dependency), so cargo
+/// compiles `<CARGO_HOME>/registry/src/<index>/oxc_ast_visit-<version>/src/generated/visit.rs`.
+/// The test reads that file; a missing file, or a third_party/oxc copy that is not byte-equal to
+/// it, is a failure (never a skip). `CARGO_HOME` is the env var, else `~/.cargo`.
 fn oxc_visit_source() -> String {
-    let path = concat!(
+    const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
+    let (version, source) = locked_package("oxc_ast_visit");
+    assert_eq!(source, CRATES_IO, "Cargo.lock: the source of oxc_ast_visit");
+    let home = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .map(|h| std::path::PathBuf::from(h).join(".cargo"))
+        })
+        .expect("CARGO_HOME, or a home dir");
+    let registry = home.join("registry").join("src");
+    let mut compiled = Vec::new();
+    let mut indexes: Vec<_> = std::fs::read_dir(&registry)
+        .unwrap_or_else(|e| panic!("{}: {e}", registry.display()))
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .collect();
+    indexes.sort();
+    for index in indexes {
+        let path = index
+            .join(format!("oxc_ast_visit-{version}"))
+            .join(VISIT_RS);
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            compiled.push((path.display().to_string(), text));
+        }
+    }
+    let checkout_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../third_party/oxc/crates/oxc_ast_visit/src/generated/visit.rs"
     );
-    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"))
+    let checkout =
+        std::fs::read_to_string(checkout_path).unwrap_or_else(|e| panic!("{checkout_path}: {e}"));
+    let hash = same_visit_source(&checkout, &compiled).unwrap_or_else(|e| panic!("{e}"));
+    println!(
+        "VISIT SOURCE oxc_ast_visit {version} {hash:016x} ({} bytes): {} registry copies, \
+         the checkout equal",
+        checkout.len(),
+        compiled.len()
+    );
+    compiled.swap_remove(0).1
 }
 
 /// The identifiers that follow `prefix` in `body` (for example `visitor.visit_`).
@@ -1322,6 +1429,35 @@ fn the_depth_walk_gates_every_visitor_cycle() {
         past <= 8,
         "{past} levels past the cap (the depth.rs texts say 8)"
     );
+}
+
+/// Route OXC-VISIT-PROOF-SOURCE, the mutation proof of the compare: the proof fails when the
+/// checkout visit.rs differs from the compiled source by one byte, when 2 registry copies
+/// differ, and when there is no registry copy; it passes only on equal texts.
+#[test]
+fn the_visit_proof_source_compare_finds_a_change() {
+    let text = oxc_visit_source();
+    let at = text.find("visitor.visit_").expect("a visit call");
+    let mut changed = text.clone();
+    changed.replace_range(at..at + 1, "W");
+    assert_ne!(changed, text);
+    let one = |t: &str| vec![("registry".to_owned(), t.to_owned())];
+    assert_eq!(
+        same_visit_source(&text, &one(&text)),
+        Ok(content_hash(&text))
+    );
+    let e = same_visit_source(&changed, &one(&text)).unwrap_err();
+    assert!(e.starts_with("the third_party/oxc visit.rs ("), "{e}");
+    let e = same_visit_source(&text, &one(&changed)).unwrap_err();
+    assert!(e.contains("differs from the compiled registry"), "{e}");
+    let two = vec![
+        ("a".to_owned(), text.clone()),
+        ("b".to_owned(), changed.clone()),
+    ];
+    let e = same_visit_source(&text, &two).unwrap_err();
+    assert!(e.starts_with("b ("), "{e}");
+    let e = same_visit_source(&text, &[]).unwrap_err();
+    assert!(e.starts_with("no registry source"), "{e}");
 }
 
 /// The most counted nodes on a path from `node` that enters no gate after `node` (the graph
