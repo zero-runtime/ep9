@@ -691,7 +691,7 @@ fn arms(d: Dispatch, op: Opcode) -> Vec<Arm> {
 fn arm_isolate(d: Dispatch, arm: Arm, u: VerifiedUnit) -> Isolate {
     let mut c = config(d, false);
     c.feedback_threshold = 0;
-    let mut iso = Isolate::new_with(c, ExecOptions::default()).unwrap();
+    let mut iso = Isolate::new_with(c, ExecOptions::default().feedback(Feedback::FULL)).unwrap();
     if let Arm::Direct(op) = arm {
         iso.cx.table[Opcode::Wide as usize] = w2_of(d, op).unwrap();
     }
@@ -782,7 +782,8 @@ fn wide_jump_loop_budget_and_record() {
             assert_eq!(r.0[1], 200, "{label}: 1 unit per back edge");
             assert_eq!(r.1, int(20), "{label}");
             assert!(r.2 >= 1, "{label}: the polls {}", r.2);
-            assert_ne!(r.3, 0, "{label}: the loop record");
+            let record = crate::frame::int32_of(r.3);
+            assert!(record >= 1, "{label}: the loop record {record}");
             assert_eq!(r.4, (true, 1), "{label}: the termination at the poll");
             match &first {
                 None => first = Some(r),
