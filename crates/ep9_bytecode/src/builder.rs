@@ -625,6 +625,7 @@ impl FunctionBuilder {
                             | OperandKind::RegOutPair
                             | OperandKind::RegOutTriple
                             | OperandKind::JumpFwd
+                            | OperandKind::JumpFwd16
                             | OperandKind::JumpBack
                     ) && (i32::try_from(v).is_ok() || u32::try_from(v).is_ok())
                 }

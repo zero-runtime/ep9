@@ -197,3 +197,20 @@ fn wide2_unit_round_trips_and_is_deterministic() {
     // The off unit has no Wide2 byte as a prefix.
     assert!(Instructions::new(foff).all(|i| i.unwrap().bytes[0] != Opcode::Wide2 as u8));
 }
+
+/// Codex 1 (M13-P2 fix r1): `emit` refuses a `Far` twin with a number operand in every
+/// profile (only `finish` makes a twin), so `finish` gives the operand error and writes no
+/// jump that the verifier would take.
+#[test]
+fn emit_refuses_a_far_twin_with_a_number_operand() {
+    let mut b = FunctionBuilder::new(FunctionMeta::entry(CodeKind::Script, false, 1));
+    b.emit(Opcode::JumpFar, &[300u32.into_pending()]);
+    b.return_();
+    assert_eq!(
+        b.finish().map(|_| ()),
+        Err(BuildError::Operand {
+            opcode: Opcode::JumpFar,
+            operand: 0,
+        })
+    );
+}
