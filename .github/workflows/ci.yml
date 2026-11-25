@@ -1474,6 +1474,59 @@ jobs:
             bench/cg/
             bench/cg-jitless/
           if-no-files-found: error
+      # GC-X86-COUNT (plan v18 section 4.2; G-4, G-6): a COUNT RUN on x86-64 Linux, never a timed
+      # run. It starts after the count step and its upload, so no timed number of that step moves.
+      # The head tree is copied, gc-count.mjs --patch writes one print per GC into the copy's
+      # heap.rs, and the copy builds in its own target dirs (the trace binaries; the head binaries
+      # stay as built).
+      # Per build, row (octane-typescript + the bench rows) and arm of EP9_GC_BUDGET (0, 1 = B1,
+      # 2 = B2): the GC count per helper form, the peak old bytes (O17), the GC decisions against
+      # arm 0, the earley-boyer peak RSS (G7 line) and the Ir of the head binary per arm (the
+      # "merge head equals the read code" input: gc-count.mjs --compare). The "off" leg runs the
+      # script tests only; the linux-arm64 leg skips the step.
+      - name: gc count
+        id: gccount
+        if: ${{ !cancelled() && matrix.name != 'linux-arm64' && (steps.mode.outputs.on != 'true' || steps.count.outcome != 'skipped') }}
+        env:
+          ON: ${{ steps.mode.outputs.on }}
+          HEAD: ${{ steps.mode.outputs.head }}
+          LEG: ${{ matrix.name }}
+          WORKLOADS: ${{ steps.mode.outputs.workloads }}
+          BENCH_DIR: ${{ github.workspace }}/bench
+        run: |
+          set -euo pipefail
+          node --test .github/scripts/gc-count.test.mjs
+          if [ "$ON" != true ]; then echo "gc count: bench mode off (script tests only)"; exit 0; fi
+          [ -x /usr/bin/time ] || { sudo apt-get -o Acquire::Retries=5 update -q && sudo apt-get -o Acquire::Retries=5 install -y -q --no-install-recommends time; }
+          rm -rf "$RUNNER_TEMP/bench/trace"
+          cp -a "$RUNNER_TEMP/bench/head" "$RUNNER_TEMP/bench/trace"
+          node .github/scripts/gc-count.mjs --patch "$RUNNER_TEMP/bench/trace/crates/ep9_heap/src/heap.rs"
+          pushd "$RUNNER_TEMP/bench/trace" > /dev/null
+          cargo build --release --locked -p ep9_cli --target-dir "$BENCH_DIR/target-trace"
+          cargo build --release --locked -p ep9_cli --no-default-features --target-dir "$BENCH_DIR/target-jitless-trace"
+          popd > /dev/null
+          cp "$BENCH_DIR/target-trace/release/ep9" "$BENCH_DIR/ep9-trace"
+          cp "$BENCH_DIR/target-jitless-trace/release/ep9" "$BENCH_DIR/ep9-jitless-trace"
+          # bench_workloads set: octane-typescript and those rows, no RSS row.
+          wl=()
+          if [ -n "$WORKLOADS" ]; then wl=(--workloads "octane-typescript,$WORKLOADS" --rss-rows none); fi
+          rc=0
+          mkdir -p bench/cg-gc
+          node .github/scripts/gc-count.mjs --head "$HEAD" --target "$LEG" \
+            --trace-ep9 bench/ep9-trace --trace-ep9-jitless bench/ep9-jitless-trace \
+            --ep9 bench/ep9-head --ep9-jitless bench/ep9-jitless-head "${wl[@]}" \
+            --arms 0,1,2 --forms H1,H0 --runs 3 --ts-runs 5 --keep bench/cg-gc \
+            --out "gc-count-$LEG.json" --md "gc-count-$LEG.md" || rc=$?
+          if [ -f "gc-count-$LEG.md" ]; then cat "gc-count-$LEG.md" >> "$GITHUB_STEP_SUMMARY"; fi
+          exit "$rc"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() && steps.gccount.outcome != 'skipped' && steps.mode.outputs.on == 'true' && matrix.name == 'linux-x64' }}
+        with:
+          name: gc-count-${{ matrix.name }}-${{ steps.mode.outputs.head }}
+          path: |
+            gc-count-${{ matrix.name }}.json
+            gc-count-${{ matrix.name }}.md
+          if-no-files-found: error
 
   # The exit-inputs mode (plan v14 section 4.1; route EXIT-INPUTS; header): the M2 exit inputs that
   # need a platform, on GitHub-hosted runners. Each leg builds ep9 twice (the jit preset, and the
