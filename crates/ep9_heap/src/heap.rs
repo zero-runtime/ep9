@@ -47,7 +47,8 @@
 //!     become old)
 //!   sweep: frees the unmarked cells and keeps the mark bits of the others (old = marked)
 //!   policy: a minor GC when the allocation budget is spent (budget = s1_budget: the old bytes
-//!     up to 72 MiB, at least half of them); a major GC once the old bytes pass twice the last
+//!     up to 72 MiB, at least half of them; above 12 MiB of old bytes at least 12 MiB + 5 x
+//!     the old bytes above 12 MiB, up to 144 MiB); a major GC once the old bytes pass twice the last
 //!     major GC's live bytes (est.), after a minor GC with high survival (after_gc), or no memory
 //!
 //! verify_after_gc (GC-stress turns it on): the verify costs no second trace of the heap
@@ -112,7 +113,8 @@ pub struct HeapConfig {
     /// default): no callback.
     pub near_limit: Option<fn(committed: usize, limit: usize) -> usize>,
     /// Bytes allocated before the first GC. Later budgets are `max(this, live bytes)` (S0) or
-    /// `max(this, min(old bytes, 72 MiB), old bytes / 2)` (S1, `s1_budget`).
+    /// `max(this, min(old bytes, 72 MiB), old bytes / 2)`, and above 12 MiB of old bytes at
+    /// least `min(12 MiB + 5 x (old bytes - 12 MiB), 144 MiB)` (S1, `s1_budget`).
     pub initial_budget: usize,
     /// GC-stress: collect before every Nth allocation. 0 = off, 1 = every allocation. A
     /// value above 0 also turns on the process-wide E2 check
@@ -2570,13 +2572,38 @@ fn next_free_run(page: Page, line: &mut usize) -> Option<(usize, usize)> {
 /// (at 72 MiB of old bytes), and from 144 MiB of old bytes on the budget is half the old bytes
 /// again. 72 MiB is the largest young generation of V8's non-moving minor GC (MinorMS). Every
 /// budget GC of octane-typescript asks for less (65 MiB at most), so it keeps the LEVER-7 gain.
+/// This cap bounds the base term only: above [`S1_KNEE`] the GC-BUDGET term of [`s1_budget`]
+/// can be larger, up to [`S1_GROW_CAP`].
 pub(crate) const MAX_S1_BUDGET: usize = 72 << 20;
 
-/// The S1 budget after a GC (`Inner::after_gc`): `max(initial, min(old bytes,
-/// MAX_S1_BUDGET), old bytes / 2)`. A minor GC sweeps every page and traces the logged old
-/// hosts again, so a larger budget runs fewer of them (LEVER-7: about the old bytes).
+/// The old bytes above which the S1 budget grows 5 times as fast as the old bytes
+/// ([`s1_budget`]; GC-BUDGET, M13-P1).
+pub(crate) const S1_KNEE: usize = 12 << 20;
+/// The cap of the faster S1 growth above [`S1_KNEE`] ([`s1_budget`]; GC-BUDGET, M13-P1).
+pub(crate) const S1_GROW_CAP: usize = 144 << 20;
+
+/// The S1 budget after a GC (`Inner::after_gc`). The base is `max(initial, min(old bytes,
+/// MAX_S1_BUDGET), old bytes / 2)` (LEVER-7). Up to [`S1_KNEE`] (12 MiB) of old bytes the
+/// budget is the base. Above it the budget is `max(base, min(12 MiB + 5 x (old bytes - 12
+/// MiB), 144 MiB))` (GC-BUDGET, M13-P1: arm B1 of the A/B read, decisions-log row
+/// M13-P1-GC-VERDICT). A minor GC sweeps every page and traces the logged old hosts again, so
+/// a larger budget runs fewer of them: octane-typescript runs 6 GCs, not 12, on x86-64.
+///
+/// The bound: from 38.4 MiB to 288 MiB of old bytes the budget is 144 MiB (the base gave
+/// 72 MiB at most there), so before a minor GC the heap holds at most the old bytes + 144 MiB
+/// of young bytes. This also holds when `next_major` is set after a low-survival minor GC: the
+/// pending major GC waits for at most 144 MiB more allocation (72 MiB with the base alone).
 pub(crate) fn s1_budget(initial: usize, old_bytes: usize) -> usize {
-    s1_budget_in(gc_budget_arm(), initial, old_bytes)
+    let base = old_bytes.min(MAX_S1_BUDGET).max(old_bytes / 2).max(initial);
+    if old_bytes <= S1_KNEE {
+        return base;
+    }
+    // Above the knee the budget grows 5 times as fast as the old bytes, up to the cap.
+    let grow = (old_bytes - S1_KNEE)
+        .saturating_mul(5)
+        .saturating_add(S1_KNEE)
+        .min(S1_GROW_CAP);
+    base.max(grow)
 }
 
 /// Per-thread count of pages that an S1 sweep did not walk (no dead cell), for the tests only.
@@ -2932,167 +2959,36 @@ impl Heap {
     }
 }
 
-/// The GC-BUDGET probe switch (M12-P1; decisions-log rows M12-PLAN-D2 and M12-PRE-TD3):
-/// `EP9_GC_BUDGET`, read once per process. Probe branch only; the merge removes it (plan v17
-/// section 4.2).
-///
-/// | `EP9_GC_BUDGET` | arm | S1 budget after a GC (`base` = the arm-0 value) |
-/// |---|---|---|
-/// | not set, `0`, any other value | 0 | `base = max(initial, min(old, 72 MiB), old / 2)` (the bytes of today) |
-/// | `1` | B1 | `base`; above 12 MiB of old bytes `max(base, min(12 MiB + 5 * (old - 12 MiB), 144 MiB))` |
-/// | `2` | B2 | `base`; above 12 MiB of old bytes `max(base, min(12 MiB + 6 * (old - 12 MiB), 144 MiB))` |
-///
-/// The first budget is 8 MiB in every arm, so a heap whose old bytes stay at 12 MiB or less
-/// (a small, short run) has the budgets of arm 0 in every arm. The S1 formula of the arm
-/// applies to every heap of the process.
-pub(crate) fn gc_budget_arm() -> u8 {
-    #[cfg(test)]
-    if let Some(arm) = gc_budget_override::ARM.get() {
-        return arm;
-    }
-    if cfg!(miri) {
-        return 0;
-    }
-    static ARM: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *ARM.get_or_init(|| budget_arm_from(std::env::var("EP9_GC_BUDGET").ok().as_deref()))
-}
-
-/// The arm of an `EP9_GC_BUDGET` value ([`gc_budget_arm`]): `"1"` = B1, `"2"` = B2, every
-/// other value (not set, `"0"`, empty, `" 1"`, ...) = arm 0.
-pub(crate) fn budget_arm_from(var: Option<&str>) -> u8 {
-    match var {
-        Some("1") => 1,
-        Some("2") => 2,
-        _ => 0,
-    }
-}
-
-/// The old bytes above which the S1 budget of B1 and B2 grows faster ([`gc_budget_arm`]).
-pub(crate) const B_S1_KNEE: usize = 12 << 20;
-/// The cap of the faster S1 growth of B1 and B2 ([`gc_budget_arm`]).
-pub(crate) const B_S1_CAP: usize = 144 << 20;
-
-/// The S1 budget after a GC for an arm ([`gc_budget_arm`], [`s1_budget`]).
-pub(crate) fn s1_budget_in(arm: u8, initial: usize, old_bytes: usize) -> usize {
-    let base = old_bytes.min(MAX_S1_BUDGET).max(old_bytes / 2).max(initial);
-    let step = match arm {
-        1 => 5,
-        2 => 6,
-        _ => return base,
-    };
-    if old_bytes <= B_S1_KNEE {
-        return base;
-    }
-    // Above the knee the budget grows `step` times as fast as the old bytes, up to the cap.
-    let grow = (old_bytes - B_S1_KNEE)
-        .saturating_mul(step)
-        .saturating_add(B_S1_KNEE)
-        .min(B_S1_CAP);
-    base.max(grow)
-}
-
-/// Tests only: the arm of [`gc_budget_arm`] for this thread, over the process value.
+/// The tests of the S1 budget of GC-BUDGET ([`s1_budget`] above [`S1_KNEE`]): the values, and
+/// the first two budget GCs on a heap. `the_s1_budget_rule` and
+/// `the_s1_budget_stops_at_the_cap` (tests/minor.rs) check the bands and the 144 MiB cap.
 #[cfg(test)]
-pub(crate) mod gc_budget_override {
-    use core::cell::Cell;
-
-    std::thread_local! {
-        pub(crate) static ARM: Cell<Option<u8>> = const { Cell::new(None) };
-    }
-}
-
-/// The tests of the GC-BUDGET probe switch ([`gc_budget_arm`]): the parse, the values per
-/// arm, the read of the process value, and the first budget GC per arm on a heap.
-#[cfg(test)]
-mod gc_budget_tests {
+mod s1_budget_tests {
     use super::*;
     use crate::layout::PAGE_SIZE;
     use crate::tests::{new_node, store, test_heap};
 
     const MIB: usize = 1 << 20;
-    /// The child marker of [`the_process_value_is_read_once`].
-    const CHILD: &str = "EP9_GC_BUDGET_TEST_CHILD";
 
-    /// Runs `f` with [`gc_budget_arm`] = `arm` on this thread.
-    fn with_arm<R>(arm: u8, f: impl FnOnce() -> R) -> R {
-        struct Reset(Option<u8>);
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                gc_budget_override::ARM.set(self.0);
-            }
-        }
-        let _reset = Reset(gc_budget_override::ARM.replace(Some(arm)));
-        f()
-    }
-
-    /// The S1 budget of the base tree (before the switch), as a literal expression.
+    /// The LEVER-7 base (the S1 budget before GC-BUDGET), as a literal expression.
     fn base_s1(initial: usize, old: usize) -> usize {
         old.min(72 * MIB).max(old / 2).max(initial)
     }
 
-    /// T1: `"1"` is B1, `"2"` is B2, every other value is arm 0.
-    #[test]
-    fn gc_budget_parse() {
-        let cases: [(Option<&str>, u8); 8] = [
-            (None, 0),
-            (Some("0"), 0),
-            (Some("1"), 1),
-            (Some("2"), 2),
-            (Some("3"), 0),
-            (Some(""), 0),
-            (Some(" 1"), 0),
-            (Some("x"), 0),
-        ];
-        for (var, arm) in cases {
-            assert_eq!(budget_arm_from(var), arm, "{var:?}");
-        }
+    /// The GC-BUDGET term of `old` bytes: 5 times as fast above the knee, up to the cap.
+    fn grow(old: usize) -> usize {
+        (S1_KNEE + 5 * (old - S1_KNEE)).min(S1_GROW_CAP)
     }
 
-    /// T2, arm 0: the bytes of the base tree. The S1 budget is every value of
-    /// `the_s1_budget_rule` (tests/minor.rs) and the base expression on a sweep.
+    /// The base up to 12 MiB of old bytes, then 12 MiB + 5 x (old - 12 MiB) up to the 144 MiB
+    /// cap (from 38.4 MiB of old bytes on), then half the old bytes (above 288 MiB).
     #[test]
-    fn gc_budget_arm0_values_are_the_base_values() {
+    fn s1_budget_values() {
         assert_eq!(MAX_S1_BUDGET, 72 * MIB);
-        let s = |initial, old| s1_budget_in(0, initial, old);
-        // Band 1: the old bytes (the initial budget is the floor).
-        assert_eq!(s(8 * MIB, 2 * MIB), 8 * MIB);
-        assert_eq!(s(8 * MIB, 40 * MIB), 40 * MIB);
-        assert_eq!(s(8 * MIB, 72 * MIB), 72 * MIB);
-        // Band 2: the cap.
-        assert_eq!(s(8 * MIB, 72 * MIB + 1), 72 * MIB);
-        assert_eq!(s(8 * MIB, 80 * MIB), 72 * MIB);
-        assert_eq!(s(8 * MIB, 144 * MIB), 72 * MIB);
-        // Band 3: half the old bytes.
-        assert_eq!(s(8 * MIB, 144 * MIB + 2), 72 * MIB + 1);
-        assert_eq!(s(8 * MIB, 1024 * MIB), 512 * MIB);
-        // An initial budget above the rule wins.
-        assert_eq!(s(100 * MIB, 80 * MIB), 100 * MIB);
-        // The sweep of old sizes (1 MiB to 1 GiB, odd steps) and two floors.
-        for initial in [PAGE_SIZE, 8 * MIB] {
-            for old in (MIB..=1024 * MIB).step_by(MIB + 4_099) {
-                assert_eq!(s(initial, old), base_s1(initial, old), "{initial} {old}");
-            }
-        }
-        // A value that is not an arm is arm 0.
-        for arm in [3, 4, 255] {
-            assert_eq!(s1_budget_in(arm, 8 * MIB, 20 * MIB), 20 * MIB);
-            assert_eq!(s1_budget_in(arm, 8 * MIB, 100 * MIB), 72 * MIB);
-        }
-    }
-
-    /// The B1 / B2 budget of `old` bytes: `step` times as fast above the knee, up to the cap.
-    fn grow(step: usize, old: usize) -> usize {
-        (B_S1_KNEE + step * (old - B_S1_KNEE)).min(B_S1_CAP)
-    }
-
-    /// T2, B1: the arm-0 budget up to 12 MiB of old bytes, then 12 MiB + 5 x (old - 12 MiB) up
-    /// to the 144 MiB cap (from 38.4 MiB of old bytes on), then half the old bytes (above 288).
-    #[test]
-    fn gc_budget_b1_values() {
-        assert_eq!(B_S1_KNEE, 12 * MIB);
-        assert_eq!(B_S1_CAP, 144 * MIB);
-        let s = |old| s1_budget_in(1, 8 * MIB, old);
-        // Up to the knee: arm 0 (the 8 MiB floor, then the old bytes).
+        assert_eq!(S1_KNEE, 12 * MIB);
+        assert_eq!(S1_GROW_CAP, 144 * MIB);
+        let s = |old| s1_budget(8 * MIB, old);
+        // Up to the knee: the base (the 8 MiB floor, then the old bytes).
         assert_eq!(s(0), 8 * MIB);
         assert_eq!(s(2 * MIB), 8 * MIB);
         assert_eq!(s(10 * MIB), 10 * MIB);
@@ -3110,111 +3006,22 @@ mod gc_budget_tests {
         assert_eq!(s(288 * MIB + 2), 144 * MIB + 1);
         assert_eq!(s(1024 * MIB), 512 * MIB);
         // An initial budget above the rule wins.
-        assert_eq!(s1_budget_in(1, 100 * MIB, 20 * MIB), 100 * MIB);
+        assert_eq!(s1_budget(100 * MIB, 20 * MIB), 100 * MIB);
         // No overflow at the top of the range.
-        assert_eq!(s1_budget_in(1, 8 * MIB, usize::MAX), usize::MAX / 2);
+        assert_eq!(s1_budget(8 * MIB, usize::MAX), usize::MAX / 2);
+        // The sweep of old sizes (1 MiB to 1 GiB, odd steps) and two floors.
         for initial in [PAGE_SIZE, 8 * MIB] {
             for old in (MIB..=1024 * MIB).step_by(MIB + 4_099) {
-                let want = if old <= B_S1_KNEE {
+                let want = if old <= S1_KNEE {
                     base_s1(initial, old)
                 } else {
-                    base_s1(initial, old).max(grow(5, old))
+                    base_s1(initial, old).max(grow(old))
                 };
-                assert_eq!(s1_budget_in(1, initial, old), want, "{initial} {old}");
+                assert_eq!(s1_budget(initial, old), want, "{initial} {old}");
             }
         }
-    }
-
-    /// T2, B2: as B1 with a larger step: 12 MiB + 6 x (old - 12 MiB) above the knee, so the
-    /// 144 MiB cap from 34 MiB of old bytes on.
-    #[test]
-    fn gc_budget_b2_values() {
-        let s = |old| s1_budget_in(2, 8 * MIB, old);
-        assert_eq!(s(2 * MIB), 8 * MIB);
-        assert_eq!(s(10 * MIB), 10 * MIB);
-        assert_eq!(s(12 * MIB), 12 * MIB);
-        assert_eq!(s(12 * MIB + 1), 12 * MIB + 6);
-        assert_eq!(s(20 * MIB), 60 * MIB);
-        assert_eq!(s(30 * MIB), 120 * MIB);
-        assert_eq!(s(33 * MIB), 138 * MIB);
-        assert_eq!(s(34 * MIB), 144 * MIB);
-        assert_eq!(s(200 * MIB), 144 * MIB);
-        assert_eq!(s(288 * MIB), 144 * MIB);
-        assert_eq!(s(288 * MIB + 2), 144 * MIB + 1);
-        assert_eq!(s(1024 * MIB), 512 * MIB);
-        assert_eq!(s1_budget_in(2, 100 * MIB, 20 * MIB), 100 * MIB);
-        assert_eq!(s1_budget_in(2, 8 * MIB, usize::MAX), usize::MAX / 2);
-        for initial in [PAGE_SIZE, 8 * MIB] {
-            for old in (MIB..=1024 * MIB).step_by(MIB + 4_099) {
-                let want = if old <= B_S1_KNEE {
-                    base_s1(initial, old)
-                } else {
-                    base_s1(initial, old).max(grow(6, old))
-                };
-                assert_eq!(s1_budget_in(2, initial, old), want, "{initial} {old}");
-                // B2 is never below B1.
-                assert!(want >= s1_budget_in(1, initial, old), "{initial} {old}");
-            }
-        }
-    }
-
-    /// T2: `s1_budget` and `HeapConfig::default` read the arm of this thread.
-    #[test]
-    fn gc_budget_the_readers_take_the_arm() {
-        for (arm, s1) in [(0, 20 * MIB), (1, 52 * MIB), (2, 60 * MIB)] {
-            with_arm(arm, || {
-                assert_eq!(gc_budget_arm(), arm);
-                assert_eq!(HeapConfig::default().initial_budget, 8 * MIB, "arm {arm}");
-                assert_eq!(s1_budget(8 * MIB, 20 * MIB), s1, "arm {arm}");
-                assert_eq!(s1_budget(8 * MIB, 10 * MIB), 10 * MIB, "arm {arm}");
-            });
-        }
-    }
-
-    /// T3: the process value. Not set in the test process: arm 0 and the 8 MiB default. A
-    /// child process of this test with `EP9_GC_BUDGET=1` and `=2` reads B1 and B2 (the S1
-    /// budget of 20 MiB of old bytes: 52 MiB and 60 MiB; arm 0: 20 MiB).
-    #[test]
-    #[cfg_attr(miri, ignore = "spawns a child process")]
-    fn gc_budget_the_process_value_is_read_once() {
-        if std::env::var_os(CHILD).is_some() {
-            println!(
-                "GCB_CHILD arm={} initial={} s1={}",
-                gc_budget_arm(),
-                HeapConfig::default().initial_budget,
-                s1_budget(8 << 20, 20 << 20)
-            );
-            return;
-        }
-        let own = budget_arm_from(std::env::var("EP9_GC_BUDGET").ok().as_deref());
-        assert_eq!(gc_budget_arm(), own);
-        if std::env::var_os("EP9_GC_BUDGET").is_none() {
-            assert_eq!(gc_budget_arm(), 0);
-            assert_eq!(HeapConfig::default().initial_budget, 8 << 20);
-        }
-        for (var, want) in [
-            ("1", "arm=1 initial=8388608 s1=54525952"),
-            ("2", "arm=2 initial=8388608 s1=62914560"),
-        ] {
-            let out = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "heap::gc_budget_tests::gc_budget_the_process_value_is_read_once",
-                    "--nocapture",
-                    "--test-threads=1",
-                ])
-                .env(CHILD, "1")
-                .env("EP9_GC_BUDGET", var)
-                .output()
-                .unwrap();
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            assert!(
-                out.status.success() && stdout.contains(&format!("GCB_CHILD {want}")),
-                "EP9_GC_BUDGET={var}: {:?}\nstdout:\n{stdout}\nstderr:\n{}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
+        // The first budget is 8 MiB.
+        assert_eq!(HeapConfig::default().initial_budget, 8 * MIB);
     }
 
     /// The GC kinds of the budget GCs and the bytes allocated before each, while `step(i)` runs
@@ -3237,7 +3044,7 @@ mod gc_budget_tests {
     }
 
     /// A generational test heap of the default config (the 8 MiB first budget).
-    fn arm_heap() -> Heap {
+    fn default_heap() -> Heap {
         test_heap(|c| c.generational = true)
     }
 
@@ -3250,60 +3057,50 @@ mod gc_budget_tests {
         );
     }
 
-    /// T4: the first budget GC of a default heap comes after the first budget (within a page):
-    /// 8 MiB in every arm. Young nodes of 4,016 B that all die.
+    /// The first budget GC of a default heap comes after the first budget (within a page):
+    /// 8 MiB. Young nodes of 4,016 B that all die.
     #[test]
     #[cfg_attr(miri, ignore = "up to 12 MiB of allocations")]
-    fn gc_budget_the_first_budget_gc_per_arm() {
-        for (arm, first) in [(0, 8 * MIB), (1, 8 * MIB), (2, 8 * MIB)] {
-            with_arm(arm, || {
-                let heap = arm_heap();
-                let gcs = budget_gcs(&heap, 3_000, |i| {
-                    new_node(&heap, i + 1, 500);
-                });
-                assert!(!gcs.is_empty(), "arm {arm}: no GC");
-                assert!(gcs[0].0, "arm {arm}: the first budget GC is minor: {gcs:?}");
-                near(gcs[0].1, first, &format!("arm {arm}, the first GC"));
-            });
-        }
+    fn s1_budget_the_first_budget_gc() {
+        let heap = default_heap();
+        let gcs = budget_gcs(&heap, 3_000, |i| {
+            new_node(&heap, i + 1, 500);
+        });
+        assert!(!gcs.is_empty(), "no GC");
+        assert!(gcs[0].0, "the first budget GC is minor: {gcs:?}");
+        near(gcs[0].1, 8 * MIB, "the first GC");
     }
 
-    /// T4: about 20 MiB of rooted old bytes, then young nodes that all die. The next budget
-    /// GC comes after the S1 budget of the arm (within a page): the old bytes in arm 0, and
-    /// 12 MiB + 5 (B1) or 6 (B2) times the old bytes above 12 MiB.
+    /// About 20 MiB of rooted old bytes, then young nodes that all die. The next budget GC
+    /// comes after 12 MiB + 5 x (old bytes - 12 MiB) (within a page), not after the old bytes.
     #[test]
     #[cfg_attr(miri, ignore = "20 MiB of old cells and 80 MiB of young ones")]
-    fn gc_budget_the_s1_budget_per_arm() {
-        for arm in [0, 1, 2] {
-            with_arm(arm, || {
-                let heap = arm_heap();
-                // 20 rooted nodes of about 1 MiB (LOS cells). A major GC every 4 nodes (4 MiB,
-                // below the 8 MiB first budget) keeps the budget GCs out.
-                let root = new_node(&heap, 0, 20);
-                let g = heap.new_global(root.to_value());
-                for i in 0..20u32 {
-                    if i % 4 == 0 {
-                        heap.collect_with_words(&[]);
-                    }
-                    let big = new_node(&heap, i + 1, 131_000);
-                    store(&heap, root, i as usize, big.to_value());
-                }
+    fn s1_budget_the_budget_gc_above_the_knee() {
+        let heap = default_heap();
+        // 20 rooted nodes of about 1 MiB (LOS cells). A major GC every 4 nodes (4 MiB, below
+        // the 8 MiB first budget) keeps the budget GCs out.
+        let root = new_node(&heap, 0, 20);
+        let g = heap.new_global(root.to_value());
+        for i in 0..20u32 {
+            if i % 4 == 0 {
                 heap.collect_with_words(&[]);
-                assert!(!heap.stats().last_minor);
-                let live = heap.stats().last_marked_bytes;
-                assert!(live > 19 * MIB && live < 21 * MIB, "{live} live bytes");
-                let want = s1_budget_in(arm, 8 * MIB, live);
-                let step = [1, 5, 6][arm as usize];
-                assert_eq!(want, B_S1_KNEE + step * (live - B_S1_KNEE), "arm {arm}");
-                // 21,000 young nodes of 4,016 B (about 80 MiB): one window of the budget.
-                let gcs = budget_gcs(&heap, 21_000, |i| {
-                    new_node(&heap, 1_000 + i, 500);
-                });
-                assert!(!gcs.is_empty(), "arm {arm}: no GC");
-                assert!(gcs[0].0, "arm {arm}: {gcs:?}");
-                near(gcs[0].1, want, &format!("arm {arm}, the S1 budget GC"));
-                heap.drop_global(g);
-            });
+            }
+            let big = new_node(&heap, i + 1, 131_000);
+            store(&heap, root, i as usize, big.to_value());
         }
+        heap.collect_with_words(&[]);
+        assert!(!heap.stats().last_minor);
+        let live = heap.stats().last_marked_bytes;
+        assert!(live > 19 * MIB && live < 21 * MIB, "{live} live bytes");
+        let want = s1_budget(8 * MIB, live);
+        assert_eq!(want, S1_KNEE + 5 * (live - S1_KNEE));
+        // 21,000 young nodes of 4,016 B (about 80 MiB): one window of the budget.
+        let gcs = budget_gcs(&heap, 21_000, |i| {
+            new_node(&heap, 1_000 + i, 500);
+        });
+        assert!(!gcs.is_empty(), "no GC");
+        assert!(gcs[0].0, "{gcs:?}");
+        near(gcs[0].1, want, "the S1 budget GC");
+        heap.drop_global(g);
     }
 }
