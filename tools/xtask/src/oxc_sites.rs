@@ -45,10 +45,16 @@
 //! | a call of a macro of the sources in a body | the edges of its expansion; if it does not expand, also every fn named by an identifier of its rules |
 //! | an identifier in a macro body of another crate that does not parse as expressions | every fn named it |
 //!
+//! A type or trait T in this table is read by each of its names (review R2 B2-2): T, what T
+//! stands for (a `use X as T` rename or a `type T = X` alias of the sources, to the end of a
+//! chain), and each name that stands for T. So `R::go` with `use Tr as R` is `Tr::go`, and a
+//! parameter `p: &mut P<C>` with `type P<C> = ParserImpl<C>` has the type `ParserImpl`.
+//!
 //! What the graph cannot see, and what the task does instead:
 //!
 //! - A call through a fn value that a struct or enum field holds (a fn pointer, a `dyn` trait
-//!   object, also through a type alias): such a field fails the run (exit 2).
+//!   object, a type parameter with an `Fn`, `FnMut` or `FnOnce` bound, also through a type
+//!   alias): such a field fails the run (exit 2).
 //! - The body of a fn that an item macro of another crate writes: a call of such a macro whose
 //!   tokens hold `fn` fails the run (exit 2). The other item macros of other crates
 //!   (`bitflags!`, `fieldless_enum!`) write no body from the tokens of the call.
@@ -458,8 +464,38 @@ pub(crate) fn run(
             .map(|s| s.to_string())
             .collect()
     };
-    // A use with the type or trait `t` shown: see the module table.
-    let typed = |t: &str, n: &str| -> Vec<String> {
+    // The other names of a type or trait (review R2 B2-2): a `use .. as` rename and a type alias
+    // of the sources. `names_of(t)`: `t`, each name that `t` stands for (to the end of a chain
+    // of renames and aliases), and each name that stands for `t`.
+    let mut stands_for: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (new, old) in &types.other_names {
+        if new != old {
+            stands_for.entry(new).or_default().insert(old);
+        }
+    }
+    let chain = |t: &str| -> BTreeSet<String> {
+        let mut seen = BTreeSet::from([t.to_string()]);
+        let mut todo = vec![t.to_string()];
+        while let Some(x) = todo.pop() {
+            for y in stands_for.get(x.as_str()).into_iter().flatten() {
+                if seen.insert(y.to_string()) {
+                    todo.push(y.to_string());
+                }
+            }
+        }
+        seen
+    };
+    let names_of = |t: &str| -> BTreeSet<String> {
+        let mut names = chain(t);
+        for x in stands_for.keys() {
+            if chain(x).contains(t) {
+                names.insert(x.to_string());
+            }
+        }
+        names
+    };
+    // A use with the type or trait `t` shown, `t` by one of its names: see the module table.
+    let typed_as = |t: &str, n: &str| -> Vec<String> {
         let k = format!("{t}::{n}");
         let is_trait = types.traits.contains(t) || types.trait_fns.contains_key(t);
         if is_trait && !types.blanket.contains(n) {
@@ -488,13 +524,24 @@ pub(crate) fn run(
             Vec::new()
         }
     };
+    let typed = |t: &str, n: &str| -> Vec<String> {
+        let all: BTreeSet<String> = names_of(t).iter().flat_map(|x| typed_as(x, n)).collect();
+        all.into_iter().collect()
+    };
     // The fns of the impls of traits of other crates, by their self type.
-    let mut implicit_of: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    let mut implicit_by: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for k in &types.implicit {
         if let Some((t, _)) = k.rsplit_once("::") {
-            implicit_of.entry(t).or_default().push(k.clone());
+            implicit_by.entry(t).or_default().push(k.clone());
         }
     }
+    let implicit_of = |t: &str| -> Vec<String> {
+        let all: BTreeSet<String> = names_of(t)
+            .iter()
+            .flat_map(|x| implicit_by.get(x.as_str()).cloned().unwrap_or_default())
+            .collect();
+        all.into_iter().collect()
+    };
     let mut edges: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut places = BTreeMap::new();
     for f in &funcs {
@@ -505,7 +552,7 @@ pub(crate) fn run(
                 // Not from a fn of the same type: a method of T that names T (`Self::A`, `Self
                 // { .. }`) is the code of T itself (the limit is in the module doc).
                 Use::Type(t) if own_type == Some(t.as_str()) => Vec::new(),
-                Use::Type(t) => implicit_of.get(t.as_str()).cloned().unwrap_or_default(),
+                Use::Type(t) => implicit_of(t),
                 Use::Method(Some(t), n) => typed(t, n),
                 Use::Method(None, n) => all(&methods, n),
                 Use::Path(q, n) if q.starts_with(|c: char| c.is_ascii_lowercase()) => all(&free, n),
@@ -739,6 +786,34 @@ fn type_params(g: &syn::Generics) -> impl Iterator<Item = String> + '_ {
     g.type_params().map(|p| p.ident.to_string())
 }
 
+/// The type parameters of `g` with an `Fn`, `FnMut` or `FnOnce` bound (in the list or in the
+/// `where` clause): a value of such a type is a fn value (review R2 B2-2 (c)).
+fn fn_params(g: &syn::Generics) -> BTreeSet<String> {
+    let is_fn = |b: &syn::TypeParamBound| {
+        matches!(b, syn::TypeParamBound::Trait(t)
+        if t.path.segments.last().is_some_and(|s| {
+            matches!(s.ident.to_string().as_str(), "Fn" | "FnMut" | "FnOnce")
+        }))
+    };
+    let params: BTreeSet<String> = type_params(g).collect();
+    let mut out: BTreeSet<String> = g
+        .type_params()
+        .filter(|p| p.bounds.iter().any(is_fn))
+        .map(|p| p.ident.to_string())
+        .collect();
+    for w in g.where_clause.iter().flat_map(|w| &w.predicates) {
+        if let syn::WherePredicate::Type(pt) = w
+            && let Type::Path(tp) = &pt.bounded_ty
+            && let Some(id) = tp.path.get_ident()
+            && params.contains(&id.to_string())
+            && pt.bounds.iter().any(is_fn)
+        {
+            out.insert(id.to_string());
+        }
+    }
+    out
+}
+
 /// Does a value of this type hold a fn value that code can call (a fn pointer, a `dyn` trait
 /// object, or a type alias in `aliases` of one)?
 fn holds_fn_value(t: &Type, aliases: &BTreeSet<String>) -> bool {
@@ -784,9 +859,13 @@ struct Types {
     implicit: Vec<String>,
     /// fn or associated const key -> its type name (`Self` is the impl type).
     rets: BTreeMap<String, String>,
-    /// Type aliases (name -> type) and the struct and enum fields (place, type), for the check.
+    /// Type aliases (name -> type) and the struct and enum fields (place, type, the type
+    /// parameters of the struct or enum with an `Fn` bound), for the check.
     aliases: Vec<(String, Type)>,
-    field_types: Vec<(String, Type)>,
+    field_types: Vec<(String, Type, BTreeSet<String>)>,
+    /// (a name, the name of the type or trait that it stands for): each `use .. as` rename and
+    /// each type alias of the sources (review R2 B2-2).
+    other_names: Vec<(String, String)>,
     impl_self: Vec<Option<String>>,
     /// The type parameters of each impl around the current item.
     generics: Vec<BTreeSet<String>>,
@@ -807,8 +886,10 @@ impl Types {
                 break;
             }
         }
-        for (place, t) in &self.field_types {
-            if holds_fn_value(t, &aliases) {
+        for (place, t, fn_params) in &self.field_types {
+            let mut names = aliases.clone();
+            names.extend(fn_params.iter().cloned());
+            if holds_fn_value(t, &names) {
                 return Err(format!(
                     "{place}: the field holds a fn value (`{}`): a call through it is not an \
                      edge of the graph",
@@ -825,15 +906,19 @@ impl Types {
         Ok(())
     }
 
-    fn fields_of(&mut self, owner: &str, fields: &syn::Fields) {
+    fn fields_of(&mut self, owner: &str, generics: &syn::Generics, fields: &syn::Fields) {
+        let fn_params = fn_params(generics);
         for (i, f) in fields.iter().enumerate() {
             let id = f
                 .ident
                 .as_ref()
                 .map_or_else(|| i.to_string(), |id| id.to_string());
             let at = f.ty.span().start().line;
-            self.field_types
-                .push((format!("{}:{at}: {owner}.{id}", self.file), f.ty.clone()));
+            self.field_types.push((
+                format!("{}:{at}: {owner}.{id}", self.file),
+                f.ty.clone(),
+                fn_params.clone(),
+            ));
         }
     }
 }
@@ -841,7 +926,7 @@ impl Types {
 impl<'ast> Visit<'ast> for Types {
     fn visit_item_struct(&mut self, s: &'ast syn::ItemStruct) {
         let generics: BTreeSet<String> = type_params(&s.generics).collect();
-        self.fields_of(&s.ident.to_string(), &s.fields);
+        self.fields_of(&s.ident.to_string(), &s.generics, &s.fields);
         let e = self.fields.entry(s.ident.to_string()).or_default();
         for f in &s.fields {
             if let (Some(id), Some(t)) = (&f.ident, type_name(&f.ty))
@@ -855,13 +940,23 @@ impl<'ast> Visit<'ast> for Types {
 
     fn visit_item_enum(&mut self, e: &'ast syn::ItemEnum) {
         for v in &e.variants {
-            self.fields_of(&format!("{}::{}", e.ident, v.ident), &v.fields);
+            self.fields_of(&format!("{}::{}", e.ident, v.ident), &e.generics, &v.fields);
         }
         visit::visit_item_enum(self, e);
     }
 
     fn visit_item_type(&mut self, t: &'ast syn::ItemType) {
         self.aliases.push((t.ident.to_string(), (*t.ty).clone()));
+        if let Some(target) = type_name(&t.ty) {
+            self.other_names.push((t.ident.to_string(), target));
+        }
+    }
+
+    fn visit_use_rename(&mut self, r: &'ast syn::UseRename) {
+        if r.rename != "_" {
+            self.other_names
+                .push((r.rename.to_string(), r.ident.to_string()));
+        }
     }
 
     fn visit_item_trait(&mut self, t: &'ast syn::ItemTrait) {
@@ -2214,6 +2309,52 @@ mod tests {
                 "SLH",
             ])]
         );
+    }
+
+    /// Review R2 B2-2 (a) in the lexer form: `handle_byte` calls the table by the path
+    /// `Config::byte_handlers(&self.config)`, `Config` the trait `LexerConfig` by `use .. as`
+    /// (13 files of 0.158.0 have that rename). A handler that lexes again is still a cycle.
+    #[test]
+    fn a_path_call_by_a_renamed_trait_keeps_the_byte_table() {
+        let again = LEXER
+            .replace(
+                "let byte_handlers = self.config.byte_handlers();",
+                "let byte_handlers = Config::byte_handlers(&self.config);",
+            )
+            .replace(
+                "ascii_byte_handler!(SLH(lexer) {\n            lexer.skip_comment()",
+                "ascii_byte_handler!(SLH(lexer) {\n            lexer.next_token(); lexer.skip_comment()",
+            );
+        let again = format!("use crate::lexer::LexerConfig as Config;\n{again}");
+        let r = report(&[("lexer.rs", &again)]);
+        assert_eq!(
+            r.cycles,
+            vec![keys(&[
+                "Lexer::handle_byte",
+                "Lexer::next_token",
+                "Lexer::read_next_token",
+                "NO_TOKENS",
+                "NoTokensLexerConfig::byte_handlers",
+                "SLH",
+            ])]
+        );
+        // With no rename `Config` is not known: no edge, no cycle (the form before B2-2).
+        let bare = again.replace("use crate::lexer::LexerConfig as Config;\n", "");
+        assert!(report(&[("lexer.rs", &bare)]).cycles.is_empty());
+    }
+
+    /// Review R2 B2-2 (c): a type parameter with an `Fn` bound in the `where` clause, also inside
+    /// an `Option`, is a fn value field; a parameter with another bound is not.
+    #[test]
+    fn a_field_of_an_fn_bound_parameter_fails() {
+        let src = "struct S<F, G: Clone> where F: FnMut() -> u32 { f: Option<F>, g: G }";
+        let e = run(&[("w.rs".into(), src.into())], &BTreeSet::new()).unwrap_err();
+        assert!(
+            e.starts_with("w.rs:1: S.f: the field holds a fn value"),
+            "{e}"
+        );
+        let ok = "struct S<G: Clone> { g: G }";
+        assert!(run(&[("w.rs".into(), ok.into())], &BTreeSet::new()).is_ok());
     }
 
     /// Fixture 5: the macro expander. A macro with nested repetitions writes an enum, an impl

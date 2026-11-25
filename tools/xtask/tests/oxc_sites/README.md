@@ -11,3 +11,6 @@ has the 2 loop fns of `LOOPS`, so that a missing loop is no finding.
 | Case | Form | The fixed lint gives |
 |---|---|---|
 | `b2_1_implicit_drop/` | B2-1: `parse_x` makes a `Guard`; its `Drop` calls `parse_x` | exit 1, cycle `Guard::drop`, `parse_x` |
+| `b2_2a_renamed_trait/` | B2-2 (a): `parse_x` calls `R::go`, `use crate::Tr as R`; `ParserImpl::go` calls `parse_x` | exit 1, cycle `go`, `parse_x` |
+| `b2_2b_type_alias/` | B2-2 (b): `walk(p: &mut P<C>)` calls `p.parse_x()`, `type P<C> = ParserImpl<C>` | exit 1, cycle `parse_x`, `walk` |
+| `b2_2c_generic_fn_field/` | B2-2 (c): `struct Hook<F: Fn(u32) -> u32> { f: F }` | exit 2, `Hook.f: the field holds a fn value` |

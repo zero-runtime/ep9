@@ -54,3 +54,31 @@ fn b2_1_a_cycle_closed_by_an_implicit_call_fails() {
     assert_eq!(code, Some(1));
     assert_cycle(&out, &["Guard::drop", "parse_x"]);
 }
+
+/// B2-2 (a): a call through a trait renamed by `use .. as` is an edge to the fns of the trait.
+#[test]
+fn b2_2a_a_call_through_a_renamed_trait_fails() {
+    let (code, out, _) = oxc_sites("b2_2a_renamed_trait");
+    assert_eq!(code, Some(1));
+    assert_cycle(&out, &["go", "parse_x"]);
+}
+
+/// B2-2 (b): a receiver whose type is a type alias of the sources has the type of the alias.
+#[test]
+fn b2_2b_a_call_on_a_type_alias_fails() {
+    let (code, out, _) = oxc_sites("b2_2b_type_alias");
+    assert_eq!(code, Some(1));
+    assert_cycle(&out, &["parse_x", "walk"]);
+}
+
+/// B2-2 (c): a field whose type is a type parameter with an `Fn` bound holds a fn value, as a
+/// fn pointer field does: the run stops (exit 2).
+#[test]
+fn b2_2c_a_generic_fn_field_fails() {
+    let (code, _, err) = oxc_sites("b2_2c_generic_fn_field");
+    assert_eq!(code, Some(2));
+    assert!(
+        err.contains("lib.rs:6: Hook.f: the field holds a fn value"),
+        "{err}"
+    );
+}
