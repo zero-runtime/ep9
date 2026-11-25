@@ -22,7 +22,8 @@
 //     [--forms H1,H0] [--runs 3] [--ts-runs 5] [--rss-rows earley-boyer] [--rss-runs 5] \
 //     [--hash-seed 1] [--jobs N] [--timeout-s 900] [--valgrind PATH] [--keep DIR] [--work DIR] \
 //     --out gc-count.json [--md FILE]
-//   node .github/scripts/gc-count.mjs --compare READ.json MERGE.json [--read-arm 1] [--merge-arm 0]
+//   node .github/scripts/gc-count.mjs --compare READ.json MERGE.json --read-head SHA --merge-head SHA \
+//     [--read-arm 1] [--merge-arm 0]
 //
 //   --patch FILE      writes the trace print into heap.rs (one `gcb ...` line on stderr per GC,
 //                     after Inner::after_gc). Only for a copy of the tree in its own build dir:
@@ -42,6 +43,10 @@
 //                     valgrind)
 //   --jobs            parallel cachegrind runs (default: the CPU count). Count runs and RSS runs
 //                     go one at a time (the helper threads must not share the CPUs)
+//   --read-head / --merge-head   (--compare, both required) the full commit id of the read head
+//                     and of the merge head. Each report's head and each binary build line of
+//                     the report must name its commit, else FAIL. One file, equal bytes or one
+//                     commit in both slots is the same report: exit 2
 //
 // A run counts only when its exit status is 0, its stdout is the workload's expected output and
 // the count of `gcb` lines equals the --gc-stats collections line (else the run is an error).
@@ -51,7 +56,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -232,6 +237,8 @@ export function parseArgs(argv) {
     compare: null,
     readArm: "1",
     mergeArm: "0",
+    readHead: null,
+    mergeHead: null,
     traceEp9: null,
     traceEp9Jitless: null,
     ep9: null,
@@ -280,6 +287,8 @@ export function parseArgs(argv) {
       case "--compare": o.compare = [path.resolve(val()), path.resolve(val())]; break;
       case "--read-arm": o.readArm = arm(a, val()); break;
       case "--merge-arm": o.mergeArm = arm(a, val()); break;
+      case "--read-head": o.readHead = val(); break;
+      case "--merge-head": o.mergeHead = val(); break;
       case "--trace-ep9": o.traceEp9 = path.resolve(val()); break;
       case "--trace-ep9-jitless": o.traceEp9Jitless = path.resolve(val()); break;
       case "--ep9": o.ep9 = path.resolve(val()); break;
@@ -321,6 +330,13 @@ export function parseArgs(argv) {
   }
   if (o.patch || o.compare) {
     if (o.patch && o.compare) throw new UsageError("--patch and --compare are two modes");
+    if (o.compare) {
+      if (!o.readHead || !o.mergeHead) throw new UsageError("--read-head and --merge-head are required with --compare");
+      for (const [a, v] of [["--read-head", o.readHead], ["--merge-head", o.mergeHead]]) {
+        if (!/^[0-9a-f]{40}$/.test(v)) throw new UsageError(`${a} needs a full commit id (40 hex digits), got ${v}`);
+      }
+      if (o.readHead === o.mergeHead) throw new UsageError(`the same report in both slots (one head ${o.readHead})`);
+    }
     return o;
   }
   if (!o.traceEp9 && !o.traceEp9Jitless) throw new UsageError("--trace-ep9 or --trace-ep9-jitless is required");
@@ -603,22 +619,52 @@ export const MERGE_BUILDS = ["jit", "jitless"];
 /** The rows of the merge check: octane-typescript and the 19 BENCH-SET rows, always. */
 export const MERGE_ROWS = [TS_WORKLOAD, ...BENCH_SET];
 
+/** The forms of the merge check: both, always (CI runs H1 and H0); a read's other forms too. */
+export const MERGE_FORMS = ["H1", "H0"];
+
+/**
+ * The head lines of the merge check: each report's head is its named commit (readHead,
+ * mergeHead), and so is the build line of each trace and plain binary of each build; a plain
+ * binary is clean. Returns one line per gap (empty: the heads are right).
+ */
+export function checkHeads(read, merge, readHead, mergeHead) {
+  if (!readHead || !mergeHead) return ["--read-head and --merge-head are required"];
+  if (readHead === mergeHead || read === merge) return [`the same report in both slots (one head ${readHead})`];
+  const out = [];
+  for (const [side, doc, want] of [["read", read, readHead], ["merge", merge, mergeHead]]) {
+    if (doc.head !== want) out.push(`${side}: report head ${doc.head ?? "none"}, not --${side}-head ${want}`);
+    for (const build of MERGE_BUILDS) {
+      const b = doc.builds?.find((x) => x.build === build);
+      if (!b) continue; // a missing build is a `missing` line (INCOMPLETE)
+      for (const kind of ["trace", "plain"]) {
+        const bl = b[`${kind}_ep9`]?.build;
+        if (bl?.commit !== want) out.push(`${side}: ${build} ${kind} binary names commit ${bl?.commit ?? "none"}, not ${want}`);
+        else if (kind === "plain" && bl.dirty !== false) out.push(`${side}: ${build} plain binary is not clean`);
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * "The merge head equals the read code" (plan v18 section 4.2): for every build and row of the
- * read, the merge run's GC count (median, each form of the read) equals the read's arm
- * --read-arm, and its Ir (arm --merge-arm) is within 1e-5 of the read's Ir at --read-arm.
- * The check set is fixed, not taken from the read: both builds (MERGE_BUILDS) and the 20 rows
- * (MERGE_ROWS) must be in the read and in the merge run, and every form of the read must be in
- * the merge run; else the verdict is INCOMPLETE (`missing` names each gap). A row whose
- * workload sha256 differs between the 2 runs is FAIL; a row with no sha256 on a side is no
- * reading.
+ * read, the merge run's GC count (median, each form) equals the read's arm --read-arm, and its
+ * Ir (arm --merge-arm) is within 1e-5 of the read's Ir at --read-arm.
+ * The check set is fixed, not taken from the read: both builds (MERGE_BUILDS), the 20 rows
+ * (MERGE_ROWS) and the forms H1 and H0 (MERGE_FORMS) must be in the read and in the merge run,
+ * and every other form of the read must be in the merge run; else the verdict is INCOMPLETE
+ * (`missing` names each gap). A row whose workload sha256 differs between the 2 runs is FAIL; a
+ * row with no sha256 on a side is no reading. A report of another commit than its named head
+ * (readHead, mergeHead), or the same report in both slots, is FAIL (`heads` names each gap).
  */
-export function compareReads(read, merge, { readArm = "1", mergeArm = "0" } = {}) {
+export function compareReads(read, merge, { readArm = "1", mergeArm = "0", readHead = null, mergeHead = null } = {}) {
   const rows = [];
   const missing = [];
-  const forms = read.forms ?? [];
-  if (!forms.length) missing.push("read: no form");
-  for (const f of forms) if (!(merge.forms ?? []).includes(f)) missing.push(`merge: form ${f}`);
+  const heads = checkHeads(read, merge, readHead, mergeHead);
+  const forms = [...new Set([...MERGE_FORMS, ...(read.forms ?? [])])];
+  for (const [side, doc] of [["read", read], ["merge", merge]]) {
+    for (const f of forms) if (!(doc.forms ?? []).includes(f)) missing.push(`${side}: form ${f}`);
+  }
   for (const [side, doc] of [["read", read], ["merge", merge]]) {
     for (const build of MERGE_BUILDS) {
       const b = doc.builds?.find((x) => x.build === build);
@@ -649,12 +695,12 @@ export function compareReads(read, merge, { readArm = "1", mergeArm = "0" } = {}
       rows.push({ build: rb.build, name: rr.name, sha256: sha, counts, ir_read: ir0, ir_merge: ir1, ir_rel: rel, word });
     }
   }
-  const verdict = rows.some((r) => r.word === "FAIL")
+  const verdict = heads.length || rows.some((r) => r.word === "FAIL")
     ? "FAIL"
     : !missing.length && rows.length && rows.every((r) => r.word === "pass")
       ? "PASS"
       : "INCOMPLETE";
-  return { read_head: read.head, merge_head: merge.head, read_arm: readArm, merge_arm: mergeArm, verdict, missing, rows };
+  return { read_head: read.head, merge_head: merge.head, read_arm: readArm, merge_arm: mergeArm, verdict, heads, missing, rows };
 }
 
 // ---- tables ------------------------------------------------------------------------------------
@@ -708,6 +754,8 @@ export function renderMarkdown(res) {
 
 export function renderCompare(c) {
   const L = [`### Merge head = read code: ${c.verdict} (read ${c.read_head ?? "-"} arm ${c.read_arm}; merge ${c.merge_head ?? "-"} arm ${c.merge_arm})`, ""];
+  for (const h of c.heads ?? []) L.push(`- wrong head (FAIL): ${h}`);
+  if (c.heads?.length) L.push("");
   for (const m of c.missing ?? []) L.push(`- missing (INCOMPLETE): ${m}`);
   if (c.missing?.length) L.push("");
   L.push("| build | row | workload sha256 | GCs read / merge | Ir read | Ir merge | Ir rel | word |");
@@ -732,9 +780,13 @@ async function main() {
       process.exit(0);
     }
     if (o.compare) {
-      const [read, merge] = o.compare.map((f) => JSON.parse(readFileSync(f, "utf8")));
+      const [readPath, mergePath] = o.compare.map((f) => realpathSync(f));
+      if (readPath === mergePath) throw new UsageError("the same report in both slots (one file)");
+      const [readText, mergeText] = o.compare.map((f) => readFileSync(f, "utf8"));
+      if (readText === mergeText) throw new UsageError("the same report in both slots (equal bytes)");
+      const [read, merge] = [readText, mergeText].map((t) => JSON.parse(t));
       for (const x of [read, merge]) if (x.schema !== SCHEMA) throw new UsageError(`not an ${SCHEMA} file`);
-      const c = compareReads(read, merge, { readArm: o.readArm, mergeArm: o.mergeArm });
+      const c = compareReads(read, merge, { readArm: o.readArm, mergeArm: o.mergeArm, readHead: o.readHead, mergeHead: o.mergeHead });
       process.stdout.write(renderCompare(c));
       process.exit(c.verdict === "PASS" ? 0 : 1);
     }

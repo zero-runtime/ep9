@@ -317,8 +317,12 @@ test("--patch writes the print into a heap.rs copy", (t) => {
 // ---- the merge check ---------------------------------------------------------------------------
 
 // The merge-check fixture: both builds, the 20 rows (octane-typescript and the 19 BENCH-SET rows),
-// forms H1 and H0 (or `forms`), 3 counted runs per cell, one Ir per row, a sha256 per row.
+// forms H1 and H0 (or `forms`), 3 counted runs per cell, one Ir per row, a sha256 per row, and the
+// build lines of the head (trace binary dirty, plain binary clean).
 const MC_ROWS = [TS_WORKLOAD, ...BENCH_SET];
+const RH = "a".repeat(40);
+const MH = "b".repeat(40);
+const HEADS = { readHead: RH, mergeHead: MH };
 function mcDoc(head, arm, { forms = ["H1", "H0"], builds = ["jit", "jitless"], rows = MC_ROWS, gcs = {}, ir = {}, sha = {} } = {}) {
   const cell = (med) => ({ runs: 3, counted: 3, median: med });
   return {
@@ -327,6 +331,8 @@ function mcDoc(head, arm, { forms = ["H1", "H0"], builds = ["jit", "jitless"], r
     forms,
     builds: builds.map((build) => ({
       build,
+      trace_ep9: { path: "ep9-trace", build: { commit: head, dirty: true } },
+      plain_ep9: { path: "ep9-head", build: { commit: head, dirty: false } },
       rows: rows.map((name, i) => ({
         name,
         sha256: name in sha ? sha[name] : `sha-${name}`,
@@ -336,76 +342,190 @@ function mcDoc(head, arm, { forms = ["H1", "H0"], builds = ["jit", "jitless"], r
     })),
   };
 }
+const cmp = (read, merge, o = {}) => compareReads(read, merge, { ...HEADS, ...o });
+const headArgs = (r = RH, m = MH) => ["--read-head", r, "--merge-head", m];
 
 test("the merge check: GC counts equal to the read's B1, Ir within 1e-5", (t) => {
   assert.equal(MC_ROWS.length, 20);
-  const read = mcDoc("a", "1");
-  let merge = mcDoc("b", "0", { ir: { [TS_WORKLOAD]: 1_000_010_000 } });
-  let c = compareReads(read, merge);
+  const read = mcDoc(RH, "1");
+  let merge = mcDoc(MH, "0", { ir: { [TS_WORKLOAD]: 1_000_010_000 } });
+  let c = cmp(read, merge);
   assert.equal(c.verdict, "PASS", JSON.stringify(c));
   assert.equal(c.rows.length, 40);
   assert.deepEqual(c.missing, []);
-  merge = mcDoc("b", "0", { ir: { [TS_WORKLOAD]: 1_000_010_001 } });
-  c = compareReads(read, merge);
+  assert.deepEqual(c.heads, []);
+  merge = mcDoc(MH, "0", { ir: { [TS_WORKLOAD]: 1_000_010_001 } });
+  c = cmp(read, merge);
   assert.equal(c.verdict, "FAIL");
   assert.equal(c.rows[0].word, "FAIL");
-  merge = mcDoc("b", "0", { gcs: { [TS_WORKLOAD]: 7 } });
-  assert.equal(compareReads(read, merge).rows[0].word, "FAIL", "a GC count that differs");
-  merge = mcDoc("b", "0", { rows: [TS_WORKLOAD] });
-  c = compareReads(read, merge);
+  merge = mcDoc(MH, "0", { gcs: { [TS_WORKLOAD]: 7 } });
+  assert.equal(cmp(read, merge).rows[0].word, "FAIL", "a GC count that differs");
+  merge = mcDoc(MH, "0", { rows: [TS_WORKLOAD] });
+  c = cmp(read, merge);
   assert.equal(c.verdict, "INCOMPLETE", "a row with no merge reading");
   assert.ok(c.missing.includes("merge: jit splay"), c.missing.join("; "));
   // A merge cell with a failed run is no reading, even when its median equals the read.
-  merge = mcDoc("b", "0");
+  merge = mcDoc(MH, "0");
   merge.builds[0].rows[1].arms["0"].H0.counted = 2;
-  c = compareReads(read, merge);
+  c = cmp(read, merge);
   assert.equal(c.rows[1].word, "no reading");
   assert.equal(c.verdict, "INCOMPLETE");
-  // The CLI form.
+  // The CLI form: a correct pair passes.
   const dir = mkdtempSync(path.join(os.tmpdir(), "ep9-gc-count-cmp-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(path.join(dir, "r.json"), JSON.stringify(read));
-  writeFileSync(path.join(dir, "m.json"), JSON.stringify(mcDoc("b", "0")));
-  const r = runScript(["--compare", path.join(dir, "r.json"), path.join(dir, "m.json")]);
+  writeFileSync(path.join(dir, "m.json"), JSON.stringify(mcDoc(MH, "0")));
+  const r = runScript(["--compare", path.join(dir, "r.json"), path.join(dir, "m.json"), ...headArgs()]);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /Merge head = read code: PASS \(read a arm 1; merge b arm 0\)/);
-  writeFileSync(path.join(dir, "m1.json"), JSON.stringify(mcDoc("b", "0", { forms: ["H0"] })));
-  const r1 = runScript(["--compare", path.join(dir, "r.json"), path.join(dir, "m1.json")]);
+  assert.match(r.stdout, new RegExp(`Merge head = read code: PASS \\(read ${RH} arm 1; merge ${MH} arm 0\\)`));
+  writeFileSync(path.join(dir, "m1.json"), JSON.stringify(mcDoc(MH, "0", { forms: ["H0"] })));
+  const r1 = runScript(["--compare", path.join(dir, "r.json"), path.join(dir, "m1.json"), ...headArgs()]);
   assert.equal(r1.status, 1, r1.stdout);
   assert.match(r1.stdout, /INCOMPLETE/);
   assert.match(r1.stdout, /- missing \(INCOMPLETE\): merge: form H1/);
   writeFileSync(path.join(dir, "x.json"), "{}");
-  assert.equal(runScript(["--compare", path.join(dir, "x.json"), path.join(dir, "m.json")]).status, 2);
+  assert.equal(runScript(["--compare", path.join(dir, "x.json"), path.join(dir, "m.json"), ...headArgs()]).status, 2);
+  // The 2 heads are required, as full commit ids.
+  for (const [extra, re] of [
+    [[], /--read-head and --merge-head are required/],
+    [["--read-head", RH], /--read-head and --merge-head are required/],
+    [headArgs(RH, "abc"), /--merge-head needs a full commit id/],
+  ]) {
+    const x = runScript(["--compare", path.join(dir, "r.json"), path.join(dir, "m.json"), ...extra]);
+    assert.equal(x.status, 2, x.stdout);
+    assert.match(x.stderr, re);
+  }
 });
 
 test("the merge check: a merge run without a form of the read is INCOMPLETE (Codex r1, 1)", () => {
   // The read has H1 and H0; the merge run has H0 only, with H0 counts equal and Ir in the band.
-  const c = compareReads(mcDoc("a", "1"), mcDoc("b", "0", { forms: ["H0"] }));
+  const c = cmp(mcDoc(RH, "1"), mcDoc(MH, "0", { forms: ["H0"] }));
   assert.equal(c.verdict, "INCOMPLETE", JSON.stringify(c.rows[0]));
   assert.deepEqual(c.rows[0].counts.map((x) => x.form), ["H1", "H0"]);
   assert.equal(c.rows[0].word, "no reading");
 });
 
+test("the merge check: an H0-only read against a full merge run is not PASS (Codex r2, 1)", () => {
+  // The read was made with --forms H0; H0 counts, sha256 and Ir agree with the merge run.
+  let c = cmp(mcDoc(RH, "1", { forms: ["H0"] }), mcDoc(MH, "0"));
+  assert.notEqual(c.verdict, "PASS", JSON.stringify(c.missing));
+  assert.equal(c.verdict, "INCOMPLETE");
+  assert.ok(c.missing.includes("read: form H1"), c.missing.join("; "));
+  assert.deepEqual(c.rows[0].counts.map((x) => x.form), ["H1", "H0"]);
+  // H0 and H1 on both sides, and every other form of the read (here HD) on the merge side.
+  c = cmp(mcDoc(RH, "1", { forms: ["H1", "H0", "HD"] }), mcDoc(MH, "0"));
+  assert.equal(c.verdict, "INCOMPLETE");
+  assert.ok(c.missing.includes("merge: form HD"), c.missing.join("; "));
+  c = cmp(mcDoc(RH, "1", { forms: ["H1"] }), mcDoc(MH, "0", { forms: ["H1"] }));
+  assert.equal(c.verdict, "INCOMPLETE");
+  assert.deepEqual(c.missing.filter((m) => m.includes("form")), ["read: form H0", "merge: form H0"]);
+});
+
+test("the merge check: a report of another head is FAIL (Codex r2, 2)", () => {
+  const read = mcDoc(RH, "1");
+  // A stale merge artifact: its measurements agree, but it names another commit.
+  const stale = "c".repeat(40);
+  let c = cmp(read, mcDoc(stale, "0"));
+  assert.equal(c.verdict, "FAIL", JSON.stringify(c.heads));
+  assert.ok(c.heads.includes(`merge: report head ${stale}, not --merge-head ${MH}`), c.heads.join("; "));
+  c = cmp(mcDoc(stale, "1"), mcDoc(MH, "0"));
+  assert.equal(c.verdict, "FAIL");
+  assert.ok(c.heads.includes(`read: report head ${stale}, not --read-head ${RH}`), c.heads.join("; "));
+  // The report head is right, but a binary build line names another commit, or is not there.
+  let merge = mcDoc(MH, "0");
+  merge.builds[1].plain_ep9.build.commit = stale;
+  c = cmp(read, merge);
+  assert.equal(c.verdict, "FAIL");
+  assert.ok(c.heads.includes(`merge: jitless plain binary names commit ${stale}, not ${MH}`), c.heads.join("; "));
+  merge = mcDoc(MH, "0");
+  merge.builds[0].trace_ep9 = null;
+  c = cmp(read, merge);
+  assert.equal(c.verdict, "FAIL");
+  assert.ok(c.heads.includes(`merge: jit trace binary names commit none, not ${MH}`), c.heads.join("; "));
+  // A plain binary with uncommitted engine changes.
+  merge = mcDoc(MH, "0");
+  merge.builds[0].plain_ep9.build.dirty = true;
+  c = cmp(read, merge);
+  assert.equal(c.verdict, "FAIL");
+  assert.ok(c.heads.includes("merge: jit plain binary is not clean"), c.heads.join("; "));
+  // No head given: no PASS.
+  c = compareReads(read, mcDoc(MH, "0"));
+  assert.equal(c.verdict, "FAIL");
+  assert.ok(c.heads.includes("--read-head and --merge-head are required"), c.heads.join("; "));
+});
+
+test("the merge check: the same report in both slots is refused (Codex r2, 2)", (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "ep9-gc-count-same-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  // A full read report with the B1 arm and the arm-0 counts equal: in both slots with --merge-arm 1
+  // every row compares with itself.
+  const read = mcDoc(RH, "1");
+  const f = path.join(dir, "r.json");
+  const copy = path.join(dir, "r-copy.json");
+  writeFileSync(f, JSON.stringify(read));
+  writeFileSync(copy, JSON.stringify(read));
+  for (const [args, re] of [
+    [[f, f, ...headArgs(), "--merge-arm", "1"], /the same report in both slots \(one file\)/],
+    [[f, copy, ...headArgs(), "--merge-arm", "1"], /the same report in both slots \(equal bytes\)/],
+    [[f, copy, ...headArgs(RH, RH), "--merge-arm", "1"], /the same report in both slots \(one head/],
+  ]) {
+    const r = runScript(["--compare", ...args]);
+    assert.equal(r.status, 2, r.stdout);
+    assert.match(r.stderr, re);
+    assert.doesNotMatch(r.stdout, /PASS/);
+  }
+  // The same document (other bytes) in both slots: the function says FAIL, not PASS.
+  const c = compareReads(read, structuredClone(read), { readHead: RH, mergeHead: RH, mergeArm: "1" });
+  assert.equal(c.verdict, "FAIL");
+  assert.ok(c.heads.some((h) => h.startsWith("the same report in both slots")), c.heads.join("; "));
+});
+
+// The real r1 read of the read head (x86-64 count run): set GC_COUNT_R1_READ to its JSON file.
+const R1 = process.env.GC_COUNT_R1_READ;
+test("the merge check: the real r1 read against itself is refused as the same report (Codex r2, 2)", { skip: !R1 && "GC_COUNT_R1_READ not set" }, (t) => {
+  const doc = JSON.parse(readFileSync(R1, "utf8"));
+  assert.equal(doc.schema, SCHEMA);
+  const head = doc.head;
+  assert.match(head, /^[0-9a-f]{40}$/);
+  const dir = mkdtempSync(path.join(os.tmpdir(), "ep9-gc-count-r1-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const copy = path.join(dir, "copy.json");
+  writeFileSync(copy, readFileSync(R1));
+  // The right read head; as merge head the report head (one head) or another commit.
+  for (const [b, heads, re] of [
+    [R1, headArgs(head, MH), /the same report in both slots \(one file\)/],
+    [copy, headArgs(head, MH), /the same report in both slots \(equal bytes\)/],
+    [copy, headArgs(head, head), /the same report in both slots \(one head/],
+  ]) {
+    const r = runScript(["--compare", R1, b, ...heads, "--merge-arm", "1"]);
+    assert.equal(r.status, 2, r.stdout);
+    assert.match(r.stderr, re);
+  }
+  // As a document: the function says FAIL (one head) and never PASS.
+  const c = compareReads(doc, structuredClone(doc), { readHead: head, mergeHead: head, mergeArm: "1" });
+  assert.equal(c.verdict, "FAIL");
+});
+
 test("the merge check: a read with fewer rows or one build is INCOMPLETE (Codex r1, 1)", () => {
   // A read of octane-typescript only (a bench_workloads run): it does not define the check set.
-  let c = compareReads(mcDoc("a", "1", { rows: [TS_WORKLOAD] }), mcDoc("b", "0"));
+  let c = cmp(mcDoc(RH, "1", { rows: [TS_WORKLOAD] }), mcDoc(MH, "0"));
   assert.equal(c.verdict, "INCOMPLETE", JSON.stringify(c.rows));
   // A read of the jitless build only.
-  c = compareReads(mcDoc("a", "1", { builds: ["jitless"] }), mcDoc("b", "0"));
+  c = cmp(mcDoc(RH, "1", { builds: ["jitless"] }), mcDoc(MH, "0"));
   assert.equal(c.verdict, "INCOMPLETE", JSON.stringify(c.rows.slice(0, 2)));
   // A merge run of the jit build only.
-  c = compareReads(mcDoc("a", "1"), mcDoc("b", "0", { builds: ["jit"] }));
+  c = cmp(mcDoc(RH, "1"), mcDoc(MH, "0", { builds: ["jit"] }));
   assert.equal(c.verdict, "INCOMPLETE");
 });
 
 test("the merge check: a workload sha256 that differs is FAIL; no sha256 is no reading (Codex r1, 1)", () => {
-  let c = compareReads(mcDoc("a", "1", { sha: { splay: "x" } }), mcDoc("b", "0", { sha: { splay: "y" } }));
+  let c = cmp(mcDoc(RH, "1", { sha: { splay: "x" } }), mcDoc(MH, "0", { sha: { splay: "y" } }));
   assert.equal(c.verdict, "FAIL", JSON.stringify(c.rows.filter((r) => r.name === "splay")));
   assert.deepEqual(
     c.rows.filter((r) => r.word !== "pass").map((r) => `${r.build} ${r.name} ${r.word}`),
     ["jit splay FAIL", "jitless splay FAIL"],
   );
-  c = compareReads(mcDoc("a", "1", { sha: { splay: null } }), mcDoc("b", "0"));
+  c = cmp(mcDoc(RH, "1", { sha: { splay: null } }), mcDoc(MH, "0"));
   assert.equal(c.verdict, "INCOMPLETE");
   assert.equal(c.rows.find((r) => r.name === "splay").word, "no reading");
 });
