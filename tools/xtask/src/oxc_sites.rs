@@ -53,9 +53,14 @@
 //!   tokens hold `fn` fails the run (exit 2). The other item macros of other crates
 //!   (`bitflags!`, `fieldless_enum!`) write no body from the tokens of the call.
 //! - A call that the code does not write (an operator, `Drop`, `Deref`, a `for` loop, `?`,
-//!   `format!`) into a fn of an impl of a trait of another crate: no edge. Instead no fn of
-//!   such an impl may reach a site (exit 1): an input-driven recursion passes a site, so a call
-//!   that the graph cannot see cannot close a recursion through the parser.
+//!   `format!`) into a fn of an impl of a trait of another crate (an implicit callee): an edge
+//!   into it from each fn that names its self type outside a pattern (a type of the signature
+//!   or the body, a struct literal, a path `T::..`, `Self`: [`Use::Type`]), so a recursion that
+//!   such a call closes is a cycle (review R2 B2-1). The limit: a fn of the same self type gets
+//!   no such edge (the code of `T` names `T` at each `Self::A`, and at 0.158.0 those edges give
+//!   7 false cycles, `Token::fmt` and the `SourcePosition` compares among them), and code of
+//!   another crate can make and drop a value with no fn of the sources that names its type.
+//!   So also no implicit callee may reach a site (exit 1).
 //!
 //! Test code (`#[cfg(test)]` items, `#[test]` fns) is not part of the parser and is skipped.
 //!
@@ -193,6 +198,10 @@ enum Use {
     Bare(String),
     /// A name in macro tokens.
     Any(String),
+    /// A type that the fn names outside a pattern (a type in its signature or body, a struct
+    /// literal, the type of a path): an edge to each fn of an impl of a trait of another crate
+    /// for that type (a call that the code does not write: `Drop`, `Display`, `?`, `for`).
+    Type(String),
 }
 
 #[derive(Debug, Default)]
@@ -479,12 +488,24 @@ pub(crate) fn run(
             Vec::new()
         }
     };
+    // The fns of the impls of traits of other crates, by their self type.
+    let mut implicit_of: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for k in &types.implicit {
+        if let Some((t, _)) = k.rsplit_once("::") {
+            implicit_of.entry(t).or_default().push(k.clone());
+        }
+    }
     let mut edges: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut places = BTreeMap::new();
     for f in &funcs {
         let out = edges.entry(f.key.clone()).or_default();
+        let own_type = f.key.rsplit_once("::").map(|(t, _)| t);
         for u in &f.uses {
             let to: Vec<String> = match u {
+                // Not from a fn of the same type: a method of T that names T (`Self::A`, `Self
+                // { .. }`) is the code of T itself (the limit is in the module doc).
+                Use::Type(t) if own_type == Some(t.as_str()) => Vec::new(),
+                Use::Type(t) => implicit_of.get(t.as_str()).cloned().unwrap_or_default(),
                 Use::Method(Some(t), n) => typed(t, n),
                 Use::Method(None, n) => all(&methods, n),
                 Use::Path(q, n) if q.starts_with(|c: char| c.is_ascii_lowercase()) => all(&free, n),
@@ -972,6 +993,27 @@ impl Collector<'_> {
             ..Func::default()
         };
         let mut nested = Vec::new();
+        // The types of the signature (not the `self` receiver): the fn takes, makes or drops a
+        // value of each one, so they count as uses before the check.
+        let mut n = Uses {
+            self_ty: self_ty.as_deref(),
+            params: &params,
+            generics: &generics,
+            types: self.types,
+            defs: self.defs,
+            uses: &mut f.uses,
+            nested: &mut nested,
+            depth: 0,
+            in_pat: false,
+        };
+        for a in &sig.inputs {
+            if let FnArg::Typed(pt) = a {
+                n.visit_type(&pt.ty);
+            }
+        }
+        if let syn::ReturnType::Type(_, ty) = &sig.output {
+            n.visit_type(ty);
+        }
         let mut behind = BTreeSet::new();
         for stmt in &block.stmts {
             match check_stmt(stmt) {
@@ -998,6 +1040,7 @@ impl Collector<'_> {
                 uses,
                 nested: &mut nested,
                 depth: 0,
+                in_pat: false,
             };
             n.visit_stmt(stmt);
         }
@@ -1029,6 +1072,7 @@ impl Collector<'_> {
             uses: &mut f.uses,
             nested: &mut nested,
             depth: 0,
+            in_pat: false,
         };
         n.visit_expr(expr);
         self.out.push(f);
@@ -1269,6 +1313,8 @@ struct Uses<'n> {
     nested: &'n mut Vec<syn::Item>,
     /// The macro expansions around the current expression.
     depth: usize,
+    /// In a pattern: a path there matches a value and makes none (no [`Use::Type`]).
+    in_pat: bool,
 }
 
 impl Uses<'_> {
@@ -1344,6 +1390,38 @@ impl<'ast> Visit<'ast> for Uses<'_> {
         let t = self.recv_type(&m.receiver);
         self.uses.insert(Use::Method(t, m.method.to_string()));
         visit::visit_expr_method_call(self, m);
+    }
+
+    fn visit_pat(&mut self, p: &'ast Pat) {
+        let saved = std::mem::replace(&mut self.in_pat, true);
+        visit::visit_pat(self, p);
+        self.in_pat = saved;
+    }
+
+    /// `let g: Guard = ..` and `|g: Guard| ..`: the type is not a pattern.
+    fn visit_pat_type(&mut self, p: &'ast syn::PatType) {
+        self.visit_pat(&p.pat);
+        let saved = std::mem::replace(&mut self.in_pat, false);
+        self.visit_type(&p.ty);
+        self.in_pat = saved;
+    }
+
+    /// Each type that a path names (`Guard { .. }`, `Guard::new`, `Vec<Guard>`, `-> Guard`):
+    /// an upper-case segment, `Self` as the impl type.
+    fn visit_path(&mut self, p: &'ast syn::Path) {
+        if !self.in_pat {
+            for s in &p.segments {
+                let id = s.ident.to_string();
+                if id == "Self" {
+                    if let Some(t) = self.self_ty {
+                        self.uses.insert(Use::Type(t.to_string()));
+                    }
+                } else if id.starts_with(|c: char| c.is_ascii_uppercase()) {
+                    self.uses.insert(Use::Type(id));
+                }
+            }
+        }
+        visit::visit_path(self, p);
     }
 
     fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
@@ -2311,6 +2389,42 @@ mod tests {
             // It cuts nothing: the recursion of parse_a is a cycle.
             assert_eq!(r.cycles, vec![keys(&["ParserImpl::parse_a"])], "{bad}");
         }
+    }
+
+    /// Review R2 B2-1: a fn that names a type outside a pattern has an edge to each implicit
+    /// callee of that type, so a recursion that a `?` (`From`), a `format!` (`Display`) or a
+    /// `for` (`Iterator`) closes is a cycle. A pattern names no value, and a fn of the same type
+    /// gets no such edge.
+    #[test]
+    fn an_implicit_call_closes_a_cycle() {
+        const LOOPS: &str = "impl<C> ParserImpl<C> { fn set_pure_on_call_or_new_expr() {} \
+                             fn jsx_member_expression_eq() {} }";
+        for (src, cycle) in [
+            (
+                "struct E; impl From<u32> for E { fn from(_: u32) -> E { parse_e().unwrap_or(E) } }
+                 fn parse_e() -> Result<E, E> { let n: u32 = 1; Err(n)? }",
+                &["E::from", "parse_e"][..],
+            ),
+            (
+                "struct D(u32); impl std::fmt::Display for D { fn fmt(&self, f: &mut F) -> R { show() } }
+                 fn show() -> R { format!(\"{}\", make()) } fn make() -> D { D(0) }",
+                &["D::fmt", "make", "show"][..],
+            ),
+            (
+                "struct W; impl Iterator for W { type Item = u32; fn next(&mut self) -> Option<u32> { walk() } }
+                 fn walk() -> Option<u32> { let w: W = W; for x in w { return Some(x); } None }",
+                &["W::next", "walk"][..],
+            ),
+        ] {
+            let r = report(&[("a.rs", &format!("{src}\n{LOOPS}"))]);
+            assert_eq!(r.cycles, vec![keys(cycle)], "{src}");
+        }
+        // A match on `K::A` names no value; `K::name` names `K` but is a fn of `K`.
+        let pat = "enum K { A } impl std::fmt::Display for K { fn fmt(&self, f: &mut F) -> R { self.name(); see(self) } }
+                   impl K { fn name(&self) -> u32 { let k = Self::A; 0 } }
+                   fn see(k: &u32) -> R { match k { K::A => ok() } }";
+        let r = report(&[("p.rs", &format!("{pat}\n{LOOPS}"))]);
+        assert!(r.cycles.is_empty(), "{:?}", r.cycles);
     }
 
     /// Review V7: a call in the body of a `macro_rules!` of the sources is an edge where the
