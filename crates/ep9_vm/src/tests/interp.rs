@@ -27,10 +27,7 @@ fn expansions_and_defaults() {
     let n = crate::internals::THREADED_HANDLERS;
     assert_eq!(
         n,
-        ep9_bytecode::OPCODE_COUNT
-            + crate::internals::COLD_OPCODES
-            + 3
-            + 2 * if cfg!(target_arch = "aarch64") { 1 } else { 3 }
+        ep9_bytecode::OPCODE_COUNT + crate::internals::COLD_OPCODES + 3 + 2 * W2_PIN
     );
     eprintln!("threaded handlers per expansion: {n}");
 }
@@ -935,3 +932,8 @@ fn prefix_set_opcodes_run_their_fast_body_on_every_arch() {
         }
     }
 }
+
+/// The opcodes with `_w2` handlers (the count pin of `expansions_and_defaults`): the 3 of
+/// the wide list; aarch64 only `SetNamedProperty` (`GetNamedProperty` and `JumpLoop` run in
+/// the `Wide` handler there, so no `_w2` handler is built for them).
+const W2_PIN: usize = if cfg!(target_arch = "aarch64") { 1 } else { 3 };
