@@ -1,0 +1,26 @@
+kind	item	value	mark	source
+build	patch 0002 sites at oxc_parser 0.158.0	22 = 20 checks (17 token-driven entries + 3 cover walks) + 2 walks made loops	M	third_party/patches/oxc/README.md:33; 0002 patch text
+build	pin	74e5e665 (the vcs commit of the crates.io oxc_parser 0.158.0 package)	M	third_party/oxc.commit
+build	local patch count	1 of 3 (0001 is packaging)	M	third_party/patches/oxc/README.md; DL M12-L1-KIND
+build	per-thread limit	limit = sp_entry - (W - RED); RED = 1 MiB	M	crates/ep9_frontend/src/l1.rs:1-16, :85-91; stack.rs:56
+build	worker stack (debug / release)	284,545,728 B / 99,145,728 B (BUDGET + RED; debug PARSE_PER_UNIT 7,504)	D	stack.rs:69, :71, :89, :97
+build	gated depth walk	11 gated points; walk goes at most 8 levels past the cap	M	crates/ep9_frontend/src/depth.rs:12-15, :150-226
+build	visitor-graph proof test	263 walk functions of the pinned visit.rs; asserts no open cycle, then 11 gates	M	depth_tests.rs:1167, :1278-1305; OL M6-ORCH-1531
+build	T-HOLES rows	321 = 117 abort + 201 control + 3 slow (registered 318: +3 eval rows of the R2 fix)	M	crates/ep9_frontend/tests/stack_holes.tsv; DL M12-P1-LEDGER
+build	hole hunt (the start fact)	297 classes; 103 abort (71 valid JS) in 18 rule families (13 new); release, macOS arm64, worker 98,097,152 B	M	DL M12-L1-START
+cost	parse only, Octane x20, instructions (Mac arm64, release, 5 pairs)	29,855,263,891 -> 29,991,031,298 = +0.455% (gate +1.0%)	M	L1S base4 / head4; DL M12-P1-LEDGER
+cost	parse only, test262 52,017 files	-0.388% (rows noisy, about 3%)	M	L1S
+cost	design estimate	<= 1.5% of the oxc parse, <= 0.57% of the ep9 front end (4 instructions per check; upper)	E	L1D
+cost	TS whole-run Ir (bench run 45535526157)	+0.001% linux-x64 jit and jitless	M	DL M12-P1-LEDGER; OL M6-ORCH-1538
+cost	BENCH-SET 19 rows (run 45535516052)	largest cell +0.005%	M	same
+review	R1 at de901e67	2 Claude lenses + verifier: 9 to fix, 1 needs-run, 4 routed, 0 refuted	M	DL M12-P1-LEDGER; H01 Review record
+review	R2 at 1a45672d	2 Claude lenses + verifier: 5 to fix, 11 routed, 0 refuted; 1 HIGH (A2-1)	M	same
+review	A2-1	eval of "x as a" + ".a" x 3,000,000 aborted the process in debug (release at 4,000,000); fix 8ed08541 + proof test	M	same; OL M6-ORCH-1531
+review	proof against review	proof found 5 open cycle groups (9 nodes); the review found 2 chains; 6 gates added (11 in all)	M	OL M6-ORCH-1531
+review	re-run after the fix	3 abort inputs + 12 chain forms at 3,000,000 (debug) and 8,000,000 (release): SyntaxError or RangeError, exit 0	M	OL M6-ORCH-1531
+review	second-model review, code slice	1 run, stopped by its service filter after 18 read commands, no result (the third such stop on parser-stack code on 2026-11-24)	M	OL M6-ORCH-1533; DL M12-P1-LEDGER
+review	second-model review, docs slice / fork-pin slice	6 findings (4 fixed, 2 routed) / 4 findings (3 routed)	M	DL M12-P1-LEDGER
+review	second reviewer (ADR rows)	2 reads; kinds confirmed; 4 class (c) items, 0 fix first	M	DL M12-P1-LEDGER
+ci	gate run on b2e29a1a	45512158187: 67 of 68 (adr-lint review records, closed by the record rows)	M	DL M12-P1-LEDGER
+ci	tag CI on fcac0863	45533359450: 68 of 68; rule 25 max 0.749	M	DL M12-P1-LEDGER
+adr	rows	H01:114 and H23:242 rewrite (G8 +1 each); Approvals H01:182, H23:597	M	DL M12-L1-KIND, M12-P1-LEDGER
