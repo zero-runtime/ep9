@@ -2954,7 +2954,11 @@ pub(crate) fn gc_budget_arm() -> u8 {
         return 0;
     }
     static ARM: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *ARM.get_or_init(|| budget_arm_from(std::env::var("EP9_GC_BUDGET").ok().as_deref()))
+    // bench-only: never merged (an unset switch gives 1; an explicit 0 still gives 0).
+    *ARM.get_or_init(|| match std::env::var("EP9_GC_BUDGET") {
+        Err(std::env::VarError::NotPresent) => 1,
+        v => budget_arm_from(v.ok().as_deref()),
+    })
 }
 
 /// The arm of an `EP9_GC_BUDGET` value ([`gc_budget_arm`]): `"1"` = B1, `"2"` = B2, every
