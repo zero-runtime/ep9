@@ -786,8 +786,11 @@ pub(crate) fn field_owner(shape: u64, i: usize) -> u64 {
 /// `f` only widens the field bits, and a join, so a cell that several shapes share (the
 /// prefix rule) is read again but written once. A unique shape's cell is its own copy
 /// ([`own_descriptors`]) or one only older unique shapes of its object share: the walk stops.
-/// Returns true if any cell changed. Not a GC point: the walk's stack is Rust memory only.
+/// Returns true if any cell changed; then empties the shape lookup cache of `rt` once, after
+/// the walk (site A1 of DL M14-P1-ALLOC-GATE). Not a GC point: the walk's stack is Rust memory
+/// only.
 pub(crate) fn set_field_bits_in_family(
+    rt: &Runtime,
     owner: u64,
     i: usize,
     f: impl Fn(Details) -> Details,
@@ -826,19 +829,39 @@ pub(crate) fn set_field_bits_in_family(
             }
         }
     }
+    if changed {
+        // A details word changed in place: no cached answer names it (a hit reads the details
+        // from the cell), but the cache is emptied as a second layer (O2).
+        crate::shape_cache::flush(rt, crate::shape_cache::Cause::FieldFamily);
+    }
     changed
 }
 
 // ---- lookup ---------------------------------------------------------------------------------
 
 /// The own property `key` of objects with `shape`: its descriptor index and details. Not a GC
-/// point. A dictionary shape has no descriptors (the object's PROPS table holds them).
+/// point. A dictionary shape has no descriptors (the object's PROPS table holds them). Goes
+/// through the isolate's shape lookup cache (`shape_cache.rs`, M14-P1 SHAPE-CACHE).
 pub(crate) fn lookup(rt: &Runtime, shape: u64, key: u64) -> Option<Found> {
     debug_assert!(is_shape(shape));
     if count_of(cell(shape)) == 0 {
         return None;
     }
-    lookup_with(shape, key, classify(rt, key))
+    crate::shape_cache::lookup(rt, shape, key, classify(rt, key))
+}
+
+/// The answer of a shape lookup cache hit (`shape_cache.rs`): descriptor `i` of the fast shape
+/// `shape` (`i < count(shape)`), with its details read now from the DESCRIPTORS cell (they
+/// can change in place: [`set_field_bits_in_family`]). Not a GC point; always inlined, no
+/// checked `cell` (the [`raw_cell`] form).
+#[inline(always)]
+pub(crate) fn found_at(shape: u64, i: usize) -> Found {
+    debug_assert!(is_shape(shape) && i < count(shape));
+    let d = raw_cell(rd(raw_cell(shape), shf::DESCRIPTORS));
+    Found {
+        index: i,
+        details: d_details(d, i),
+    }
 }
 
 #[cfg(test)]
@@ -848,7 +871,7 @@ thread_local! {
 }
 
 /// [`lookup`] with a probe the caller classified once ([`key::probe`]) for a walk over
-/// several shapes. Not a GC point.
+/// several shapes: the scan, with no cache. Not a GC point.
 pub(crate) fn lookup_with(shape: u64, key: u64, how: Probe) -> Option<Found> {
     debug_assert!(is_shape(shape));
     #[cfg(test)]
@@ -858,6 +881,15 @@ pub(crate) fn lookup_with(shape: u64, key: u64, how: Probe) -> Option<Found> {
             c.set((watched, n + 1));
         }
     });
+    #[cfg(any(test, debug_assertions, feature = "ic-stats"))]
+    crate::shape_cache::stats::bump(crate::shape_cache::stats::SCAN);
+    scan(shape, key, how)
+}
+
+/// The descriptor scan of [`lookup_with`] with no counter: the shadow test of the shape lookup
+/// cache (`shape_cache.rs`, debug builds) compares each hit with it. Not a GC point.
+#[inline(always)]
+pub(crate) fn scan(shape: u64, key: u64, how: Probe) -> Option<Found> {
     let s = cell(shape);
     let n = count_of(s);
     if n == 0 {
@@ -1108,6 +1140,8 @@ fn descriptors_for_child(rt: &Runtime, shape: u64, key: u64, details: Details, h
         if b != shared.field_bits() {
             // E1: an int32 store needs no barrier.
             object::init(od, key_off(n) + 8, shared.with_field_bits(b).bits());
+            // Site A2 of DL M14-P1-ALLOC-GATE: details in place, the cache is emptied (O2).
+            crate::shape_cache::flush(rt, crate::shape_cache::Cause::Reshare);
             crate::field_rep::note_widened(rt, n);
         }
         return old;

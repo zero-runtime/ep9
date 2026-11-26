@@ -135,6 +135,17 @@ on:
       bench_workloads:
         description: "bench mode: bench-set.mjs --workloads, a comma list (empty: the 19 BENCH-SET rows)"
         type: string
+      # The ALLOC-SET arm (M14-P1, the set branch only; ALLOC-SET design 3.2): EP9_SET_ARM of the
+      # bench-set job, so bench-set.mjs hands it to every run of both sides. 0 = arm 0.
+      bench_set_arm:
+        description: "bench mode: EP9_SET_ARM of every run (0, C, A or S; set branch only)"
+        default: "0"
+        type: choice
+        options:
+          - "0"
+          - C
+          - A
+          - S
       # The exit-inputs mode (header; plan v14 section 4.1): set, the run has scope and the
       # exit-inputs legs only. `pathb` alone is the one retry when the 4 windows legs gave no pair.
       exit_inputs:
@@ -157,7 +168,7 @@ permissions:
 # replaces an older pending one; a bench-mode dispatch: one group per bench_base and bench_head;
 # an exit-inputs dispatch: one group per mode and commit.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha) || (inputs.bench_base != '' && format('bench-{0}-{1}-{2}', inputs.bench_base, inputs.bench_head || github.sha, inputs.bench_workloads)) || (github.event_name == 'workflow_dispatch' && inputs.exit_inputs != 'off' && format('exit-{0}-{1}', inputs.exit_inputs, github.sha)) || github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha) || (inputs.bench_base != '' && format('bench-{0}-{1}-{2}-{3}', inputs.bench_base, inputs.bench_head || github.sha, inputs.bench_workloads, inputs.bench_set_arm)) || (github.event_name == 'workflow_dispatch' && inputs.exit_inputs != 'off' && format('exit-{0}-{1}', inputs.exit_inputs, github.sha)) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -331,6 +342,18 @@ jobs:
       # they took 19.3 of the 80 min of windows-x64 (run 41350992446), after the debug tests.
       # There they run next to them, on the release cache of their target. The two steps above keep their names: m0-exit and m1-exit read them.
       - { name: regress unicode_escape_hex (utf16), if: "${{ !cancelled() }}", env: { CARGO_TARGET_DIR: "${{ runner.temp }}/regress" }, run: cargo test --manifest-path third_party/regress/Cargo.toml --features utf16 --test unicode_escape_hex } # regress fork patch 0008 (FUZZ-RX-M9P2, Codex r1): the vendored parser test with no Rx0 prepass; third_party/regress is its own workspace with its own target dir; no --locked: upstream regress git-ignores its Cargo.lock, so a fresh sync has none
+      # ALLOC-SET arm steps (M14-P1, the set branch only; ALLOC-SET design 5.3): a light list of
+      # ep9_vm and ep9_builtins integration tests (the object model ones; Mac debug: about 3 min an
+      # arm) under EP9_SET_ARM = 0, C and S (A = S: JIT-LEAN is out of the cut). They link the
+      # non-test ep9_vm, so each isolate copies the arm; in S the debug shadow test checks each hit.
+      - name: ALLOC-SET arm tests (EP9_SET_ARM 0, C, S; debug)
+        if: ${{ !cancelled() && (matrix.name == 'linux-x64' || matrix.name == 'macos-arm64') }}
+        run: |
+          for arm in 0 C S; do
+            echo "::group::EP9_SET_ARM=$arm"
+            EP9_SET_ARM="$arm" cargo test --locked -p ep9_vm -p ep9_builtins --features ep9_vm/fastdiff-hits --test h20_core --test builtin_ids --test ta1_brand --test presets_object_model --test object --test class_fields --test vm_small --test proxy --test reflect --test facts_export --test function --test array --test json --test collections --test bound
+            echo "::endgroup::"
+          done
       # 10-quality section 5: clippy -D warnings on all 4 targets (the lint job covers Linux x64).
       - if: ${{ matrix.name != 'linux-x64' }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -1325,6 +1348,9 @@ jobs:
           && '[{"name":"linux-x64","os":"ubuntu-24.04","branch_sim":true}, {"name":"linux-arm64","os":"ubuntu-24.04-arm","branch_sim":false}]'
           || '[{"name":"off","os":"ubuntu-24.04","branch_sim":false}]') }}
     runs-on: ${{ matrix.os }}
+    # ALLOC-SET (set branch only): the arm of every run (bench-set.mjs copies the environment).
+    env:
+      EP9_SET_ARM: ${{ inputs.bench_set_arm || '0' }}
     # Rule 25: no measured time yet (est. 30-50 min: 2 release builds, 38 cachegrind runs, 4 at a
     # time; the jitless leg adds 2 release builds in their own target dir and 24 runs, est. +20-35
     # min); the orchestrator sets 1.5x the first measured time.
@@ -1361,6 +1387,7 @@ jobs:
           done
           { echo "on=true"; echo "base=$BASE"; echo "head=$head"; echo "workloads=$WORKLOADS"; } >> "$GITHUB_OUTPUT"
           echo "bench mode on ($LEG): base $BASE, head $head, tools $SHA, workloads ${WORKLOADS:-the BENCH-SET}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "bench arm: EP9_SET_ARM=$EP9_SET_ARM" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

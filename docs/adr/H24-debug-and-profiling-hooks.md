@@ -63,7 +63,7 @@ Copied from the plan row: lazy position tables, kept ScopeInfo, a debug bytecode
 
 ## Validation
 
-- M0: the `ep9_vm` and bytecodegen checks above; Spike B checks (c) and (d) in the CI step "Spike B structural gate" on all 4 runners (macOS arm64, Linux x64, Linux arm64, Windows x64; no check is skipped on Windows, `.github/workflows/ci.yml:794-800`).
+- M0: the `ep9_vm` and bytecodegen checks above; Spike B checks (c) and (d) in the CI step "Spike B structural gate" on all 4 runners (macOS arm64, Linux x64, Linux arm64, Windows x64; no check is skipped on Windows, `.github/workflows/ci.yml:817-823`).
 - M4: CDP Debugger tests per mode. M6: the sampler walks mixed T0, JIT and Rust stacks. A2: unit maps.
 
 ## Open questions
@@ -137,6 +137,7 @@ README §3.4 form (the Freeze point field above; plan v11 §3.6, M6-PLAN-D26). P
 | 2026-11-22 | rewrite | R4: a dead load of a binding is left out (was: every read loads the binding). R5: the statement entry of a statement whose first load is dead sits on the next instruction (V8 form). Classes T + B-S + B-N (arm 2). Checks: guard v2 accepts a dead load that it rejected; new tests T1, T3, T4, T5. Data: the x86 time A/B, boxes ep9-x86-m11-ldar-1 and -2, arm 2 / arm 0 octane-typescript jitless wall 0.9587 [0.9518-0.9687], n 62 (DL M11-P0-LDAR-VERDICT). G8 +1 | M11-P0 LDAR-ELIDE-MERGE |
 | 2026-11-24 | clarify | ADRLINE: 1 path:line number moved (H24:66, `.github/workflows/ci.yml` 781-787 -> 791-797, the "Spike B structural gate" step) to the line that the STACK-FORMS T-A CI step moved (10 lines added in the build-test job; cargo xtask adr-lint --base m0-exit and --base m11-p3 FIX values at 6388e7ee; text only, no check, test or golden changes result) | M12-P0 integration fixer |
 | 2026-11-25 | clarify (ADRLINE) | ADRLINE: 1 path:line number moved (H24:66, `.github/workflows/ci.yml` 791-797 -> 794-800, the "Spike B structural gate" step) to the line that the L1-STACK-CHECK T-SITES CI step moved (3 lines added in the lint job, 9f94ab25; cargo xtask adr-lint --base c930763c, --base 2a792a87 and --base m0-exit FIX values at c13809e9; text only, no check, test or golden result changes; G8 0) | M12-P1 integration fixer |
+| 2026-11-26 | clarify (ADRLINE) | ADRLINE: 1 path:line number moved (H24:66, `.github/workflows/ci.yml` 794-800 -> 817-823) to the line that the M14-P1 ALLOC-SET switch commit moved (the arm switch of the set branch: the `bench_set_arm` input, the bench-set job env and the arm test step of `ci.yml`; the `set` field of `Runtime`, its init line and its test setter; the `set_arm_init` mod line and its call in `Isolate::new_with`; cargo xtask adr-lint --base m12-p1, --base m0-exit and --base m11-p3 FIX values at that commit; the merge-head draft removes the switch and these numbers go back; text only, no check, test or golden result changes; G8 0) | M14-P1 ALLOC-SET |
 
 ## Review record
 

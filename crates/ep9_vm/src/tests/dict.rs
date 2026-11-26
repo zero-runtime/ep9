@@ -281,15 +281,15 @@ fn content_probes_symbols_and_attributes_in_the_indexed_form() {
         let probe = string::new_string(rt, "p7");
         assert!(!string::is_atom(probe));
         assert_eq!(
-            props::own_get_with(o, probe, Probe::Content),
+            props::own_get_with(rt, o, probe, Probe::Content),
             Some((int(7), attr::DEFAULT))
         );
         let missing = string::new_string(rt, "p77");
-        assert_eq!(props::own_get_with(o, missing, Probe::Content), None);
+        assert_eq!(props::own_get_with(rt, o, missing, Probe::Content), None);
         // Delete the entry before p7's, then probe by content past the hole.
         assert!(del(rt, o, "p6"));
         assert_eq!(
-            props::own_get_with(o, probe, Probe::Content),
+            props::own_get_with(rt, o, probe, Probe::Content),
             Some((int(7), attr::DEFAULT))
         );
         // A new attribute set keeps the entry and its place.

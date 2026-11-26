@@ -1442,7 +1442,7 @@ pub(crate) fn has_data_trap(rt: &Runtime, p: u64, name: &str) -> bool {
         if crate::exotic::own_attrs(rt, h, key, how).is_some() {
             return false;
         }
-        if let Some((v, a)) = crate::props::own_get_with(h, key, how) {
+        if let Some((v, a)) = crate::props::own_get_with(rt, h, key, how) {
             return a & attr::ACCESSOR == 0 && is_callable(v);
         }
         h = object::proto_of(h);

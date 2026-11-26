@@ -296,6 +296,12 @@ pub(crate) struct Runtime {
     /// The megamorphic stub cache (`stub_cache.rs`, M4-P3 IC2): empty until IC2 fills it.
     #[allow(dead_code)] // read by its owner module from M4-P1 on
     pub stub_cache: crate::stub_cache::StubCache,
+    /// The shape lookup cache (`shape_cache.rs`, M14-P1 SHAPE-CACHE): (shape, key) -> the
+    /// descriptor index or absent, flushed at every GC. Rust memory, no root slot.
+    pub shape_cache: crate::shape_cache::ShapeCache,
+    /// The ALLOC-SET arm bits (`ep9_platform::set_arm`; the set branch only): copied once at
+    /// the start; a member seam tests one bit. No exported offset; not in `ExecOptions`.
+    pub(crate) set: Cell<u8>,
     /// The xorshift128+ state of `Math.random` (`Cx::math_random`; M4-P1 MATH1, V9-D16),
     /// seeded per isolate from the process hash key and [`Runtime::id`] ([`rng_seed`]). Never
     /// both words 0.
@@ -378,6 +384,8 @@ impl Runtime {
             // The fields that register a heap source come before `heap` moves in.
             jobs: crate::jobs::JobState::new(&heap),
             stub_cache: crate::stub_cache::StubCache::new(&heap),
+            shape_cache: crate::shape_cache::ShapeCache::new(&heap),
+            set: Cell::new(crate::set_arm_init::runtime_bits()),
             rng: Cell::new(rng_seed(id)),
             kept_objects: crate::weakref::KeptObjects::new(&heap),
             regexp_programs: crate::regexp::ProgramTable::new(&heap),
@@ -410,6 +418,13 @@ impl Runtime {
         crate::atoms::init(&rt);
         crate::shape::init(&rt);
         rt
+    }
+
+    /// Tests only: the ALLOC-SET arm bits of this runtime (`ep9_platform::set_arm`), in place
+    /// of the process value. Set it before the first construct and the first lookup.
+    #[cfg(test)]
+    pub(crate) fn set_arm_for_test(&self, bits: u8) {
+        self.set.set(bits);
     }
 
     #[inline]
