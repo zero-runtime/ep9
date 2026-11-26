@@ -123,6 +123,17 @@ on:
         options:
           - s1
           - s0
+      # The SWEEP check-all mode (plan v20 section 4.4, form C1): `on` sets EP9_SWEEP_CHECK_ALL=1
+      # on the test262-gc exec step only, so each checked page sweep runs every SWEEP body of the
+      # CPU against the scalar walk, and adds the test262-gc CPU and SWEEP report step. Push and
+      # pull_request runs have no input: the env value is empty (off) and that step is skipped.
+      sweep_check:
+        description: "test262-gc: the SWEEP check-all mode, off (the default) or on (plan v20 section 4.4)"
+        default: "off"
+        type: choice
+        options:
+          - "off"
+          - "on"
       # The bench mode (header; V13-D18; bench-set checks each input, before any build).
       bench_base:
         description: "bench mode: base commit, full sha (empty: off; set: only scope and bench-set run)"
@@ -608,13 +619,38 @@ jobs:
           path: third_party/test262
           key: test262-${{ runner.os }}-${{ hashFiles('third_party/test262.commit', 'third_party/patches/test262/**') }}
       - run: bash scripts/sync-test262.sh
+      # The dispatch input sweep_check=on only (plan v20 section 4.4; skipped on push and
+      # pull_request): the CPU model, its avx512 flags, the worker count that the exec step gets
+      # (nproc; its own line "ep9-test262 exec: N tests, W worker processes, ..." comes at its end)
+      # and the SIMD-REPORT-SWEEP line with the EP9_SWEEP_CHECK_ALL value of the exec step:
+      # `bodies=` lists the SWEEP bodies that each checked page sweep runs on this CPU. It runs
+      # before the exec step, so a job that times out still names its CPU; a failure here does
+      # not stop the exec step (a missing report line is read as no report).
+      - name: CPU and SWEEP report (sweep_check=on)
+        if: ${{ inputs.sweep_check == 'on' }}
+        continue-on-error: true
+        env:
+          EP9_SWEEP_CHECK_ALL: ${{ inputs.sweep_check == 'on' && '1' || '' }}
+        run: |
+          if [ -r /proc/cpuinfo ]; then
+            echo "CPU model: $(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')"
+            echo "CPU avx512 flags: $(grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep '^avx512' | sort -u | tr '\n' ' ')"
+          fi
+          if [ "$RUNNER_OS" = Windows ]; then
+            echo "CPU model (Windows): $(powershell -NoProfile -Command '(Get-CimInstance Win32_Processor).Name')"
+          fi
+          echo "nproc: $(nproc)"
+          echo "EP9_SWEEP_CHECK_ALL=$EP9_SWEEP_CHECK_ALL"
+          cargo test --release --locked -p ep9_heap --lib -- --exact tests::sweep::sweep_simd_report --nocapture
       # The step name says the heap mode: `cargo xtask m1-exit` item 4 needs "S1" in it, and
       # m0-exit item 6 reads this exact S1 name (GC_STEP, tools/xtask/src/exit/gc_shards.rs) or
       # the name before M5-P2. EP9_GC_GENERATIONAL is explicit, so the JSON says what ran.
+      # EP9_SWEEP_CHECK_ALL: "1" only with the dispatch input sweep_check=on, else empty (off).
       - name: "test262 exec, GC-stress (${{ inputs.gc_mode == 's0' && 'S0' || 'S1' }}) + eager feedback"
         env:
           SHARD: ${{ matrix.shard }}/${{ matrix.shards }}
           EP9_GC_GENERATIONAL: ${{ inputs.gc_mode == 's0' && '0' || '1' }}
+          EP9_SWEEP_CHECK_ALL: ${{ inputs.sweep_check == 'on' && '1' || '' }}
         run: |
           out="$(cargo xtask m0-exit --gc-shard "$SHARD")"
           set -f
