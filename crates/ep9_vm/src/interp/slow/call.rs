@@ -1445,9 +1445,10 @@ const _: () = {
 // functions below are at the end of the file, so the cited lines keep their places.
 
 /// The `charCodeAt` arm: the first block of `call_property::<1>`, inline there. Every exit is
-/// a return or a tail call (with the same 5 arguments, with the callee as a 6th, or `call`),
-/// and the taken path calls nothing that returns into it, so the arm needs no stack frame (the
-/// old body has one: it calls the host function).
+/// a return or a tail call (with the same 5 arguments, with the callee as a 6th, or `call`;
+/// on Win64 the exit with 6 arguments can be a call), and the taken path calls nothing that
+/// returns into it, so the arm needs no stack frame (the old body has one: it calls the host
+/// function).
 ///
 /// # Safety
 /// As `call_property` with `N` = 1.
@@ -1593,8 +1594,8 @@ unsafe fn call_property_host1(
 /// of line: the arm's way out when test 2 finds another host function. The arm hands over the
 /// callee that it read, so a decline does not run test 1 and the callee tests two times; this
 /// function reads the FunctionInfo and the host function again (2 loads). 6 arguments, so the
-/// arm's call of it is a tail call (a jump) on SysV, Win64 and aarch64: a 7th argument would go
-/// on the stack on x86-64 SysV.
+/// arm's call of it is a tail call (a jump) on x86-64 SysV and aarch64: a 7th argument would go
+/// on the stack on x86-64 SysV. Win64 passes only 4 in registers, so there it can be a call.
 ///
 /// # Safety
 /// As `call_property` with `N` = 1, and `pc` is unprefixed with no poll due (`cx.budget` > 0);
