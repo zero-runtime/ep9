@@ -121,9 +121,9 @@ fn number(b: u64) -> Option<f64> {
     }
 }
 
-/// ToBoolean for the values that need no cell access.
+/// ToBoolean for the values that need no call. With `arm`: also a cell that is always true.
 #[inline(always)]
-fn fast_truthy(v: u64) -> Option<bool> {
+pub(crate) fn fast_truthy(v: u64, arm: bool) -> Option<bool> {
     // Bit `k` of FALSY is set when the immediate `k` is false, undefined or null. A bit test
     // instead of a `match`: LLVM makes no jump table, so the handler has no data in its code.
     const FALSY: u64 = (1 << FALSE) | (1 << UNDEFINED) | (1 << NULL);
@@ -135,7 +135,7 @@ fn fast_truthy(v: u64) -> Option<bool> {
     } else if is_i32(v) {
         Some(i32_of(v) != 0)
     } else {
-        None
+        cell_arm(v, arm)
     }
 }
 
@@ -1385,7 +1385,7 @@ op!(BitwiseNot(st, s: FSlot) {
     unary_cold(st, UnOp::BitNot)
 });
 op!(ToBooleanLogicalNot(st) {
-    match fast_truthy(st.acc) {
+    match fast_truthy(st.acc, to_bool_arm(st.rt())) {
         Some(b) => {
             st.acc = boolean(!b);
             Flow::Next
@@ -1608,7 +1608,7 @@ op!(ToString(st) {
     if object::is_string(st.acc) { Flow::Next } else { Flow::Cold }
 } cold { unary_cold(st, UnOp::ToString) });
 op!(ToBoolean(st) {
-    match fast_truthy(st.acc) {
+    match fast_truthy(st.acc, to_bool_arm(st.rt())) {
         Some(b) => {
             st.acc = boolean(b);
             Flow::Next
@@ -1801,14 +1801,14 @@ op!(Jump(st, target: Fwd) { Done::Jump(st.fwd(target)) });
 op!(JumpIfTrue(st, target: Fwd) { jump_if(st, st.acc == TRUE, target) });
 op!(JumpIfFalse(st, target: Fwd) { jump_if(st, st.acc == FALSE, target) });
 op!(JumpIfToBooleanTrue(st, target: Fwd) {
-    match fast_truthy(st.acc) {
+    match fast_truthy(st.acc, to_bool_arm(st.rt())) {
         Some(true) => Flow::Jump(st.fwd(target)),
         Some(false) => Flow::Next,
         None => Flow::Cold,
     }
 } cold { jump_if(st, slow::to_boolean(st.acc), target) });
 op!(JumpIfToBooleanFalse(st, target: Fwd) {
-    match fast_truthy(st.acc) {
+    match fast_truthy(st.acc, to_bool_arm(st.rt())) {
         Some(false) => Flow::Jump(st.fwd(target)),
         Some(true) => Flow::Next,
         None => Flow::Cold,
@@ -3404,6 +3404,55 @@ mod star_dst_branch_form {
 // ---- TO-BOOL (M15-P1): the cell arm of `fast_truthy`, its seam and its counts ----------------
 // At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan).
 
+/// The cell arm, the last test of `fast_truthy`: `Some(true)` for a cell whose kind is always
+/// true (a symbol, an object: `conv::cell_truth`). `None` (the cold body) for a string, a
+/// BigInt, a double and the hole, and for every value when `arm` is false. One byte load (the
+/// kind byte, which the cold body reads too), no call, no write.
+#[inline(always)]
+fn cell_arm(v: u64, arm: bool) -> Option<bool> {
+    use crate::conv::{CellTruth, cell_truth};
+    // The cell test is explicit: `cell_kind` gives 0 for a non-cell and class 0 is `Always`.
+    if arm && kinds::is_cell_bits(v) && cell_truth(kinds::cell_kind(v)) == CellTruth::Always {
+        #[cfg(test)]
+        TO_BOOL_ARM_HITS.with(|n| n.set(n.get() + 1));
+        to_bool_stats::arm();
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// The set seam of TO-BOOL (the `slack::ctor_fit` form of month 14): true = the cell arm is on.
+/// This role head: always true, so the test is a constant and the compiler removes it. The set
+/// integrator changes only this body (a byte of `rt`); the merge head deletes the seam. It
+/// reads no execution policy (rule 40, M-R9). Tests turn it off per thread with the test-only
+/// module `to_bool_arm_override`; the thread must be the one that runs the isolate.
+#[inline(always)]
+pub(crate) fn to_bool_arm(rt: &Runtime) -> bool {
+    let _ = rt;
+    #[cfg(test)]
+    if let Some(on) = to_bool_arm_override::ON.get() {
+        return on;
+    }
+    true
+}
+
+#[cfg(test)]
+pub(crate) mod to_bool_arm_override {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        /// Tests: `Some(on)` sets the answer of `super::to_bool_arm` on this thread.
+        pub(crate) static ON: Cell<Option<bool>> = const { Cell::new(None) };
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: the hits of `cell_arm` on this thread (the `tails::WIDE_RUNS` form).
+    pub(crate) static TO_BOOL_ARM_HITS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+}
+
 /// The TO-BOOL counts of gate line (1) (feature `ic-stats`; without it the functions are empty).
 /// Per thread; one line to stderr when the thread ends: `ep9 ic-stats: to-boolean slow=N arm=N`.
 pub(crate) mod to_bool_stats {
@@ -3413,6 +3462,13 @@ pub(crate) mod to_bool_stats {
         #[cfg(feature = "ic-stats")]
         imp::COUNTS.with(|c| c.slow.set(c.slow.get() + 1));
         v
+    }
+
+    /// Counts one hit of the cell arm.
+    #[inline(always)]
+    pub(crate) fn arm() {
+        #[cfg(feature = "ic-stats")]
+        imp::COUNTS.with(|c| c.arm.set(c.arm.get() + 1));
     }
 
     #[cfg(feature = "ic-stats")]

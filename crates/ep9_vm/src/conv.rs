@@ -76,13 +76,13 @@ pub(crate) fn to_boolean(b: u64) -> bool {
                 i != 0
             } else if let Some(d) = v.as_double() {
                 !(d == 0.0 || d.is_nan())
-            } else if is_string(b) {
-                object::str_len(b) != 0
-            } else if is_bigint(b) {
-                !bigint::is_zero(b)
             } else {
-                // Symbols and objects (v0: no document.all).
-                true
+                // A cell or the hole: the class of the one table (`cell_truth`, at the file end).
+                match cell_truth(crate::kinds::cell_kind(b)) {
+                    CellTruth::ByLength => object::str_len(b) != 0,
+                    CellTruth::ByValue => !bigint::is_zero(b),
+                    CellTruth::Always => true, // symbols and objects (v0: no document.all)
+                }
             }
         }
     }
@@ -570,5 +570,32 @@ pub(crate) fn describe(b: u64) -> String {
         _ if is_callable(b) => "function".into(),
         _ if object::is_array(b) => "array".into(),
         _ => "object".into(),
+    }
+}
+
+// ---- TO-BOOL (M15-P1): the one ToBoolean table of the cell kinds ------------------------------
+// At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan).
+
+/// How ToBoolean (§7.1.2) reads a cell, by its kind byte.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CellTruth {
+    /// A string (kinds 1-7, the `kinds::is_string` range): true if its length is not 0.
+    ByLength,
+    /// A BigInt (kind 9): true if it is not 0n.
+    ByValue,
+    /// Every other kind: symbols and objects are true (v0: no `[[IsHTMLDDA]]` object). Kind 0
+    /// (not a cell: the hole) reads this class too, as before.
+    Always,
+}
+
+/// The one table of the VM from a kind byte to its ToBoolean class: `to_boolean` and the T0
+/// arm (`interp::ops::fast_truthy`) both read it. A new kind that is not always true gets a
+/// class here (test `tests/to_bool.rs` A4 fails for a registered kind with no row).
+#[inline(always)]
+pub(crate) const fn cell_truth(kind: u8) -> CellTruth {
+    match kind {
+        1..=7 => CellTruth::ByLength,
+        k if k == crate::kinds::BIGINT.get() => CellTruth::ByValue,
+        _ => CellTruth::Always,
     }
 }

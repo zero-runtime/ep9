@@ -150,8 +150,8 @@ const INVENTORY: &[FastPath] = &[
         id: "t0-operators",
         site: "crates/ep9_vm/src/profile.rs:513-666 (the T0 operator fast bodies); interp/slow/ops_misc.rs:130, :137",
         off: Off::Guard,
-        what: "int32 and number pairs of the arithmetic, compare, ToBoolean and strict \
-               equality handlers",
+        what: "int32 and number pairs of the arithmetic, compare, ToBoolean and strict equality \
+               handlers; the ToBoolean cell arm: a symbol or an object is true with no call",
     },
     FastPath {
         id: "ic-named",
@@ -1661,6 +1661,73 @@ const CASES: &[Case] = &[
              return [x, y, z, w, d, i, k].join(' ');\n\
              }\n\
              print(g('1', '', null, 0), g('', '1', 5, 0, 'e'), g('1', '1', undefined, 0), g('', '', { p: 'P' }, 0));",
+        ),
+    },
+    // M15-P1 TO-BOOL: the cell arm of `interp/ops.rs` `fast_truthy` (a symbol or an object is
+    // true with no call) on every value kind, in `?:`, `!`, `&&`, `||` and an `if` whose jump is
+    // `Wide` (over 64 `i |= 0`). The spec form tests `Boolean(v)` (the builtin: `to_boolean`).
+    Case {
+        path: "t0-operators",
+        name: "ToBoolean of every value kind: the cell arm and the Wide jump",
+        src: "var big = 'abcdefghijklmnopqrstuvwxyz0123456789';\n\
+              var vals = [undefined, null, true, false, 0, 1, -1, 2147483647, -2147483648,\n\
+              0.5, -1.5, 0.5 - 0.5, -0, NaN, Infinity, -Infinity, 5e-324, 1e300,\n\
+              '', 'a', big + big.length, big.slice(3), 0n, 1n, -1n, 2n ** 64n,\n\
+              Symbol(), Symbol('d'), Symbol.iterator, Symbol.for('r'),\n\
+              {}, function () {}, [], new Error('e'), [][Symbol.iterator](), new Boolean(false),\n\
+              new Number(0), new String(''), Object(Symbol()), Object(0n), function () {}.bind(null),\n\
+              (function* () {})(), Promise.resolve(0), new Map(), new Set(),\n\
+              (function () { return arguments; })(), new Proxy({}, {}), new Proxy(function () {}, {}),\n\
+              new Uint8Array(2), new BigInt64Array(1), new Float64Array(1), new ArrayBuffer(4),\n\
+              new Date(0), /a/, Object.create(null), new (class A {})()];\n\
+              function t(v) {\n\
+              var i = 0, r = '';\n\
+              r += v ? 1 : 0; r += !v ? 1 : 0;\n\
+              r += (v && 1) === 1 ? 1 : 0; r += (v || 'F') !== 'F' ? 1 : 0;\n\
+              if (v) { i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+              i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+              i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+              i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+              i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+              i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+              i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+              i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0;\n\
+              r += 'i'; }\n\
+              return r;\n\
+              }\n\
+              var out = [];\n\
+              for (var k = 0; k < vals.length; k++) out.push(t(vals[k]));\n\
+              print(out.length, out.join(' '));",
+        spec: Some(
+            "var big = 'abcdefghijklmnopqrstuvwxyz0123456789';\n\
+             var vals = [undefined, null, true, false, 0, 1, -1, 2147483647, -2147483648,\n\
+             0.5, -1.5, 0.5 - 0.5, -0, NaN, Infinity, -Infinity, 5e-324, 1e300,\n\
+             '', 'a', big + big.length, big.slice(3), 0n, 1n, -1n, 2n ** 64n,\n\
+             Symbol(), Symbol('d'), Symbol.iterator, Symbol.for('r'),\n\
+             {}, function () {}, [], new Error('e'), [][Symbol.iterator](), new Boolean(false),\n\
+             new Number(0), new String(''), Object(Symbol()), Object(0n), function () {}.bind(null),\n\
+             (function* () {})(), Promise.resolve(0), new Map(), new Set(),\n\
+             (function () { return arguments; })(), new Proxy({}, {}), new Proxy(function () {}, {}),\n\
+             new Uint8Array(2), new BigInt64Array(1), new Float64Array(1), new ArrayBuffer(4),\n\
+             new Date(0), /a/, Object.create(null), new (class A {})()];\n\
+             function t(v) {\n\
+             var i = 0, r = ''; var b = Boolean(v);\n\
+             r += b ? 1 : 0; r += !b ? 1 : 0;\n\
+             r += (b && 1) === 1 ? 1 : 0; r += (b || 'F') !== 'F' ? 1 : 0;\n\
+             if (b) { i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+             i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+             i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+             i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+             i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+             i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+             i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0,\n\
+             i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0, i |= 0;\n\
+             r += 'i'; }\n\
+             return r;\n\
+             }\n\
+             var out = [];\n\
+             for (var k = 0; k < vals.length; k++) out.push(t(vals[k]));\n\
+             print(out.length, out.join(' '));",
         ),
     },
     // M7-P5 LEVER-4 (ICWIDE): `keyed_ic::fast_set` stores a missing element of an Array in
