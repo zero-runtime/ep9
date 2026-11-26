@@ -136,15 +136,15 @@ impl ShapeCache {
 }
 
 /// The seam of the member (ALLOC-SET design 1.3): true if lookups go through the cache. The
-/// role head has it always on (tests: unless [`without`] runs); the set integrator changes
-/// only this body.
+/// set branch: the SHAPE-CACHE bit of the arm byte of `rt` (arms A and S; tests: unless
+/// [`without`] runs); the set integrator changed only this body.
 #[inline(always)]
-pub(crate) fn on(_rt: &Runtime) -> bool {
+pub(crate) fn on(rt: &Runtime) -> bool {
     #[cfg(test)]
     if OFF.with(Cell::get) {
         return false;
     }
-    true
+    crate::set_arm_init::on(rt, ep9_platform::set_arm::SHAPE_CACHE)
 }
 
 #[cfg(test)]

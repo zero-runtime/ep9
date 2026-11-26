@@ -291,6 +291,7 @@ impl Isolate {
             ));
         }
         builtins::check(config.builtins).map_err(IsolateError::BuiltinTable)?;
+        crate::set_arm_init::set_arm_init();
         let heap = Heap::new(shape::heap_config(config.heap)).map_err(IsolateError::Heap)?;
         let bounds = ep9_platform::current_thread_stack_bounds()
             .map_err(|e| IsolateError::Heap(HeapError::Stack(e)))?;

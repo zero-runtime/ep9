@@ -343,19 +343,18 @@ fn first_capacity(
 }
 
 /// The CTOR-FIT seam (ALLOC-SET design 1.3, contract rules 1-3): true = [`first_capacity`]
-/// tries the chain count first; false = the old count only. This role head: always true, so
-/// the test is a constant and the compiler removes the old branch. The set integrator changes
-/// only this body (a byte of `rt`); the merge head deletes the seam and keeps the chain path.
+/// tries the chain count first; false = the old count only. The set branch: the CTOR-FIT bit
+/// of the arm byte of `rt` (`ep9_platform::set_arm`; arms C, A and S). The set integrator
+/// changed only this body; the merge head deletes the seam and keeps the chain path.
 /// It reads no execution policy (no preset, no feedback mode, no unit: rule 40, M-R9). Tests
 /// turn it off per thread with [`ctor_fit_override`].
 #[inline(always)]
 pub(crate) fn ctor_fit(rt: &Runtime) -> bool {
-    let _ = rt;
     #[cfg(test)]
     if let Some(on) = ctor_fit_override::ON.get() {
         return on;
     }
-    true
+    crate::set_arm_init::on(rt, ep9_platform::set_arm::CTOR_FIT)
 }
 
 /// The old count (CTOR-FIT off): the scan of `code` (the code of `fi`) and the prototype

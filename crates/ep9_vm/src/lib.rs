@@ -112,6 +112,7 @@ mod proxy;
 mod realm;
 mod regexp;
 mod runtime;
+mod set_arm_init;
 mod shape;
 mod shape_cache;
 mod slack;
