@@ -112,7 +112,7 @@ impl<'a> Visit<'a> for AsyncGenCounter {
     fn visit_arrow_function_expression(&mut self, _it: &ArrowFunctionExpression<'a>) {}
 
     fn visit_property_definition(&mut self, it: &PropertyDefinition<'a>) {
-        if it.computed {
+        if it.key.is_computed() {
             self.visit_property_key(&it.key);
         }
     }

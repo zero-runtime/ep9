@@ -554,7 +554,7 @@ impl<'a> Visit<'a> for AwaitPoints {
     fn visit_arrow_function_expression(&mut self, _it: &ArrowFunctionExpression<'a>) {}
 
     fn visit_property_definition(&mut self, it: &PropertyDefinition<'a>) {
-        if it.computed {
+        if it.key.is_computed() {
             self.visit_property_key(&it.key);
         }
     }
@@ -588,7 +588,7 @@ impl<'a> Visit<'a> for TopLevelAwait {
     fn visit_arrow_function_expression(&mut self, _it: &ArrowFunctionExpression<'a>) {}
 
     fn visit_property_definition(&mut self, it: &PropertyDefinition<'a>) {
-        if it.computed {
+        if it.key.is_computed() {
             self.visit_property_key(&it.key);
         }
     }

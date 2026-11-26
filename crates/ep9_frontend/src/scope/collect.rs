@@ -580,7 +580,7 @@ impl<'a> Builder<'a> {
                 }
                 BindingPattern::ObjectPattern(object) => {
                     for property in &object.properties {
-                        if property.computed {
+                        if property.key.is_computed() {
                             self.pattern_expressions = true;
                             self.visit_property_key(&property.key);
                         }
@@ -1445,7 +1445,7 @@ impl<'a> Visit<'a> for Builder<'a> {
         let computed_fields = elements
             .iter()
             .filter_map(|e| match e {
-                ClassElement::PropertyDefinition(p) if p.computed => Some(p.r#static),
+                ClassElement::PropertyDefinition(p) if p.key.is_computed() => Some(p.r#static),
                 _ => None,
             })
             .enumerate()
@@ -1542,7 +1542,7 @@ impl<'a> Visit<'a> for Builder<'a> {
             match element {
                 ClassElement::MethodDefinition(m) => {
                     self.visit_decorators(&m.decorators);
-                    if m.computed {
+                    if m.key.is_computed() {
                         self.visit_property_key(&m.key);
                     }
                     let kind = match m.kind {
@@ -1561,13 +1561,13 @@ impl<'a> Visit<'a> for Builder<'a> {
                 }
                 ClassElement::PropertyDefinition(p) => {
                     self.visit_decorators(&p.decorators);
-                    if p.computed {
+                    if p.key.is_computed() {
                         self.visit_property_key(&p.key);
                     }
                 }
                 ClassElement::AccessorProperty(p) => {
                     self.visit_decorators(&p.decorators);
-                    if p.computed {
+                    if p.key.is_computed() {
                         self.visit_property_key(&p.key);
                     }
                 }
@@ -1605,7 +1605,7 @@ impl<'a> Visit<'a> for Builder<'a> {
         };
         match (kind, &it.value) {
             (Some(kind), Expression::FunctionExpression(f)) => {
-                if it.computed {
+                if it.key.is_computed() {
                     self.visit_property_key(&it.key);
                 }
                 self.function(f, kind, false);

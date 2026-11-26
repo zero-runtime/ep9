@@ -1,7 +1,8 @@
-//! A copy of the test suite of the oxc_parser patch
-//! `third_party/patches/oxc/0002-parser-recursion-check.patch` (its new file
-//! `crates/oxc_parser/tests/recursion_check.rs`), from the line after this head down to the test
-//! `the_copy_follows_patch_0002`.
+//! A copy of the test suite of the oxc_parser patch 0002 of the pin (the 0.160.0 scout: the set
+//! of the pin is the folder named by it,
+//! `third_party/patches/oxc/87e38f3270b00341695e02e8aaf681e9e985e4a3/`, file
+//! `0002-parser-recursion-check.patch`; its new file `crates/oxc_parser/tests/recursion_check.rs`),
+//! from the line after this head down to the test `the_copy_follows_patch_0002`.
 //!
 //! Why it lives here: patch 0001 gives oxc_parser its published manifest, which sets
 //! `autotests = false`, so cargo never runs the tests of the patched crate, and no CI step runs
@@ -126,6 +127,8 @@ fn deep_inputs(n: usize) -> Vec<(String, SourceType)> {
         (format!("{} = 0", deep("[", "a", "]", n)), js),
         (format!("({}) = 0", deep("(", "a", ")", n)), js),
         (format!("({}) => 0", deep("[", "a", "]", n)), js),
+        (format!("({} = b) => 0", deep("[", "a", "]", n)), js),
+        (format!("({}) => 0", deep("{a: ", "b", "}", n)), js),
         (
             format!("async function f() {{ {} }}", deep("await ", "a", "", n)),
             js,
@@ -216,6 +219,54 @@ fn the_stop_survives_a_rewind() {
     }
 }
 
+#[test]
+fn a_stop_in_each_cover_walk_stops_the_parse() {
+    // An arrow head is parsed as a cover list of expressions first; at `=>` 2 walks over the
+    // built list check it (`check_cover_binding`, `check_cover_binding_target`: `&self`, so the
+    // stop is the flag and an error that the caller reports or drops) and 2 walks convert it
+    // (`cover_expression_to_binding_pattern`, `cover_assignment_target_to_binding_pattern`).
+    // A stop at any entry of the parse, in the list, in a walk or in the body, stops the parse.
+    let levels: u32 = 8;
+    let n = levels as usize;
+    let heads = [
+        format!("({})", deep("[", "a", "]", n)),
+        format!("({})", deep("{a: ", "b", "}", n)),
+        format!("({} = b)", deep("[", "a", "]", n)),
+        format!("([...{}])", deep("[", "a", "]", n)),
+        format!("async ({})", deep("[", "a", "]", n)),
+    ];
+    for (i, head) in heads.iter().enumerate() {
+        let arrow = format!("{head} => 0");
+        let total = count_calls(&arrow, SourceType::mjs());
+        if i < 2 {
+            // A literal in `( )` with no `=>` stays an expression: the same entries as the list
+            // of the arrow head. Each walk has an entry per level after them.
+            let list = count_calls(&format!("{head};"), SourceType::mjs());
+            assert!(
+                total >= list + 2 * levels,
+                "{arrow}: {list} then {total} entries"
+            );
+        }
+        let never = parse(&arrow, SourceType::mjs(), StopOnce::default());
+        assert!(
+            !never.stack_limit_hit && !never.fatal_error,
+            "{arrow}: {:?}",
+            never.messages
+        );
+        for at in 1..=total {
+            let o = parse(
+                &arrow,
+                SourceType::mjs(),
+                StopOnce {
+                    at,
+                    calls: Cell::new(0),
+                },
+            );
+            assert_stopped(&o, &format!("{arrow} (stop at entry {at} of {total})"));
+        }
+    }
+}
+
 /// The number of recursion entries of a parse that never stops.
 fn count_calls(source: &str, source_type: SourceType) -> u32 {
     thread_local!(static CALLS: Cell<u32> = const { Cell::new(0) });
@@ -294,7 +345,9 @@ fn chains_use_no_stack_per_member() {
 /// without its `+`), up to the white space and the trailing commas that rustfmt changes.
 #[test]
 fn the_copy_follows_patch_0002() {
-    let patch = include_str!("../../../third_party/patches/oxc/0002-parser-recursion-check.patch");
+    let patch = include_str!(
+        "../../../third_party/patches/oxc/87e38f3270b00341695e02e8aaf681e9e985e4a3/0002-parser-recursion-check.patch"
+    );
     let mut lines = patch.lines();
     lines
         .by_ref()

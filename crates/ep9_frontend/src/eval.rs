@@ -422,7 +422,7 @@ impl<'a> Visit<'a> for AllowWalk<'_> {
     }
 
     fn visit_property_definition(&mut self, it: &PropertyDefinition<'a>) {
-        if it.computed {
+        if it.key.is_computed() {
             self.visit_property_key(&it.key);
         }
         if let Some(value) = &it.value {
@@ -431,7 +431,7 @@ impl<'a> Visit<'a> for AllowWalk<'_> {
     }
 
     fn visit_accessor_property(&mut self, it: &AccessorProperty<'a>) {
-        if it.computed {
+        if it.key.is_computed() {
             self.visit_property_key(&it.key);
         }
         if let Some(value) = &it.value {

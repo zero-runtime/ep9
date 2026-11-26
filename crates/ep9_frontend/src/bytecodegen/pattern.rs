@@ -249,7 +249,7 @@ impl<'a, 's> FnGen<'a, 's> {
         }
         for (i, p) in o.properties.iter().enumerate() {
             let im = self.mark();
-            let key = self.pattern_key(&p.key, p.computed)?;
+            let key = self.pattern_key(&p.key, p.key.is_computed())?;
             if let Some(list) = list {
                 self.exclude_key(&key, list.get(1 + i as u32));
             }
@@ -301,7 +301,7 @@ impl<'a, 's> FnGen<'a, 's> {
                     self.put_prepared(&target, id.span.start, false)?;
                 }
                 AssignmentTargetProperty::AssignmentTargetPropertyProperty(pp) => {
-                    let key = self.pattern_key(&pp.name, pp.computed)?;
+                    let key = self.pattern_key(&pp.name, pp.name.is_computed())?;
                     if let Some(list) = list {
                         self.exclude_key(&key, list.get(1 + i as u32));
                     }

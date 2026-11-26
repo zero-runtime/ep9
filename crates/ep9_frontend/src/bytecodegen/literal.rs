@@ -2,6 +2,7 @@
 
 use ep9_bytecode::{BigIntConst, UnitString};
 use oxc_ast::ast::{PropertyKey, RegExpFlags, TemplateElementValue};
+use oxc_ast::match_expression;
 
 /// A property name known at compile time.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,20 +107,39 @@ fn small_integer_name(v: f64) -> Option<UnitString> {
     Some(UnitString::new(&format!("{}", v as u64)))
 }
 
-/// The property name of a non-computed key, if it is known at compile time. Numeric keys other
-/// than small non-negative integers are left to `ToName` at run time.
+/// The property name of a key, if it is known at compile time: an identifier, a string, or a
+/// small non-negative integer, non-computed (`a`, `"a"`, `1`) or computed (`["a"]`, `[1]`:
+/// `ToPropertyKey` of a primitive literal gives the same string). Other numeric keys (`1.5`,
+/// `1e21`), BigInt keys (`1n`) and every other computed key are left to `ToName` at run time.
+///
+/// oxc 0.160.0: a non-computed literal key is its own variant (`StaticStringLiteral`,
+/// `StaticNumericLiteral`, `StaticBigIntLiteral`), a computed key an `Expression` variant. The
+/// match names every variant (no `_` arm), so a new key form fails the build here.
 pub(crate) fn property_name(key: &PropertyKey<'_>) -> Option<PropertyName> {
     match key {
         PropertyKey::StaticIdentifier(id) => {
             Some(PropertyName::Static(UnitString::new(id.name.as_str())))
         }
-        PropertyKey::PrivateIdentifier(_) => None,
-        PropertyKey::StringLiteral(s) => Some(PropertyName::Static(js_text(
+        PropertyKey::StaticStringLiteral(s) => Some(PropertyName::Static(js_text(
             s.value.as_str(),
             s.value.encode_utf16(),
         ))),
-        PropertyKey::NumericLiteral(n) => small_integer_name(n.value).map(PropertyName::Static),
-        _ => None,
+        PropertyKey::StaticNumericLiteral(n) => {
+            small_integer_name(n.value).map(PropertyName::Static)
+        }
+        PropertyKey::StaticBigIntLiteral(_) | PropertyKey::PrivateIdentifier(_) => None,
+        match_expression!(PropertyKey) => {
+            if let PropertyKey::StringLiteral(s) = key {
+                Some(PropertyName::Static(js_text(
+                    s.value.as_str(),
+                    s.value.encode_utf16(),
+                )))
+            } else if let PropertyKey::NumericLiteral(n) = key {
+                small_integer_name(n.value).map(PropertyName::Static)
+            } else {
+                None
+            }
+        }
     }
 }
 

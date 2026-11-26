@@ -223,19 +223,12 @@ impl<'a> FnGen<'a, '_> {
         p: &'a PropertyDefinition<'a>,
         b: BindingId,
     ) -> Gen {
-        match (literal::property_name(&p.key), p.key.as_expression()) {
-            (Some(PropertyName::Static(name)), _) => {
+        match literal::property_name(&p.key) {
+            Some(PropertyName::Static(name)) => {
                 let k = self.b.string_constant(name);
                 self.b.lda_constant(k);
             }
-            (None, Some(e)) => {
-                self.expr(e)?;
-                self.expr_pos(e.span().start);
-                self.b.to_name();
-            }
-            (None, None) => {
-                return Err(super::internal("a computed key that is not an expression"));
-            }
+            None => self.key_to_name(&p.key)?,
         }
         self.store_binding_init(b);
         Ok(())
@@ -414,7 +407,7 @@ impl<'a> FnGen<'a, '_> {
             match e {
                 ClassElement::PropertyDefinition(p) => {
                     let key_slot =
-                        if p.computed {
+                        if p.key.is_computed() {
                             next_field += 1;
                             Some(field_keys.get(next_field - 1).copied().ok_or_else(|| {
                                 super::internal("no slot for a computed field key")
@@ -476,7 +469,7 @@ impl<'a> FnGen<'a, '_> {
             self.b
                 .define_keyed_own_property(this, key, DEFINE_PRIVATE, s);
         } else if let (false, Some(PropertyName::Static(name))) =
-            (p.computed, literal::property_name(&p.key))
+            (p.key.is_computed(), literal::property_name(&p.key))
         {
             value(self, Some(name.clone()))?;
             let k = self.b.string_constant(name);

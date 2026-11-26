@@ -5,9 +5,20 @@
 # usage: sync_dep <name> <git-url>; caller sets: set -euo pipefail; root=...
 #        fork_attest <name>...; caller sets: root=... (FORK-CHECKOUT-ATTEST; below)
 patch_hash() { { for p in "$1"/*.patch; do [ -e "$p" ] && cat "$p"; done; true; } | git hash-object --stdin; }
+# patch_dir NAME REV: the patch set of the pin REV. third_party/patches/NAME/REV when that folder
+# exists (a pin with its own set beside the files of the pin before it: the oxc 0.160.0 scout
+# keeps the 0.158.0 files as they are), else third_party/patches/NAME.
+patch_dir() {
+  if [ -d "$root/third_party/patches/$1/$2" ]; then
+    printf '%s\n' "$root/third_party/patches/$1/$2"
+  else
+    printf '%s\n' "$root/third_party/patches/$1"
+  fi
+}
 sync_dep() {
-  local name=$1 url=$2 dir="$root/third_party/$1" pdir="$root/third_party/patches/$1" rev want
+  local name=$1 url=$2 dir="$root/third_party/$1" pdir rev want
   rev="$(tr -d '[:space:]' < "$root/third_party/$name.commit")"
+  pdir="$(patch_dir "$name" "$rev")"
   want="$rev $(patch_hash "$pdir")"
   [ -d "$dir/.git" ] || { git init -q "$dir"; git -C "$dir" remote add origin "$url"; }
   git -C "$dir" config core.autocrlf false           # LF on every OS: .gitattributes stops at this work tree
@@ -61,10 +72,11 @@ pinned_tree() {
 fork_attest() {
   local name dir pdir rev state out='' rc=0
   for name in "$@"; do
-    dir="$root/third_party/$name" pdir="$root/third_party/patches/$name" state=absent
+    dir="$root/third_party/$name" state=absent
     if [ -d "$dir/.git" ]; then
       state=stale
       rev="$(tr -d '[:space:]' < "$root/third_party/$name.commit" 2>/dev/null || true)"
+      pdir="$(patch_dir "$name" "$rev")"
       if [ -n "$rev" ] && [ "$(cat "$dir/.ep9-stamp" 2>/dev/null || true)" = "$rev $(patch_hash "$pdir")" ] &&
         pinned_tree "$dir" "$rev" "$pdir"; then
         state=pinned

@@ -39,6 +39,27 @@ third_party/oxc/                    checkout + patches                          
   Then the pin moves to the vcs commit of the new package, 0001 is made again from the new
   package manifest, and each other patch is ported to the new sources.
 
+## The 0.160.0 scout (a side branch, never merged)
+
+On the scout branch the pin is `87e38f3270b00341695e02e8aaf681e9e985e4a3`, the commit that
+`.cargo_vcs_info.json` of the crates.io oxc_parser 0.160.0 package names; its
+`crates/oxc_parser/src` equals the package's `src` (`diff -r`: no difference). The 2 files above
+stay as they are (the set of the 0.158.0 pin). The set of the new pin is the folder named by it,
+`87e38f3270b00341695e02e8aaf681e9e985e4a3/`: `scripts/sync-lib.sh` (`patch_dir`) takes
+`third_party/patches/<name>/<pin>/` when that folder exists, else this folder.
+
+- `0001-parser-published-manifest.patch`: made again from the 0.160.0 package manifest (2 more
+  allocator features, `brands` and `buffered_vec`; the authors entry drops the e-mail address).
+- `0002-parser-recursion-check.patch`: the 0.158.0 patch moved by a 3-way rebase (conflicts:
+  `js/arrow.rs`, where `cover_binding_as_expression` and its site are gone; `jsx/mod.rs`, where
+  `parse_jsx_element` now parses the name and calls `parse_jsx_element_rest`, and the site stays
+  at its start; `lib.rs`, `ParserImpl::new`), plus 4 new sites in `js/grammar.rs`: the 2 checks of
+  a cover list at `=>` (`check_cover_binding`, `check_cover_binding_target`, both `&self`: the
+  site returns `Err(self.recursion_stopped_error())`, a new `&self` helper that sets the stop
+  flag) and the 2 conversions after them (`cover_expression_to_binding_pattern`,
+  `cover_assignment_target_to_binding_pattern`). 25 sites at 0.160.0: 23 checks and 2 loops.
+  The test gets one case for the new walks (`a_stop_in_each_cover_walk_stops_the_parse`).
+
 ## Rules
 
 - **Sync before cargo.** Every cargo command in the 4 workspaces needs `third_party/oxc`, because

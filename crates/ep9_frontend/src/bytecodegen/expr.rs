@@ -13,6 +13,7 @@ use oxc_ast::ast::{
     TaggedTemplateExpression, TemplateLiteral, UnaryExpression, UnaryOperator, UpdateExpression,
     UpdateOperator,
 };
+use oxc_ast::match_expression;
 use oxc_span::{GetSpan, Span};
 
 use super::func::{FnGen, Gen};
@@ -529,7 +530,7 @@ impl<'a, 's> FnGen<'a, 's> {
                     let ObjectPropertyKind::ObjectProperty(p) = p else {
                         return None;
                     };
-                    if p.kind != PropertyKind::Init || p.computed || p.method {
+                    if p.kind != PropertyKind::Init || p.key.is_computed() || p.method {
                         return None;
                     }
                     let key = literal::property_name(&p.key)?;
@@ -674,7 +675,7 @@ impl<'a, 's> FnGen<'a, 's> {
             let ObjectPropertyKind::ObjectProperty(p) = &props[i] else {
                 break;
             };
-            if p.kind != PropertyKind::Init || p.computed {
+            if p.kind != PropertyKind::Init || p.key.is_computed() {
                 break;
             }
             let Some(PropertyName::Static(key)) = literal::property_name(&p.key) else {
@@ -787,7 +788,7 @@ impl<'a, 's> FnGen<'a, 's> {
         let name = literal::property_name(&p.key);
         // `__proto__: v` sets the prototype.
         if p.kind == PropertyKind::Init
-            && !p.computed
+            && !p.key.is_computed()
             && !p.method
             && !p.shorthand
             && matches!(&name, Some(PropertyName::Static(k)) if literal::is_proto_key(k))
@@ -864,18 +865,52 @@ impl<'a, 's> FnGen<'a, 's> {
                 let k = self.b.string_constant(name);
                 self.b.lda_constant(k).star(r);
             }
-            _ => {
-                let Some(e) = key.as_expression() else {
-                    if let PropertyKey::PrivateIdentifier(p) = key {
-                        return self.private_key_into(p, r);
-                    }
-                    return self.unsupported("private names", key.span());
-                };
-                self.expr(e)?;
-                self.expr_pos(e.span().start);
-                self.b.to_name().star(r);
+            None => {
+                if let PropertyKey::PrivateIdentifier(p) = key {
+                    return self.private_key_into(p, r);
+                }
+                self.key_to_name(key)?;
+                self.b.star(r);
             }
         }
+        Ok(())
+    }
+
+    /// `ToName(key)` in the accumulator, for a key with no name at compile time
+    /// ([`literal::property_name`] is `None`): the key evaluated as an expression, then ToName.
+    /// A non-computed numeric or BigInt key (`1.5`, `1n`; its own variant since oxc 0.160.0)
+    /// is loaded as `expr` loads the same literal. No `_` arm: a new key form fails the build.
+    pub(crate) fn key_to_name(&mut self, key: &'a PropertyKey<'a>) -> Gen {
+        match key {
+            PropertyKey::StaticNumericLiteral(n) => {
+                self.enter(n.span)?;
+                self.number(n.value);
+                self.leave();
+                self.expr_pos(n.span.start);
+            }
+            PropertyKey::StaticBigIntLiteral(n) => {
+                self.enter(n.span)?;
+                let k = self
+                    .b
+                    .bigint_constant(literal::bigint_from_decimal(n.value.as_str()));
+                self.b.lda_constant(k);
+                self.leave();
+                self.expr_pos(n.span.start);
+            }
+            PropertyKey::StaticIdentifier(_)
+            | PropertyKey::StaticStringLiteral(_)
+            | PropertyKey::PrivateIdentifier(_) => {
+                return Err(super::internal(
+                    "ToName of a key with a name or a private name",
+                ));
+            }
+            match_expression!(PropertyKey) => {
+                let e = key.to_expression();
+                self.expr(e)?;
+                self.expr_pos(e.span().start);
+            }
+        }
+        self.b.to_name();
         Ok(())
     }
 

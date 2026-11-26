@@ -1,0 +1,964 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ep9
+Subject: [PATCH] oxc_parser: an opt-in recursion check in ParserConfig
+
+A deep input (`[[[[...]]]]`, `!!!!...x`, `{{{{...}}}}`, `<a><a>...`)
+makes the recursive-descent parser recurse once per level, and a deep
+enough input ends the process with a native stack overflow. A caller
+cannot stop that from outside the parse (issue oxc-project/oxc#21953).
+
+This adds a check that a config can turn on, with no cost when it is
+off:
+
+- `ParserConfig::CHECKS_RECURSION` (default `false`) and
+  `ParserConfig::may_recurse(&self) -> bool` (default `true`). The
+  built-in configs keep the defaults, so every site compiles away for
+  them. A config that sets `CHECKS_RECURSION = true` gives the body,
+  for example "the stack pointer is above a limit".
+- 23 sites, one at each recursion entry that the call graph needs (17
+  token-driven: assignment expression, unary, update, await, binary
+  rest, private-in, primary (after the identifier fast path),
+  statement list item, binding pattern, TS type, non-array type, type
+  operator, `is_start_of_type`, type assertion, namespace declaration,
+  JSX element, JSX fragment; 6 walks over a built subtree:
+  `AssignmentTarget::cover`, `SimpleAssignmentTarget::cover`, the 2
+  checks of a cover list at `=>` (`check_cover_binding`,
+  `check_cover_binding_target`) and the 2 conversions after them
+  (`cover_expression_to_binding_pattern`,
+  `cover_assignment_target_to_binding_pattern`)). A site is
+  `if C::CHECKS_RECURSION && !self.config.may_recurse() { return
+  self.recursion_stopped(); }`; `recursion_stopped` sets a fatal
+  error, as `fatal_error` does. The 2 checks take `&self` and return
+  their error: there the site is `{ return
+  Err(self.recursion_stopped_error()); }`, which sets the stop flag
+  and gives the error to the caller.
+- 2 walks become loops (`set_pure_on_call_or_new_expr` down a member
+  chain, `jsx_member_expression_eq` down a JSX name chain): a member
+  chain is built by a loop, so it must use no stack per member.
+- The stop is sticky: `rewind` restores the fatal error of its
+  checkpoint and so can drop the stop. `ParserImpl::stack_limit_hit`
+  (a `Cell<bool>`, not in the checkpoint) keeps it, and the exits of
+  `parse` and `parse_expression` read it: then the result is one
+  "Maximum call stack size exceeded" error, a program with no body,
+  `fatal_error = true`, and the new `ParserReturn::stack_limit_hit`
+  (the struct is `#[non_exhaustive]`).
+
+The check does not bound the regular expression parser when
+`ParseOptions::parse_regular_expression` is on; that needs 2 more
+sites in oxc_regular_expression.
+
+Test: tests/recursion_check.rs (a deep input of each form stops with
+one error; a stop at any one entry survives every rewind; a stop at
+any entry of an arrow head, in the list, in a check or conversion
+walk or in the body, stops the parse; a config that checks and goes
+on gives the result of one that does not; a lexer error before the
+stop; the 2 loops on a 1 MiB thread).
+
+Upstream: issue oxc-project/oxc#21953; the PR text draft is
+docs/upstream/oxc-parser-recursion-check.md of the ep9 repository
+(not sent).
+---
+ crates/oxc_parser/src/config.rs            |  29 ++-
+ crates/oxc_parser/src/diagnostics.rs       |   6 +
+ crates/oxc_parser/src/error_handler.rs     |  42 ++++
+ crates/oxc_parser/src/js/binding.rs        |   3 +
+ crates/oxc_parser/src/js/expression.rs     |  70 ++++--
+ crates/oxc_parser/src/js/grammar.rs        |  18 ++
+ crates/oxc_parser/src/js/statement.rs      |   3 +
+ crates/oxc_parser/src/jsx/mod.rs           |  48 ++--
+ crates/oxc_parser/src/lib.rs               |  47 +++-
+ crates/oxc_parser/src/ts/statement.rs      |   6 +
+ crates/oxc_parser/src/ts/types.rs          |  12 +
+ crates/oxc_parser/tests/recursion_check.rs | 269 +++++++++++++++++++++
+ 12 files changed, 509 insertions(+), 44 deletions(-)
+ create mode 100644 crates/oxc_parser/tests/recursion_check.rs
+
+diff --git a/crates/oxc_parser/src/config.rs b/crates/oxc_parser/src/config.rs
+index 94b2960a..3467187b 100644
+--- a/crates/oxc_parser/src/config.rs
++++ b/crates/oxc_parser/src/config.rs
+@@ -27,7 +27,8 @@ use crate::lexer::{ByteHandler, ByteHandlers, byte_handler_tables};
+ /// * If your application uses only a specific set of options, use a static config.
+ /// * If your application uses multiple sets of options, probably a runtime config is preferable.
+ ///
+-/// At present the only option controlled by `ParserConfig` is whether to parse with or without tokens.
++/// At present `ParserConfig` controls whether to parse with or without tokens, and whether the
++/// parser asks the config before each recursion ([`ParserConfig::may_recurse`]).
+ /// Other options will be added in future.
+ ///
+ /// You can also create your own config by implementing [`ParserConfig`] on a type.
+@@ -44,6 +45,32 @@ pub trait ParserConfig: Default + 'static {
+ 
+     /// Get [`LexerConfig`] for this [`ParserConfig`].
+     fn lexer_config(&self) -> Self::LexerConfig;
++
++    /// `true` if the parser calls [`may_recurse`] at each recursion entry.
++    ///
++    /// Default: `false`. Then no check is compiled in, and the parse has no cost from it.
++    ///
++    /// [`may_recurse`]: ParserConfig::may_recurse
++    const CHECKS_RECURSION: bool = false;
++
++    /// Asked at each recursion entry of the parser (a function that the parser can enter again
++    /// before it returns, through nested source), when [`CHECKS_RECURSION`] is `true`.
++    ///
++    /// Return `false` to stop the parse, for example when the native stack is near its end:
++    /// compare the stack pointer with a limit. Then the parse ends with one fatal
++    /// "Maximum call stack size exceeded" error and [`ParserReturn::stack_limit_hit`] is `true`.
++    /// The parser does not ask again after the parse ends, but it can ask again before that (after
++    /// a rewind of a speculative parse), so a config that returned `false` should keep returning
++    /// `false` to stop at once.
++    ///
++    /// Default: `true` (never stop).
++    ///
++    /// [`CHECKS_RECURSION`]: ParserConfig::CHECKS_RECURSION
++    /// [`ParserReturn::stack_limit_hit`]: crate::ParserReturn::stack_limit_hit
++    #[inline(always)]
++    fn may_recurse(&self) -> bool {
++        true
++    }
+ }
+ 
+ /// Parser config for parsing without tokens (default).
+diff --git a/crates/oxc_parser/src/diagnostics.rs b/crates/oxc_parser/src/diagnostics.rs
+index 1632db35..b58a97f2 100644
+--- a/crates/oxc_parser/src/diagnostics.rs
++++ b/crates/oxc_parser/src/diagnostics.rs
+@@ -94,6 +94,12 @@ parser_diagnostics! {
+         OxcDiagnostic::error(MAX_LEN_ERROR)
+     };
+ 
++    stack_limit(span: Span) => {
++        OxcDiagnostic::error("Maximum call stack size exceeded")
++            .with_label(span)
++            .with_help("The source nests deeper than the parser config allows")
++    };
++
+     file_appears_to_be_binary() => {
+         ts_error("1490", "File appears to be binary.")
+     };
+diff --git a/crates/oxc_parser/src/error_handler.rs b/crates/oxc_parser/src/error_handler.rs
+index 2cb15e67..e8da804b 100644
+--- a/crates/oxc_parser/src/error_handler.rs
++++ b/crates/oxc_parser/src/error_handler.rs
+@@ -94,6 +94,48 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         Dummy::dummy(self.allocator())
+     }
+ 
++    /// Stop the parse at a recursion entry, because [`ParserConfig::may_recurse`] returned
++    /// `false`. Sets the stop flag and a fatal error, as [`Self::fatal_error`] does.
++    ///
++    /// A rewind restores the fatal error of its checkpoint, so it can drop this one; the flag stays
++    /// set, and the parse exit reads it (see [`Self::take_stack_limit_error`]).
++    ///
++    /// [`ParserConfig::may_recurse`]: crate::ParserConfig::may_recurse
++    #[cold]
++    #[inline(never)]
++    pub(crate) fn recursion_stopped<T: Dummy<'a>>(&mut self) -> T {
++        self.stack_limit_hit.set(true);
++        let error = diagnostics::stack_limit(self.cur_token().span());
++        self.fatal_error(error)
++    }
++
++    /// Stop the parse at a recursion entry of a check that takes `&self` (a walk over a built
++    /// subtree that returns its error to the caller), because [`ParserConfig::may_recurse`]
++    /// returned `false`. Sets the stop flag and returns the error: the check cannot set a fatal
++    /// error, so its caller reports the error or goes on, and the parse exit reads the flag (see
++    /// [`Self::take_stack_limit_error`]).
++    ///
++    /// [`ParserConfig::may_recurse`]: crate::ParserConfig::may_recurse
++    #[cold]
++    #[inline(never)]
++    pub(crate) fn recursion_stopped_error(&self) -> ParserDiagnostic<'a> {
++        self.stack_limit_hit.set(true);
++        diagnostics::stack_limit(self.cur_token().span())
++    }
++
++    /// At a parse exit: the one diagnostic of a recursion stop, if the flag is set. Takes the
++    /// fatal error (the stop wins over it) and uses its span when it is the stop's own error.
++    pub(crate) fn take_stack_limit_error(&mut self) -> Option<ParserDiagnostic<'a>> {
++        if !self.stack_limit_hit.get() {
++            return None;
++        }
++        let span = match self.fatal_error.take() {
++            Some(FatalError { error: ParserDiagnostic::stack_limit { span }, .. }) => span,
++            _ => self.cur_token().span(),
++        };
++        Some(diagnostics::stack_limit(span))
++    }
++
+     pub(crate) fn has_fatal_error(&self) -> bool {
+         matches!(self.cur_kind(), Kind::Eof | Kind::Undetermined) || self.fatal_error.is_some()
+     }
+diff --git a/crates/oxc_parser/src/js/binding.rs b/crates/oxc_parser/src/js/binding.rs
+index 5a0d67b5..1b3f2e00 100644
+--- a/crates/oxc_parser/src/js/binding.rs
++++ b/crates/oxc_parser/src/js/binding.rs
+@@ -23,6 +23,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+     }
+ 
+     pub(crate) fn parse_binding_pattern(&mut self) -> BindingPattern<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         match self.cur_kind() {
+             Kind::Ident => {
+                 let ident = self.parse_plain_binding_identifier();
+diff --git a/crates/oxc_parser/src/js/expression.rs b/crates/oxc_parser/src/js/expression.rs
+index f0d5f771..e66d4ce3 100644
+--- a/crates/oxc_parser/src/js/expression.rs
++++ b/crates/oxc_parser/src/js/expression.rs
+@@ -262,6 +262,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         lhs_start: u32,
+         lhs_precedence: Precedence,
+     ) -> Expression<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         let left = self.parse_private_identifier();
+         // Check if `in` operator precedence is allowed at current level.
+         // For `1 + #a in b`, when parsing RHS of `+`, lhs_precedence is `Add` which is
+@@ -298,6 +301,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         if self.at(Kind::Ident) {
+             return self.parse_plain_identifier_expression();
+         }
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         let kind = self.cur_kind();
+         match kind {
+             // Fast path: `Ident` is already classified as a valid identifier reference.
+@@ -1301,6 +1307,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+     #[expect(clippy::inline_always)]
+     #[inline(always)]
+     fn parse_update_expression(&mut self, lhs_start: u32) -> Expression<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         let kind = self.cur_kind();
+         // ++ -- prefix update expressions
+         if kind.is_update_operator() {
+@@ -1403,6 +1412,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+     }
+ 
+     fn parse_unary_expression(&mut self) -> Expression<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         let start = self.cur_start();
+         let operator = map_unary_operator(self.cur_kind());
+         self.bump_any();
+@@ -1485,6 +1497,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         lhs_parenthesized: bool,
+         min_precedence: Precedence,
+     ) -> Expression<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         // Pratt Parsing Algorithm
+         // <https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html>
+         let mut lhs = lhs;
+@@ -1682,6 +1697,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         &mut self,
+         allow_return_type_in_arrow_function: bool,
+     ) -> Expression<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         let no_side_effects_comments =
+             self.lexer.trivia_builder.previous_token_no_side_effects_comments();
+         let start = self.cur_start();
+@@ -1939,34 +1957,37 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         }
+     }
+ 
++    /// A loop, not a recursion: a member chain is built by a loop, so its length has no bound
++    /// but the source length, and a walk down it must use no stack per member.
+     fn set_pure_on_call_or_new_expr(expr: &mut Expression<'a>) -> bool {
+-        match expr.get_inner_expression_mut() {
+-            Expression::CallExpression(call_expr) => {
+-                call_expr.pure = true;
+-                true
+-            }
+-            Expression::NewExpression(new_expr) => {
+-                new_expr.pure = true;
+-                true
+-            }
+-            expr @ match_member_expression!(Expression) => {
+-                Self::set_pure_on_call_or_new_expr(expr.to_member_expression_mut().object_mut())
+-            }
+-            Expression::ChainExpression(chain_expr) => match &mut chain_expr.expression {
+-                ChainElement::CallExpression(call_expr) => {
++        let mut expr = expr;
++        loop {
++            match expr.get_inner_expression_mut() {
++                Expression::CallExpression(call_expr) => {
+                     call_expr.pure = true;
+-                    true
++                    return true;
+                 }
+-                element @ match_member_expression!(ChainElement) => {
+-                    Self::set_pure_on_call_or_new_expr(
+-                        element.to_member_expression_mut().object_mut(),
+-                    )
++                Expression::NewExpression(new_expr) => {
++                    new_expr.pure = true;
++                    return true;
+                 }
+-                ChainElement::TSNonNullExpression(non_null_expr) => {
+-                    Self::set_pure_on_call_or_new_expr(&mut non_null_expr.expression)
++                member @ match_member_expression!(Expression) => {
++                    expr = member.to_member_expression_mut().object_mut();
+                 }
+-            },
+-            _ => false,
++                Expression::ChainExpression(chain_expr) => match &mut chain_expr.expression {
++                    ChainElement::CallExpression(call_expr) => {
++                        call_expr.pure = true;
++                        return true;
++                    }
++                    element @ match_member_expression!(ChainElement) => {
++                        expr = element.to_member_expression_mut().object_mut();
++                    }
++                    ChainElement::TSNonNullExpression(non_null_expr) => {
++                        expr = &mut non_null_expr.expression;
++                    }
++                },
++                _ => return false,
++            }
+         }
+     }
+ 
+@@ -2078,6 +2099,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+     /// ``AwaitExpression`[Yield]` :
+     ///     await `UnaryExpression`[?Yield, +Await]
+     fn parse_await_expression(&mut self, lhs_start: u32) -> Expression<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         // Case 1: In await context (async function, module top-level, unambiguous mode top-level)
+         // Always parse as await expression
+         if self.ctx.has_await() {
+diff --git a/crates/oxc_parser/src/js/grammar.rs b/crates/oxc_parser/src/js/grammar.rs
+index a26721f2..6839defb 100644
+--- a/crates/oxc_parser/src/js/grammar.rs
++++ b/crates/oxc_parser/src/js/grammar.rs
+@@ -14,6 +14,9 @@ pub trait CoverGrammar<'a, T, C: Config>: Sized {
+ 
+ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for AssignmentTarget<'a> {
+     fn cover(expr: Expression<'a>, p: &mut ParserImpl<'a, C>) -> Self {
++        if C::CHECKS_RECURSION && !p.config.may_recurse() {
++            return p.recursion_stopped();
++        }
+         match expr {
+             Expression::ArrayExpression(array_expr) => {
+                 let pat = ArrayAssignmentTarget::cover(array_expr.unbox(), p);
+@@ -30,6 +33,9 @@ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for AssignmentTarget<'a>
+ 
+ impl<'a, C: Config> CoverGrammar<'a, Expression<'a>, C> for SimpleAssignmentTarget<'a> {
+     fn cover(expr: Expression<'a>, p: &mut ParserImpl<'a, C>) -> Self {
++        if C::CHECKS_RECURSION && !p.config.may_recurse() {
++            return p.recursion_stopped();
++        }
+         match expr {
+             Expression::Identifier(ident) => {
+                 SimpleAssignmentTarget::AssignmentTargetIdentifier(ident)
+@@ -303,6 +309,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+ 
+     /// Check that `expression` covers a `BindingIdentifier` or a `BindingPattern`.
+     pub(super) fn check_cover_binding(&self, expression: &Expression<'a>) -> CoverCheck<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return Err(self.recursion_stopped_error());
++        }
+         match expression {
+             Expression::Identifier(ident) if !self.is_cover_parenthesized(ident.span.start) => {
+                 Ok(())
+@@ -376,6 +385,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+     /// Check that an assignment target, which an expression was already refined to, covers
+     /// a `BindingIdentifier` or a `BindingPattern`.
+     fn check_cover_binding_target(&self, target: &AssignmentTarget<'a>) -> CoverCheck<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return Err(self.recursion_stopped_error());
++        }
+         match target {
+             AssignmentTarget::AssignmentTargetIdentifier(ident)
+                 if !self.is_cover_parenthesized(ident.span.start) =>
+@@ -452,6 +464,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         &mut self,
+         expression: Expression<'a>,
+     ) -> BindingPattern<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         match expression {
+             Expression::Identifier(ident) => {
+                 BindingPattern::new_binding_identifier(ident.span, ident.name, self)
+@@ -555,6 +570,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         &mut self,
+         target: AssignmentTarget<'a>,
+     ) -> BindingPattern<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         match target {
+             AssignmentTarget::AssignmentTargetIdentifier(ident) => {
+                 BindingPattern::new_binding_identifier(ident.span, ident.name, self)
+diff --git a/crates/oxc_parser/src/js/statement.rs b/crates/oxc_parser/src/js/statement.rs
+index a2a5476f..2c9f2783 100644
+--- a/crates/oxc_parser/src/js/statement.rs
++++ b/crates/oxc_parser/src/js/statement.rs
+@@ -136,6 +136,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         &mut self,
+         stmt_ctx: StatementContext,
+     ) -> Statement<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         let no_side_effects_comments =
+             self.lexer.trivia_builder.previous_token_no_side_effects_comments();
+ 
+diff --git a/crates/oxc_parser/src/jsx/mod.rs b/crates/oxc_parser/src/jsx/mod.rs
+index b80fd77f..b638d2a6 100644
+--- a/crates/oxc_parser/src/jsx/mod.rs
++++ b/crates/oxc_parser/src/jsx/mod.rs
+@@ -143,6 +143,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         start: u32,
+         in_jsx_child: bool,
+     ) -> ArenaBox<'a, JSXFragment<'a>> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         debug_assert!(self.at(Kind::RAngle));
+         self.advance_for_jsx_child();
+         let opening_fragment = JSXOpeningFragment::new(self.end_span(start), self);
+@@ -172,6 +175,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         start: u32,
+         in_jsx_child: bool,
+     ) -> ArenaBox<'a, JSXElement<'a>> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         let name = self.parse_jsx_element_name();
+         self.parse_jsx_element_rest(start, name, in_jsx_child)
+     }
+@@ -661,27 +667,35 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         }
+     }
+ 
++    /// A loop, not a recursion: the name chain `a.b.c` has no bound but the source length, and
++    /// a compare of 2 chains must use no stack per member.
+     fn jsx_member_expression_eq(
+         lhs: &JSXMemberExpression<'a>,
+         rhs: &JSXMemberExpression<'a>,
+     ) -> bool {
+-        if lhs.property.name != rhs.property.name {
+-            return false;
+-        }
+-        match (&lhs.object, &rhs.object) {
+-            (
+-                JSXMemberExpressionObject::IdentifierReference(lhs),
+-                JSXMemberExpressionObject::IdentifierReference(rhs),
+-            ) => lhs.name == rhs.name,
+-            (
+-                JSXMemberExpressionObject::MemberExpression(lhs),
+-                JSXMemberExpressionObject::MemberExpression(rhs),
+-            ) => Self::jsx_member_expression_eq(lhs, rhs),
+-            (
+-                JSXMemberExpressionObject::ThisExpression(_),
+-                JSXMemberExpressionObject::ThisExpression(_),
+-            ) => true,
+-            _ => false,
++        let (mut lhs, mut rhs) = (lhs, rhs);
++        loop {
++            if lhs.property.name != rhs.property.name {
++                return false;
++            }
++            match (&lhs.object, &rhs.object) {
++                (
++                    JSXMemberExpressionObject::IdentifierReference(lhs),
++                    JSXMemberExpressionObject::IdentifierReference(rhs),
++                ) => return lhs.name == rhs.name,
++                (
++                    JSXMemberExpressionObject::MemberExpression(lhs_object),
++                    JSXMemberExpressionObject::MemberExpression(rhs_object),
++                ) => {
++                    lhs = lhs_object;
++                    rhs = rhs_object;
++                }
++                (
++                    JSXMemberExpressionObject::ThisExpression(_),
++                    JSXMemberExpressionObject::ThisExpression(_),
++                ) => return true,
++                _ => return false,
++            }
+         }
+     }
+ }
+diff --git a/crates/oxc_parser/src/lib.rs b/crates/oxc_parser/src/lib.rs
+index 3323fdea..980277f8 100644
+--- a/crates/oxc_parser/src/lib.rs
++++ b/crates/oxc_parser/src/lib.rs
+@@ -64,7 +64,7 @@
+ //!
+ //! See [full linter example](https://github.com/Boshen/oxc/blob/ab2ef4f89ba3ca50c68abb2ca43e36b7793f3673/crates/oxc_linter/examples/linter.rs#L38-L39)
+ 
+-use std::any::Any;
++use std::{any::Any, cell::Cell};
+ 
+ mod ast_builder;
+ pub mod config;
+@@ -219,6 +219,17 @@ pub struct ParserReturn<'a> {
+     /// [`diagnostics`]: ParserReturn::diagnostics
+     pub fatal_error: bool,
+ 
++    /// Whether a recursion check stopped the parse: [`ParserConfig::may_recurse`] returned
++    /// `false`. Then [`fatal_error`] is `true`, [`program`] has no body (its comments stay) and
++    /// [`diagnostics`] holds one error, "Maximum call stack size exceeded".
++    ///
++    /// Always `false` when [`ParserConfig::CHECKS_RECURSION`] is `false` (the default).
++    ///
++    /// [`program`]: ParserReturn::program
++    /// [`diagnostics`]: ParserReturn::diagnostics
++    /// [`fatal_error`]: ParserReturn::fatal_error
++    pub stack_limit_hit: bool,
++
+     /// Whether the file is [flow](https://flow.org).
+     pub is_flow_language: bool,
+ }
+@@ -563,6 +574,13 @@ struct ParserImpl<'a, C: ParserConfig> {
+ 
+     /// Precomputed typescript detection
+     is_ts: bool,
++
++    /// Parser config. Asked at each recursion entry when `C::CHECKS_RECURSION` is `true`.
++    config: C,
++
++    /// Set when [`ParserConfig::may_recurse`] stopped the parse. Not part of a checkpoint:
++    /// a rewind keeps it, and the parse exit reads it.
++    stack_limit_hit: Cell<bool>,
+ }
+ 
+ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
+@@ -572,7 +590,6 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
+     ///
+     /// [`brands`]: oxc_data_structures::brands
+     #[inline]
+-    #[expect(clippy::needless_pass_by_value)]
+     fn new(
+         allocator: &'a Allocator,
+         source_text: &'a str,
+@@ -602,6 +619,8 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
+             ast: ParserAstBuilder::new(allocator),
+             module_record_builder: ModuleRecordBuilder::new(allocator, source_type),
+             is_ts: source_type.is_typescript(),
++            config,
++            stack_limit_hit: Cell::new(false),
+         }
+     }
+ 
+@@ -637,6 +656,9 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
+     fn parse_impl(mut self) -> ParserReturn<'a> {
+         let mut program = self.parse_program();
+         let mut has_fatal_error = false;
++        // A recursion stop wins over every other result (a rewind can drop it from `fatal_error`).
++        let stack_limit_error = self.take_stack_limit_error();
++        let stack_limit_hit = stack_limit_error.is_some();
+ 
+         if let Some(fatal_error) = self.fatal_error.take() {
+             has_fatal_error = true;
+@@ -659,18 +681,32 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
+             self.lexer.errors.clear();
+             self.errors.clear();
+             self.error(overlong_error);
++        } else if let Some(stack_limit_error) = stack_limit_error {
++            has_fatal_error = true;
++            self.lexer.errors.clear();
++            self.lexer.deferred_module_errors.clear();
++            self.errors.clear();
++            self.deferred_script_errors.clear();
++            self.error(stack_limit_error);
++            program = Program::dummy(self.allocator());
++            program.source_type = self.source_type;
++            program.source_text = self.source_text;
+         }
+ 
+         let mut is_flow_language = false;
+         let mut errors = Diagnostics::new();
+         // only check for `@flow` if the file failed to parse.
+-        if (!self.lexer.errors.is_empty() || !self.errors.is_empty())
++        if !stack_limit_hit
++            && (!self.lexer.errors.is_empty() || !self.errors.is_empty())
+             && let Some(error) = self.flow_error()
+         {
+             is_flow_language = true;
+             errors.push(error.into_diagnostic());
+         }
+         let (module_record, mut module_record_errors) = self.module_record_builder.build();
++        if stack_limit_hit {
++            module_record_errors.clear();
++        }
+         if errors.len() != 1 {
+             errors
+                 .reserve(self.lexer.errors.len() + self.errors.len() + module_record_errors.len());
+@@ -718,6 +754,7 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
+             irregular_whitespaces,
+             tokens,
+             fatal_error: has_fatal_error,
++            stack_limit_hit,
+             is_flow_language,
+         }
+     }
+@@ -760,6 +797,10 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
+         if !self.at(Kind::Eof) {
+             self.set_unexpected();
+         }
++        // A recursion stop wins over every other result (a rewind can drop it from `fatal_error`).
++        if let Some(error) = self.take_stack_limit_error() {
++            return Err(error.into_diagnostic().into());
++        }
+         if let Some(FatalError { error, .. }) = self.fatal_error.take() {
+             let error = self.overlong_error().unwrap_or(error);
+             return Err(error.into_diagnostic().into());
+diff --git a/crates/oxc_parser/src/ts/statement.rs b/crates/oxc_parser/src/ts/statement.rs
+index 62d6658d..5406dfe3 100644
+--- a/crates/oxc_parser/src/ts/statement.rs
++++ b/crates/oxc_parser/src/ts/statement.rs
+@@ -546,6 +546,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+         kind: TSNamespaceDeclarationKind,
+         modifiers: &Modifiers,
+     ) -> ArenaBox<'a, TSNamespaceDeclaration<'a>> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         let id = self.parse_binding_identifier();
+         let body = if self.eat(Kind::Dot) {
+             let start = self.cur_start();
+@@ -765,6 +768,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+     }
+ 
+     pub(crate) fn parse_ts_type_assertion(&mut self) -> Expression<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         let start = self.cur_start();
+         self.expect(Kind::LAngle);
+         let type_annotation = self.parse_ts_type();
+diff --git a/crates/oxc_parser/src/ts/types.rs b/crates/oxc_parser/src/ts/types.rs
+index bb965098..f6606008 100644
+--- a/crates/oxc_parser/src/ts/types.rs
++++ b/crates/oxc_parser/src/ts/types.rs
+@@ -19,6 +19,9 @@ use super::{
+ 
+ impl<'a, C: Config> ParserImpl<'a, C> {
+     pub(crate) fn parse_ts_type(&mut self) -> TSType<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         if self.is_start_of_function_type_or_constructor_type() {
+             return self.parse_function_or_constructor_type();
+         }
+@@ -337,6 +340,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+     }
+ 
+     fn parse_type_operator(&mut self, operator: TSTypeOperatorOperator) -> TSType<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         let start = self.cur_start();
+         self.bump_any(); // bump operator
+         let operator_span = self.end_span(start);
+@@ -456,6 +462,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+     }
+ 
+     fn parse_non_array_type(&mut self) -> TSType<'a> {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         match self.cur_kind() {
+             Kind::Any
+             | Kind::Unknown
+@@ -588,6 +597,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
+     }
+ 
+     fn is_start_of_type(&mut self, in_start_of_parameter: bool) -> bool {
++        if C::CHECKS_RECURSION && !self.config.may_recurse() {
++            return self.recursion_stopped();
++        }
+         match self.cur_kind() {
+             kind if kind.is_number() => true,
+             Kind::Any
+diff --git a/crates/oxc_parser/tests/recursion_check.rs b/crates/oxc_parser/tests/recursion_check.rs
+new file mode 100644
+index 00000000..9eeaaa0d
+--- /dev/null
++++ b/crates/oxc_parser/tests/recursion_check.rs
+@@ -0,0 +1,269 @@
++//! The opt-in recursion check of `ParserConfig` (`CHECKS_RECURSION`, `may_recurse`).
++
++use std::cell::Cell;
++
++use oxc_allocator::Allocator;
++use oxc_parser::{
++    Parser,
++    config::{NoTokensLexerConfig, ParserConfig},
++};
++use oxc_span::SourceType;
++
++/// Allows `left` recursion entries, then stops, and stays stopped.
++#[derive(Default)]
++struct Budget {
++    left: Cell<u32>,
++}
++
++impl ParserConfig for Budget {
++    type LexerConfig = NoTokensLexerConfig;
++    const CHECKS_RECURSION: bool = true;
++
++    fn lexer_config(&self) -> NoTokensLexerConfig {
++        NoTokensLexerConfig
++    }
++
++    fn may_recurse(&self) -> bool {
++        let left = self.left.get();
++        if left == 0 {
++            return false;
++        }
++        self.left.set(left - 1);
++        true
++    }
++}
++
++/// Says "stop" once, at entry number `at` (from 1; 0 = never), and "go on" at every other
++/// entry. A rewind after the stop drops its fatal error and the parse goes on, so only the stop
++/// flag can give the result.
++#[derive(Default)]
++struct StopOnce {
++    at: u32,
++    calls: Cell<u32>,
++}
++
++impl ParserConfig for StopOnce {
++    type LexerConfig = NoTokensLexerConfig;
++    const CHECKS_RECURSION: bool = true;
++
++    fn lexer_config(&self) -> NoTokensLexerConfig {
++        NoTokensLexerConfig
++    }
++
++    fn may_recurse(&self) -> bool {
++        let n = self.calls.get() + 1;
++        self.calls.set(n);
++        n != self.at
++    }
++}
++
++struct Outcome {
++    stack_limit_hit: bool,
++    fatal_error: bool,
++    messages: Vec<String>,
++    statements: usize,
++}
++
++fn parse<C: ParserConfig>(source: &str, source_type: SourceType, config: C) -> Outcome {
++    let allocator = Allocator::default();
++    let ret = Parser::new(&allocator, source, source_type).with_config(config).parse();
++    Outcome {
++        stack_limit_hit: ret.stack_limit_hit,
++        fatal_error: ret.fatal_error,
++        messages: ret.diagnostics.iter().map(ToString::to_string).collect(),
++        statements: ret.program.body.len(),
++    }
++}
++
++fn assert_stopped(o: &Outcome, what: &str) {
++    assert!(o.stack_limit_hit, "{what}: no stop");
++    assert!(o.fatal_error, "{what}: not fatal");
++    assert_eq!(o.messages, ["Maximum call stack size exceeded"], "{what}");
++    assert_eq!(o.statements, 0, "{what}: the program has a body");
++}
++
++fn deep(open: &str, mid: &str, close: &str, n: usize) -> String {
++    format!("{}{mid}{}", open.repeat(n), close.repeat(n))
++}
++
++/// One input per recursion form, each `n` levels deep.
++fn deep_inputs(n: usize) -> Vec<(String, SourceType)> {
++    let js = SourceType::mjs();
++    let ts = SourceType::ts();
++    let jsx = SourceType::jsx();
++    vec![
++        (deep("[", "", "]", n), js),
++        (deep("(", "a", ")", n), js),
++        (deep("!", "a", "", n), js),
++        (deep("++", "a", "", n), js),
++        (deep("a ** ", "a", "", n), js),
++        (deep("a = ", "0", "", n), js),
++        (deep("a ? b : ", "c", "", n), js),
++        (deep("new ", "a", "", n), js),
++        (deep("`${", "a", "}`", n), js),
++        (deep("{", "", "}", n), js),
++        (deep("if (a) ", ";", "", n), js),
++        (deep("function f() {", "", "}", n), js),
++        (deep("x => ", "0", "", n), js),
++        (format!("var {} = 0", deep("[", "a", "]", n)), js),
++        (format!("{} = 0", deep("[", "a", "]", n)), js),
++        (format!("({}) = 0", deep("(", "a", ")", n)), js),
++        (format!("({}) => 0", deep("[", "a", "]", n)), js),
++        (format!("({} = b) => 0", deep("[", "a", "]", n)), js),
++        (format!("({}) => 0", deep("{a: ", "b", "}", n)), js),
++        (format!("async function f() {{ {} }}", deep("await ", "a", "", n)), js),
++        (format!("let x: {}", deep("keyof ", "T", "", n)), ts),
++        (format!("let x: {}", deep("(", "T", ")", n)), ts),
++        (format!("let x: {}", deep("{ a: ", "T", " }", n)), ts),
++        (format!("let x: {}", deep("[", "T", "]", n)), ts),
++        (deep("<T>", "a", "", n), ts),
++        (format!("namespace {}a {{}}", "a.".repeat(n)), ts),
++        (deep("<a>", "", "</a>", n), jsx),
++        (deep("<>", "", "</>", n), jsx),
++    ]
++}
++
++#[test]
++fn a_deep_input_stops_with_one_error() {
++    for (source, source_type) in deep_inputs(2000) {
++        let o = parse(&source, source_type, Budget { left: Cell::new(100) });
++        assert_stopped(&o, &source[..source.len().min(40)]);
++    }
++}
++
++#[test]
++fn a_config_that_goes_on_never_stops() {
++    // 20 levels: every site is passed, and any stack is large enough. A config that checks and
++    // always goes on gives the result of a config that does not check (`++ ++a` is an error in
++    // both).
++    for (source, source_type) in deep_inputs(20) {
++        let what = &source[..source.len().min(40)];
++        let plain = parse(&source, source_type, oxc_parser::config::NoTokensParserConfig);
++        let checked = parse(&source, source_type, StopOnce::default());
++        assert!(!plain.stack_limit_hit && !checked.stack_limit_hit, "{what}");
++        assert_eq!(
++            (plain.fatal_error, &plain.messages, plain.statements),
++            (checked.fatal_error, &checked.messages, checked.statements),
++            "{what}"
++        );
++    }
++}
++
++#[test]
++fn the_stop_survives_a_rewind() {
++    // Inputs that the parser reads twice (a lookahead or a speculative parse that is rewound):
++    // arrow heads, TS type arguments and parenthesized types, `async (` heads.
++    let inputs = [
++        ("((a, [b], {c: [d]}) => 0)", SourceType::mjs()),
++        ("async (a = [[b]], ...c) => 0", SourceType::mjs()),
++        ("async ([[a]]) => 0", SourceType::mjs()),
++        ("((a)) ? (b) : (c) => d", SourceType::mjs()),
++        ("let f = <T,>(a: [[T]]) => a", SourceType::tsx()),
++        ("f<A<B<C>>>(x)", SourceType::ts()),
++        ("let x: ((((a)))) = 0", SourceType::ts()),
++        ("let x: ((a: [b]) => c) = 0", SourceType::ts()),
++        ("(a?: [[b]]) => c", SourceType::ts()),
++        ("<a b={[[c]]}><d.e.f></d.e.f></a>", SourceType::jsx()),
++    ];
++    for (source, source_type) in inputs {
++        let total = count_calls(source, source_type);
++        assert!(total > 0, "{source}: no recursion entry");
++        let never = parse(source, source_type, StopOnce::default());
++        assert!(!never.stack_limit_hit && !never.fatal_error, "{source}: {:?}", never.messages);
++        for at in 1..=total {
++            let o = parse(source, source_type, StopOnce { at, calls: Cell::new(0) });
++            assert_stopped(&o, &format!("{source} (stop at entry {at} of {total})"));
++        }
++    }
++}
++
++#[test]
++fn a_stop_in_each_cover_walk_stops_the_parse() {
++    // An arrow head is parsed as a cover list of expressions first; at `=>` 2 walks over the
++    // built list check it (`check_cover_binding`, `check_cover_binding_target`: `&self`, so the
++    // stop is the flag and an error that the caller reports or drops) and 2 walks convert it
++    // (`cover_expression_to_binding_pattern`, `cover_assignment_target_to_binding_pattern`).
++    // A stop at any entry of the parse, in the list, in a walk or in the body, stops the parse.
++    let levels: u32 = 8;
++    let n = levels as usize;
++    let heads = [
++        format!("({})", deep("[", "a", "]", n)),
++        format!("({})", deep("{a: ", "b", "}", n)),
++        format!("({} = b)", deep("[", "a", "]", n)),
++        format!("([...{}])", deep("[", "a", "]", n)),
++        format!("async ({})", deep("[", "a", "]", n)),
++    ];
++    for (i, head) in heads.iter().enumerate() {
++        let arrow = format!("{head} => 0");
++        let total = count_calls(&arrow, SourceType::mjs());
++        if i < 2 {
++            // A literal in `( )` with no `=>` stays an expression: the same entries as the list
++            // of the arrow head. Each walk has an entry per level after them.
++            let list = count_calls(&format!("{head};"), SourceType::mjs());
++            assert!(total >= list + 2 * levels, "{arrow}: {list} then {total} entries");
++        }
++        let never = parse(&arrow, SourceType::mjs(), StopOnce::default());
++        assert!(!never.stack_limit_hit && !never.fatal_error, "{arrow}: {:?}", never.messages);
++        for at in 1..=total {
++            let o = parse(&arrow, SourceType::mjs(), StopOnce { at, calls: Cell::new(0) });
++            assert_stopped(&o, &format!("{arrow} (stop at entry {at} of {total})"));
++        }
++    }
++}
++
++/// The number of recursion entries of a parse that never stops.
++fn count_calls(source: &str, source_type: SourceType) -> u32 {
++    thread_local!(static CALLS: Cell<u32> = const { Cell::new(0) });
++    #[derive(Default)]
++    struct Count;
++    impl ParserConfig for Count {
++        type LexerConfig = NoTokensLexerConfig;
++        const CHECKS_RECURSION: bool = true;
++        fn lexer_config(&self) -> NoTokensLexerConfig {
++            NoTokensLexerConfig
++        }
++        fn may_recurse(&self) -> bool {
++            CALLS.with(|c| c.set(c.get() + 1));
++            true
++        }
++    }
++    CALLS.with(|c| c.set(0));
++    let _ = parse(source, source_type, Count);
++    CALLS.with(Cell::get)
++}
++
++#[test]
++fn the_stop_wins_over_a_lexer_error_at_the_end() {
++    // A lexer error before the deep part: the parse exit keeps `fatal_error` but drops the
++    // fatal message when the lexer has errors at EOF. The flag still gives the stop.
++    let source = format!("'\\u{{110000}}'; {}", deep("[", "", "]", 2000));
++    let o = parse(&source, SourceType::mjs(), Budget { left: Cell::new(100) });
++    assert_stopped(&o, "lexer error first");
++    let o = parse("'\\u{110000}';", SourceType::mjs(), oxc_parser::config::NoTokensParserConfig);
++    assert!(!o.messages.is_empty(), "the lexer error is a recoverable error");
++}
++
++#[test]
++fn chains_use_no_stack_per_member() {
++    // A member chain is built by a loop; the `/*@__PURE__*/` walk down it and the compare of
++    // 2 JSX name chains are loops too, so a long chain fits a small stack.
++    let n = 200_000;
++    let chain = ".a".repeat(n);
++    let inputs = [
++        (format!("/*@__PURE__*/a{chain}"), SourceType::mjs()),
++        (format!("/*@__PURE__*/a(){chain}"), SourceType::mjs()),
++        (format!("<a{chain}></a{chain}>"), SourceType::jsx()),
++    ];
++    for (source, source_type) in inputs {
++        let o = std::thread::Builder::new()
++            .stack_size(1 << 20)
++            .spawn(move || {
++                let o = parse(&source, source_type, oxc_parser::config::NoTokensParserConfig);
++                (o.fatal_error, o.messages)
++            })
++            .unwrap()
++            .join()
++            .unwrap();
++        assert_eq!(o, (false, Vec::<String>::new()));
++    }
++}

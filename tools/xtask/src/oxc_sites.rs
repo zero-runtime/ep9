@@ -239,6 +239,68 @@ const ALLOW: &[Allow] = &[
         "the static initializer calls `ModifierKind::VARIANTS.len()` (2 times) and \
          `kind.as_str().len()`: slice and str `len` (std), run once at compile time",
     ),
+    // oxc 0.160.0 (the 0.160.0 scout): the comment scan of lexer/comment.rs.
+    (
+        "LineCommentScan::find",
+        "LineCommentScan::find",
+        r#"Method(None, "find")"#,
+        1,
+        "`matcher.find(chunk, ..)` with `matcher: M`, `M: ChunkMatcher<LEN>`: the SIMD or SWAR \
+         byte search of a chunk (`Neon::find` .. `Swar::find`), not `CommentScan::find`",
+    ),
+    (
+        "LineCommentScan::find",
+        "BlockCommentScan::find",
+        r#"Method(None, "find")"#,
+        1,
+        "`matcher.find(chunk, ..)` with `matcher: M`, `M: ChunkMatcher<LEN>`: the SIMD or SWAR \
+         byte search of a chunk (`Neon::find` .. `Swar::find`), not `CommentScan::find`",
+    ),
+    (
+        "BlockCommentScan::find",
+        "BlockCommentScan::find",
+        r#"Method(None, "find")"#,
+        2,
+        "`matcher.find(chunk, ..)` (2 times) with `matcher: M`, `M: ChunkMatcher<LEN>`: the SIMD \
+         or SWAR byte search of a chunk, not `CommentScan::find`",
+    ),
+    (
+        "BlockCommentScan::find",
+        "LineCommentScan::find",
+        r#"Method(None, "find")"#,
+        2,
+        "`matcher.find(chunk, ..)` (2 times) with `matcher: M`, `M: ChunkMatcher<LEN>`: the SIMD \
+         or SWAR byte search of a chunk, not `CommentScan::find`",
+    ),
+    // oxc 0.160.0: the byte handler `LIN` reads the token after a line break through the table.
+    // A real call, not name noise, and bounded: `line_break_handler` returns the first byte that
+    // is not ` `, `\t`, `\r` or `\n` (NOT_REGULAR_WHITESPACE_OR_LINE_BREAK_TABLE), and the table
+    // gives `LIN` only for `\r` and `\n`, so the handler that `LIN` calls is never `LIN`: one
+    // level, whatever the source. Every handler stays reached from `Lexer::handle_byte`.
+    (
+        "LIN@lexer/byte_handlers",
+        "NoTokensLexerConfig::byte_handlers",
+        r#"Method(None, "byte_handlers")"#,
+        1,
+        "`lexer.config.byte_handlers()[byte]` after `line_break_handler`: never `LIN` again \
+         (a byte that is not a regular whitespace or line break), so one level",
+    ),
+    (
+        "LIN@lexer/byte_handlers",
+        "RuntimeLexerConfig::byte_handlers",
+        r#"Method(None, "byte_handlers")"#,
+        1,
+        "`lexer.config.byte_handlers()[byte]` after `line_break_handler`: never `LIN` again \
+         (a byte that is not a regular whitespace or line break), so one level",
+    ),
+    (
+        "LIN@lexer/byte_handlers",
+        "TokensLexerConfig::byte_handlers",
+        r#"Method(None, "byte_handlers")"#,
+        1,
+        "`lexer.config.byte_handlers()[byte]` after `line_break_handler`: never `LIN` again \
+         (a byte that is not a regular whitespace or line break), so one level",
+    ),
 ];
 
 /// A call or a use of a name, before it is resolved to nodes.

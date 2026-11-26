@@ -139,7 +139,7 @@ impl<'a> FnGen<'a, '_> {
         for e in &c.body.body {
             let md = match e {
                 ClassElement::MethodDefinition(md) => md,
-                ClassElement::PropertyDefinition(p) if p.computed => {
+                ClassElement::PropertyDefinition(p) if p.key.is_computed() => {
                     let Some(&b) = field_keys.get(next_field) else {
                         return Err(super::internal("no slot for a computed field key"));
                     };
@@ -164,7 +164,7 @@ impl<'a> FnGen<'a, '_> {
             );
             let args = self.temps(if accessor { 4 } else { 3 });
             self.b.mov(home, args.get(0));
-            let static_name = if md.computed {
+            let static_name = if md.key.is_computed() {
                 None
             } else {
                 literal::property_name(&md.key)
