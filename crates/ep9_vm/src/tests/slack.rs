@@ -1203,6 +1203,10 @@ fn ctor_fit_uses_a_chain_count_only_above_8() {
 
 // ---- CTOR-FIT and M-R9: full and ics_only, with and without a loaded unit -------------------
 
+/// A unit variant for `Cx::run_script_with_unit_code`: kind, lowering, entry, length, CPU
+/// bits, fuse refs.
+type Var<'a> = (u8, u8, u32, u32, u64, &'a [u32]);
+
 /// Runs `make()` under `exec` (the first dispatch expansion, no GC stress, feedback threshold
 /// `threshold`), with the native part of its unit loaded (`with_unit`: each function gets a
 /// jitless AotBaseline variant over a text that never runs; the loader picks it under a
@@ -1226,7 +1230,7 @@ fn run_exec(
         iso.register_host_function("print", 1, super::support::print);
         take_output();
         let u = make();
-        let vars: &[(u8, u8, u32, u32, u64, &[u32])] = &[(
+        let vars: &[Var<'_>] = &[(
             DispatchKind::AotBaseline as u8,
             lowering::JITLESS,
             0,
