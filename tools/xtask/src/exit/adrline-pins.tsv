@@ -560,3 +560,4 @@ history	H15-interpreter-dispatch.md	tools/xtask/src/m2_exit.rs:203	| 1b Second r
 # The 10-quality.md fuzz budget text (5 targets, 40 CPU-h) is the budget of its time; d1e0b03c changed fuzz.yml:21 to 6 targets
 # and 48 CPU-h, so the cite keeps the numbers of ac54ea12 (DL M6-ORCH-1566).
 history	10-quality.md	.github/workflows/fuzz.yml:19-21	the `fuzz.yml` default is 5 targets	ac54ea12	^# \(`git status --porcelain --untracked-files=no`\); cpu_hours = the MEASURED run seconds x jobs /$
+history	H02-bytecode-abi.md	crates/ep9_frontend/src/lib.rs:20	Route ABI-DOC-LIB18	0b71026	VerifiedUnit \(ep9_bytecode ABI 6\)$
