@@ -25,6 +25,7 @@
 pub mod jit;
 pub mod linked;
 pub mod shared_mem;
+pub mod simd;
 pub mod spill;
 pub mod stack;
 mod sys;
