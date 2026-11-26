@@ -1791,6 +1791,6 @@ pub use self::typed::SharedBlockRef;
 pub use self::iter::ArrayIterKind;
 // OXC-PERF wave 2 STR-SEARCH-SIMD (H20 part 2): the string searches and the bulk unit copy on
 // the string payload.
-mod strings;
+pub(crate) mod strings;
 // OXC-PERF wave 3 W3-JSON-QUOTE (H20 part 2): the JSON.stringify text on the string payload.
 mod json;

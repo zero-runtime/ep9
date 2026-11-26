@@ -9,7 +9,7 @@
 //! String.fromCharCode    ToUint16 of each argument, in order
 //! String.fromCodePoint   ToNumber of each argument, RangeError past U+10FFFF  (P4)
 //! String.raw             the template's `raw` strings with the substitutions   (P4)
-//! %String.prototype%     charCodeAt; toString, valueOf: thisStringValue
+//! %String.prototype%     charCodeAt (body in ep9_vm, M15-P1); toString, valueOf: thisStringValue
 //!                        (Cx::this_primitive_value)
 //!   string/proto.rs      at, charAt, codePointAt, concat, endsWith, includes, indexOf,
 //!                        lastIndexOf, isWellFormed, toWellFormed, localeCompare (the
@@ -107,7 +107,7 @@ mod def {
 pub const DEFS: &[BuiltinDef] = &[
     BuiltinDef::constructor("String", 1, string), // 0
     BuiltinDef::method("fromCharCode", 1, from_char_code), // 1
-    BuiltinDef::method("charCodeAt", 1, char_code_at), // 2
+    BuiltinDef::method("charCodeAt", 1, ep9_vm::internals::STRING_CHAR_CODE_AT), // 2
     BuiltinDef::method("toString", 0, to_string), // 3
     BuiltinDef::method("valueOf", 0, value_of),   // 4
     BuiltinDef::method("raw", 1, raw),            // 5
@@ -601,50 +601,6 @@ fn raw<'s>(
 }
 
 // ---- %String.prototype% (week 4) -----------------------------------------------------------
-
-/// String.prototype.charCodeAt ( pos ) (§22.1.3.3).
-fn char_code_at<'s>(
-    cx: &mut Cx<'s>,
-    this: Local<'s>,
-    args: Args<'s>,
-    _new_target: Local<'s>,
-) -> JsResult<Local<'s>> {
-    // Fast path (FASTDIFF row `char-code-at`): a String value `this` and an int32 `pos`.
-    // ToString(this) is `this` and ToIntegerOrInfinity(pos) is `pos`, so steps 1-3 run no
-    // user code and the result is the same. Every other shape takes the spec steps below.
-    if let (Some(s), Some(position)) = (this.as_string(), args.get(0).as_int32()) {
-        let size = cx.string_len(s);
-        if position < 0 || position as usize >= size {
-            return Ok(Local::number(f64::NAN));
-        }
-        let s = cx.flatten(s)?;
-        let unit = cx
-            .code_unit_at(s, position as usize)
-            .expect("position < size");
-        return Ok(Local::int32(i32::from(unit)));
-    }
-    // 1. Let O be ? RequireObjectCoercible(this value).
-    if this.is_undefined_or_null() {
-        return Err(cx.throw_type_error("String.prototype.charCodeAt called on null or undefined"));
-    }
-    // 2. Let S be ? ToString(O).
-    let s = cx.to_string(this)?;
-    // 3. Let position be ? ToIntegerOrInfinity(pos).
-    let position = cx.to_integer_or_infinity(args.get(0))?;
-    // 4. Let size be the length of S.
-    let size = cx.string_len(s);
-    // 5. If position < 0 or position ≥ size, return NaN.
-    if position < 0.0 || position >= size as f64 {
-        return Ok(Local::number(f64::NAN));
-    }
-    // 6. Return the Number value for the numeric value of the code unit at index position
-    //    within the String S.
-    let s = cx.flatten(s)?;
-    let unit = cx
-        .code_unit_at(s, position as usize)
-        .expect("position < size");
-    Ok(Local::int32(i32::from(unit)))
-}
 
 /// String.prototype.toString ( ) (§22.1.3.29).
 fn to_string<'s>(

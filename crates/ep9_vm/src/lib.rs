@@ -194,4 +194,13 @@ pub mod internals {
     /// The VM's own builtin table (block 0): for its id golden
     /// (`crates/ep9_vm/tests/golden/vm-builtin-ids.txt`) and table checks.
     pub static VM_BUILTINS: &crate::BuiltinTable = &crate::natives::VM_TABLE;
+    /// The host function of `String.prototype.charCodeAt` (`BuiltinId` 6.2). The builtin
+    /// table of `ep9_builtins` names this const. It is the one use of `internals` in
+    /// `ep9_builtins/src`, for this reason: the arm of `CallProperty1` in the interpreter knows
+    /// the builtin by its function pointer (M15-P1 CHARCODE), so the body is in this crate
+    /// (`abi::strings::char_code_at`, not public), and `abi` gets no new public name (H20
+    /// "Public paths"). The table gets only the pointer: the builtin body reaches the VM only
+    /// through `Cx`, as before.
+    #[doc(hidden)]
+    pub const STRING_CHAR_CODE_AT: crate::HostFn = crate::abi::strings::char_code_at;
 }
