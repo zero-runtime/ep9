@@ -24,7 +24,7 @@ ep9_hints = { path = "../ep9_hints" } # the hint join (hints.rs, H37 A1h item 3)
 
 [dev-dependencies]
 # T-RED (l1.rs tests): the stack bounds of the test thread. Test code only: the crate keeps its
-# dependency list (oxc and ep9_bytecode).
+# dependency list (oxc, ep9_bytecode and ep9_hints).
 ep9_platform = { path = "../ep9_platform" }
 
 [lints]
