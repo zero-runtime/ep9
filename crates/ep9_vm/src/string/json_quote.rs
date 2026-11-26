@@ -24,23 +24,24 @@
 //! copied as they are; a Latin-1 source stays one-byte. A lone surrogate escapes to ASCII, so
 //! it does not force a widen; only a valid pair or another unit above 0xFF does.
 //!
-//! One body per instruction set; [`Kernel::detect`] picks one at run time, once per process
-//! (cached in an atomic). Every body gives the result of [`Path::Scalar`], the per-unit loop
-//! that `ep9_builtins` `json/stringify.rs` `quote` ran before this module (the FASTDIFF
-//! switched-off path):
+//! One body per instruction set; the table, the one CPU detection and the pick are in
+//! `ep9_platform::simd` (rule 116; [`Path`] = `ep9_platform::simd::JsonBody`), and
+//! [`Kernel::detect`] reads the picked body, once per process (cached in an atomic). Every body
+//! gives the result of [`Path::Scalar`], the per-unit loop that `ep9_builtins`
+//! `json/stringify.rs` `quote` ran before this module (the FASTDIFF switched-off path):
 //!
 //! | target | bodies | how the body is picked |
 //! |---|---|---|
-//! | x86-64 | AVX2 (32 bytes), SSE2 (16 bytes; the x86-64 base), SWAR, scalar | `is_x86_feature_detected!("avx2")`; AVX2 only for a chunk of at least 32 units |
-//! | aarch64 | NEON (16 bytes; the aarch64 base), SWAR, scalar | `is_aarch64_feature_detected!("neon")` |
+//! | x86-64 | AVX2 (32 bytes), SSE2 (16 bytes; the x86-64 base), SWAR, scalar | the `AVX2` bit of `ep9_platform::simd`; AVX2 only for a chunk of at least 32 units |
+//! | aarch64 | NEON (16 bytes; the aarch64 base), SWAR, scalar | the `NEON` bit |
 //! | wasm32 | simd128 (16 bytes), SWAR, scalar | at compile time: `cfg(target_feature = "simd128")` |
 //! | other | SWAR, scalar | - |
 //!
 //! No AVX-512 body: the hot strings are short (object keys average 7.4 units in the
 //! json-stringify-inspector payload), so a 64-byte vector has no step to take; backlog.
-//! `EP9_SIMD_JSON` (`scalar`, `swar`, `sse2`, `avx2`, `neon`, `simd128`), read at the first
-//! detect, picks another body for a test run; a body that the CPU or the build does not have
-//! is never picked (the detected one is used).
+//! `EP9_SIMD` (`json=<body>` or a bare body name) and the old `EP9_SIMD_JSON` (`scalar`, `swar`,
+//! `sse2`, `avx2`, `neon`, `simd128`), read at the first pick, pick another body for a test run;
+//! a body that the CPU or the build does not have is never picked (the detected one is used).
 //!
 //! Techniques (M6-ORCH-858: learned, not copied; the escape set is the spec's table):
 //! - One-byte output first, one widen to two-byte: V8 40f4b69c3b
@@ -65,10 +66,10 @@
 //! - The AVX2 length gate in the plain wrapper: memchr 2.7.6
 //!   src/arch/x86_64/avx2/memchr.rs:179-217.
 //!
-//! The file uses only `core` and `std` (no crate item), so a standalone build of it proves the
-//! wasm32 forms: ep9_vm itself does not build for wasm32.
+//! The file uses only `core`, `std` and `ep9_platform::simd` (itself `core` and `std` only), so a
+//! standalone build of the two proves the wasm32 forms: ep9_vm itself does not build for wasm32.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use ep9_platform::simd;
 
 /// The most source units per reserve (a 6x reserve of a long string would be huge).
 pub(crate) const CHUNK: usize = 4096;
@@ -347,84 +348,14 @@ fn reference<S: Copy + Into<u16>>(src: &[S], out: &mut JsonText) {
 
 // ---- the paths and the dispatch ------------------------------------------------------------
 
-/// The quote bodies.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
-pub(crate) enum Path {
-    /// The reference per-unit loop (FASTDIFF off).
-    Scalar = 1,
-    /// u64 lanes: 8 bytes or 4 UTF-16 units per step.
-    Swar = 2,
-    Sse2 = 3,
-    Avx2 = 4,
-    Neon = 5,
-    Simd128 = 6,
-}
-
-impl Path {
-    /// Every path, in order.
-    pub(crate) const ALL: [Path; 6] = [
-        Path::Scalar,
-        Path::Swar,
-        Path::Sse2,
-        Path::Avx2,
-        Path::Neon,
-        Path::Simd128,
-    ];
-
-    /// The `EP9_SIMD_JSON` name of the path.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Path::Scalar => "scalar",
-            Path::Swar => "swar",
-            Path::Sse2 => "sse2",
-            Path::Avx2 => "avx2",
-            Path::Neon => "neon",
-            Path::Simd128 => "simd128",
-        }
-    }
-
-    /// Whether this build and the running CPU can run the path's body.
-    pub(crate) fn available(self) -> bool {
-        match self {
-            Path::Scalar | Path::Swar => true,
-            // SSE2 is part of the x86-64 base.
-            Path::Sse2 => cfg!(target_arch = "x86_64"),
-            Path::Avx2 => avx2_detected(),
-            Path::Neon => neon_detected(),
-            Path::Simd128 => cfg!(all(target_arch = "wasm32", target_feature = "simd128")),
-        }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-fn avx2_detected() -> bool {
-    std::is_x86_feature_detected!("avx2")
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-fn avx2_detected() -> bool {
-    false
-}
-
-#[cfg(target_arch = "aarch64")]
-fn neon_detected() -> bool {
-    std::arch::is_aarch64_feature_detected!("neon")
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-fn neon_detected() -> bool {
-    false
-}
+/// The quote bodies: the JSON table of `ep9_platform::simd`.
+pub(crate) use ep9_platform::simd::JsonBody as Path;
 
 /// A quote body that this CPU can run. The field is private, so a `Kernel` comes only from
 /// [`Kernel::detect`], [`Kernel::scalar`] or [`Kernel::new`], which check the CPU: that check
 /// is what makes the `unsafe` calls of the bodies sound.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Kernel(Path);
-
-/// The detected path (`Path as u8`), 0 before the first detect.
-static DETECTED: AtomicU8 = AtomicU8::new(0);
 
 #[cfg(test)]
 thread_local! {
@@ -445,43 +376,23 @@ pub(crate) fn with_path<R>(p: Path, f: impl FnOnce() -> R) -> Option<R> {
     Some(r)
 }
 
-/// The path for an `EP9_SIMD_JSON` value: that path if this CPU and build have it, else the
-/// best one that they have.
+/// The path for an `EP9_SIMD_JSON` value (with `EP9_SIMD` unset): that path if this CPU and
+/// build have it, else the best one that they have.
+#[cfg(test)]
 pub(crate) fn pick(env: Option<&str>) -> Path {
-    let best = [Path::Avx2, Path::Sse2, Path::Neon, Path::Simd128]
-        .into_iter()
-        .find(|p| p.available())
-        .unwrap_or(Path::Swar);
-    env.and_then(|v| Path::ALL.into_iter().find(|p| p.name() == v))
-        .filter(|p| p.available())
-        .unwrap_or(best)
+    simd::pick(None, env)
 }
 
 impl Kernel {
-    /// The best body for this CPU (or the `EP9_SIMD_JSON` one), detected once per process.
+    /// The best body for this CPU (or the forced one): the JSON pick of `ep9_platform::simd`,
+    /// once per process.
     #[inline]
     pub(crate) fn detect() -> Kernel {
         #[cfg(test)]
         if let Some(p) = FORCED.with(core::cell::Cell::get) {
             return Kernel(p);
         }
-        match DETECTED.load(Ordering::Relaxed) {
-            1 => Kernel(Path::Scalar),
-            2 => Kernel(Path::Swar),
-            3 => Kernel(Path::Sse2),
-            4 => Kernel(Path::Avx2),
-            5 => Kernel(Path::Neon),
-            6 => Kernel(Path::Simd128),
-            _ => Kernel::detect_slow(),
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn detect_slow() -> Kernel {
-        let p = pick(std::env::var("EP9_SIMD_JSON").ok().as_deref());
-        DETECTED.store(p as u8, Ordering::Relaxed);
-        Kernel(p)
+        Kernel(simd::json())
     }
 
     /// The reference body.

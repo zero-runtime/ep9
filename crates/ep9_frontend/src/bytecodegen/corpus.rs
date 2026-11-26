@@ -408,9 +408,20 @@ fn print(report: &mut Report) {
 #[test]
 #[ignore = "corpus check; needs third_party checkouts; run on demand"]
 fn corpus_verifier_clean_and_deterministic() {
+    // The SHA-256 body slot of ep9_bytecode from the SHA256 pick (`EP9_SIMD=sha256=<body>`;
+    // SRC-HASH line 2): unset for the scalar body. The SIMD-CORPUS line names the body used.
+    let body = match ep9_platform::simd::sha256_slot_body() {
+        Some(f) => {
+            assert!(ep9_bytecode::sha256::set_body(f).is_ok(), "slot set before");
+            ep9_platform::simd::sha256().name()
+        }
+        None => "scalar",
+    };
     let files = corpus_files();
     let mut report = run(&files);
     print(&mut report);
+    let (sum, units) = (report.digest(), report.hashes.len());
+    println!("SIMD-CORPUS {body} {sum} {units}");
     // Test-only switch: `EP9_CORPUS_T1_LIST=<file>` writes every LDAR-ELIDE and STAR-DST T1
     // failure, one per line and sorted (the log above prints one example per class).
     if let Some(out) = std::env::var_os("EP9_CORPUS_T1_LIST") {
