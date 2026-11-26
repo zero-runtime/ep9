@@ -17,7 +17,7 @@ Short forms:
 - DL = [docs/decisions-log.md](../decisions-log.md), by row id; DL:n = line n of it at c5a4bc1c. OL = the orchestrator log, by row id M6-ORCH-n (not in the repo).
 - P19 §n = a section of plan v19 (orchestrator copy, not in the repo). V19-Dn = DL M14-PLAN-Dn.
 - LM, LS, LL, LC = the R28 lens notes on the model, the sweep path, the levers and the calendar (not in the repo).
-- TD4:n = line n of the TD-4 summary (one box on `m13-p1`; DL M13-TD4-READ). cg = the x64 TS cachegrind files of the JIT-LEAN gate run (base 0b710261; not in the repo).
+- TD4:n = line n of the TD-4 summary (one box on `m13-p1`; DL M13-TD4-READ). The TD4 cycle shares (e.g. 7.61, 1.06, 1.39, 0.63, 0.68 %) are the mean of the 3 e-jitless cycles records (`rec/*.sym.tsv`), not the medians that the summary prints (e.g. 7.67, 1.35, 0.69). cg = the x64 TS cachegrind files of the JIT-LEAN gate run (base 0b710261; not in the repo).
 - R25 = [25-m2-month13-plan-research.md](25-m2-month13-plan-research.md); R26 = [26-m2-month13-alloc-simd.md](26-m2-month13-alloc-simd.md); R27 = [27-m2-month14-plan-research.md](27-m2-month14-plan-research.md).
 - Sets: core = CTOR-FIT + SHAPE-CACHE. S1 = core + SRC-HASH (the set of the second model read). S2 = S1 + SWEEP-LEAN.
 - Ratios as R27: an A/B gain x1.0nn = t(base) / t(lever). A gate ratio = t(node --jitless) / t(ep9). "pt" = point = 100 x a ratio difference. k = cycles per removed instruction in the set line model. tau = the spread term of the null A/B cells (DL M14-PRE-AB94).
@@ -183,7 +183,7 @@ S2 at center (TS ratio 0.98504 = 1 / 1.015182), 14 guard cells, all LEVER:
 - M: SHARD load 1.00-1.05 for 41 min on both boxes; the build took 5 min (the box summaries and steps.txt of ep9-x86-m14-sweep-1 and -2).
 - D: a half at 4 workers = (28.8 to 57.2 min) / 2 = 14-29 min (G: a box core = a hosted core). At 1 worker it is about 4x = 56-115 min, more than the 40.9 min left. `--threads 4` under the pin gives no gain.
 - G: the exec header line in each half log says "1 worker processes" (not read: the lens rule).
-- M: the CI job test262-gc passes no `--threads` either (`.github/workflows/ci.yml:629-631` at c5a4bc1c) on the hosted 4-CPU runners (`ci.yml:570`). The linux-x64 1/6 job took 28.8 min (m12-p0 tag CI), 57.2 min (m12-p1) and 52.3 min (m13-p1) (the rule-25 tables of those tag CI runs).
+- M: the CI job test262-gc passes no `--threads` either (`.github/workflows/ci.yml:629-631` at c5a4bc1c) on the hosted 4-CPU runners (`ci.yml:570`). The linux-x64 1/6 job took 28.8 min (m12-p0 tag CI), 57.2 min (m12-p1) and 28.3 min (m13-p1) (the rule-25 tables of those tag CI runs).
 - OL M6-ORCH-1682 names the cause from the load line and calls it a (b) defect of the orchestrator design (OL M6-ORCH-1678) and of the box set: neither checked the worker count. It is a record, not a lost box (DL M14-P1-SWEEP-BOX-READ at f87b2936).
 
 ### 3.2 The cheapest correct read in month 15
@@ -237,7 +237,7 @@ S2 at center (TS ratio 0.98504 = 1 / 1.015182), 14 guard cells, all LEVER:
 - NAMED-COUNT lines 2 and 4 price the load probes only; they read NOT MET, so MEGA-LEAN is not in the LEVER-21 list (M; DL M14-P0-NAMED-COUNT-READ).
 - New fact (M: the NAMED-COUNT read file and ic-stats): the store probe at `stub_cache.rs:205` in `SetNamedProperty` has D1mr 9,355,182 on 11,353,077 probes = 0.82 per probe (D1mr / Dr = 0.41 of the store reads).
 - The same price form gives store 111 M + load 139 M cycles = x1.012 (D).
-- Limit: `SetNamedProperty` is 7.61% of cycles and 9.01% of instructions (TD4). So most misses are hidden, and 9.5 cycles per miss is a top bound (G).
+- Limit: `SetNamedProperty` is 7.61% of cycles and 9.01% of instructions (TD4; mean of the 3 e-jitless cycles records, `rec/*.sym.tsv`). So most misses are hidden, and 9.5 cycles per miss is a top bound (G).
 - E: V8 has separate load, store and define stub-cache tables, each with 4,096 + 1,024 entries (`v8/v8@932ddd7ca4` `src/execution/isolate.h:1380-1382`; `src/ic/stub-cache.h:90-93`).
 
 ### 4.4 The rank by est. gain per agent-hour (the A/B values and the hours are G)
@@ -245,8 +245,8 @@ S2 at center (TS ratio 0.98504 = 1 / 1.015182), 14 guard cells, all LEVER:
 | # | Cut | Evidence | A/B low / center / high | agent-h |
 |---|---|---|---|---|
 | 1 | S2: the set + the SWEEP-LEAN x86 re-read (fix the worker count) | x1.014675 x 1.0005 = x1.0152 (D) | x1.015 | 6-8 |
-| 2 | TO-BOOL: a `fast_truthy` arm; a cell that is not a string or a BigInt gives true | `slow::to_boolean` 9,972,499 calls, 24 Ir each (M, cg); TD4 1.06% of cycles, 0.49% of instructions | x1.004 / 1.006 / 1.009 (the header miss may stay) | 3-4 |
-| 3 | CHARCODE: a `charCodeAt` arm in `CallProperty1_cold` for a flat string and an int32 index | 13,307,418 calls (D: `string.rs:606` count / 7); `call_property::<1>` 137 + `char_code_at` 67 Ir per call (M, cg); TD4 1.39 + 0.63 + 0.68% | x1.010 / 1.015 / 1.019, both builds | 8-12 |
+| 2 | TO-BOOL: a `fast_truthy` arm; a cell that is not a string or a BigInt gives true | `slow::to_boolean` 9,972,499 calls, 24 Ir each (M, cg); TD4 (mean of the 3 cycles records) 1.06% of cycles, 0.49% of instructions | x1.004 / 1.006 / 1.009 (the header miss may stay) | 3-4 |
+| 3 | CHARCODE: a `charCodeAt` arm in `CallProperty1_cold` for a flat string and an int32 index | 13,307,418 calls (D: `string.rs:606` count / 7); `call_property::<1>` 137 + `char_code_at` 67 Ir per call (M, cg); TD4 (mean of the 3 cycles records) 1.39 + 0.63 + 0.68% | x1.010 / 1.015 / 1.019, both builds | 8-12 |
 | 4 | MEGA-LEAN load + store | §4.3 | x1.004 / 1.008 / 1.012 | 10-14 |
 | 5 | LIST-FIT (a) | §4.2 | x1.001 / 1.0015 / 1.002 | 4 |
 | 6 | JIT-LEAN variant | §4.1 | jit x1.0018 | 5 |
@@ -386,7 +386,7 @@ A/B need at that t: jit x1.0278 / x1.0244, jitless x1.0107 / x1.0061 (D: exp(ln(
 | O-4 | Does windows-x64 count as x86 for the SWEEP line? | the row of month 14 names the x86 boxes only | plan v20 (P4) |
 | O-5 | What Miri time do 0ab800db and 8386386e add? | `m2m14/*` pushes run no CI | the C1 run |
 | O-6 | Can a JIT-LEAN variant reach 100 M without an earley-boyer cost? | the C2 class form is not designed | a design |
-| O-7 | How many store-probe misses are hidden? | 7.61% of cycles for 9.01% of instructions; 9.5 cycles per miss is a top bound | a box cycle read |
+| O-7 | How many store-probe misses are hidden? | 7.61% of cycles for 9.01% of instructions (mean of the 3 e-jitless cycles records); 9.5 cycles per miss is a top bound | a box cycle read |
 | O-8 | Are the CHARCODE and TO-BOOL gains real? | new cuts, no design, G gains | designs and counts |
 | O-9 | k 14 or 8 guard cells? | it drops named rows | the owner |
 | O-10 | Does plan v20 keep the 15.9 box-h cap? | not given | plan v20 (P10) |
