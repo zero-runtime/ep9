@@ -1,6 +1,6 @@
 # Research artifacts
 
-These are the research harnesses that the plan uses again, the decision inputs that later steps need, and the raw evidence of seven rounds (`vm-lessons/`, `x86-ts-time/`, `m2-stuck/`, `m2-month11-levers/`, `m2-month12-offloop/`, `m2-month13-plan-research/`, `m2-month13-alloc-simd/`). All other harnesses stayed in a session scratchpad and were not kept. The reports in `../` describe their results.
+These are the research harnesses that the plan uses again, the decision inputs that later steps need, and the raw evidence of eight rounds (`vm-lessons/`, `x86-ts-time/`, `m2-stuck/`, `m2-month11-levers/`, `m2-month12-offloop/`, `m2-month13-plan-research/`, `m2-month13-alloc-simd/`, `m2-month14-plan-research/`). All other harnesses stayed in a session scratchpad and were not kept. The reports in `../` describe their results.
 
 | Directory | What it does | Used by |
 |---|---|---|
@@ -15,6 +15,7 @@ These are the research harnesses that the plan uses again, the decision inputs t
 | `m2-month12-offloop/` | The numbers of the 2026-11-25 month-12 round: the off-loop split of the TS gate cell (wall against CPU time, ep9 main-thread GC against node's helper threads), the month-12 lever reads, the Path B series with the read-to-read move, and the L1 parser stack check cost and review (`findings.json` and 4 TSV tables). See [m2-month12-offloop/README.md](m2-month12-offloop/README.md) | [../24-m2-month12-offloop.md](../24-m2-month12-offloop.md); plan v18 |
 | `m2-month13-plan-research/` | The numbers of the 2026-11-25 plan-v18 research round: the month-13 lever forecasts (low / center / high, G8, MERGE odds, cost) against the gate need, and each forecast read against the month-12 end Path B read (`findings.json` and 2 TSV tables). See [m2-month13-plan-research/README.md](m2-month13-plan-research/README.md) | [../25-m2-month13-plan-research.md](../25-m2-month13-plan-research.md); plan v18 |
 | `m2-month13-alloc-simd/` | The sources of the 2026-11-25 month-13 ALLOC route: the lever design for allocation cost and SIMD (7 levers L1-L7, the SIMD sites, the sum), the K1 regroup, the K0, K2 and SHAPE-LOOKUP count notes with their raw outputs and check, the L1 simulation, and the K2 count patch as text only (never applied); with `findings.json` and `levers.tsv`. See [m2-month13-alloc-simd/README.md](m2-month13-alloc-simd/README.md) | [../26-m2-month13-alloc-simd.md](../26-m2-month13-alloc-simd.md); plan v19 |
+| `m2-month14-plan-research/` | The numbers of the 2026-11-26 plan-v19 research round: the month-14 speed sets against the need of the month-13 end read (low / center / high, jit column, G8, the round call), the jit-only gap of TD-4, and each forecast of the round read against the later data (`findings.json` and 2 TSV tables). See [m2-month14-plan-research/README.md](m2-month14-plan-research/README.md) | [../27-m2-month14-plan-research.md](../27-m2-month14-plan-research.md); plan v19 |
 
 ## Build
 

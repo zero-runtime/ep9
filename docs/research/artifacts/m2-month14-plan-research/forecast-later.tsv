@@ -1,0 +1,11 @@
+id	forecast	forecast_source	forecast_mark	later_data	later_source	status
+FC1	FUZZ-H costs about 1.08 box-h	R19P 2.1; IN19 #81	E	64 min = 1.07 box-h	OL M6-ORCH-1635; UL:531	confirmed
+FC2	month 13 uses 6.61 + 1.08 = 7.69 box-h	R19P 0	E	7.68 of 15.9 box-h	OL M6-ORCH-1635	confirmed
+FC3	the FUZZ-H result is not known at the round	IN19 #61; R19S 7	O	PASS, 0 crashes, 4.0067 CPU-h, coverage 4.24% -> 9.87%	OL M6-ORCH-1635; the FUZZ-H ledger row	done (not a forecast)
+FC4	items 5, 7, 9 wait for the exit-inputs run 45713632628	IN19 #13, #56	O	not read at this commit	-	open
+FC5	month 14 ends about 2026-11-27 at the month-13 pace, before 2026-12-08	R19P 4.2; IN19 #100	I	no month-14 phase has run	-	open
+FC6	month-14 exit chance about 10%	R19S 4.4	G	no month-14 box	-	open (a guess)
+FC7	2 sets at center do not fire; 4 sets at center fire	R19S 4.3	D on E	no month-14 box	-	open
+FC8	CTOR-FIT x1.005 / x1.010 / x1.018; RECORD-LEAN jit x1.003 / x1.006 / x1.010	R19S 3.2	E	no month-14 box	-	open
+FC9	JIT-LEAN removes 0.6-1.0 point of the jit extra need	R19M 2.1	E	no design, no box	-	open
+FC10	the jitless cells can pass or fail by a box draw alone	R19S 4.1; R19P 4.1	I	no month-14 read	-	open
