@@ -91,7 +91,7 @@ pub(crate) fn compile_eval_at(
     // E8: the shim text of a JS string (lone surrogates, U+FDD0) -> the parse text.
     let (source, mut shim) = crate::surrogate::decode(source);
     let estimate = crate::prescan::estimate(source.as_bytes(), false);
-    if estimate.depth > PRESCAN_CAP {
+    if estimate.depth > PRESCAN_CAP && !crate::depth::layer0_off() {
         return Err(too_deep(DepthLayer::PreScan, &source, estimate.at));
     }
     let owned = source.into_owned();
@@ -665,7 +665,7 @@ where
     F: for<'f> FnOnce(&FrontEnd<'f>) -> Result<R, CodegenError> + Send + 'static,
 {
     let estimate = crate::prescan::estimate(source.as_bytes(), false);
-    if estimate.depth > PRESCAN_CAP {
+    if estimate.depth > PRESCAN_CAP && !crate::depth::layer0_off() {
         return Err(too_deep(DepthLayer::PreScan, source, estimate.at));
     }
     let owned = source.to_owned();
