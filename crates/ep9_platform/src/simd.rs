@@ -776,3 +776,607 @@ mod arm {
         }
     }
 }
+
+// ---- the sweep bitmaps (SWEEP-LEAN; ALLOC-SET design 1.3; FD L3 (b)) -----------------------
+//
+// ```text
+// SWEEP     scalar, sse2, avx2, avx512-popcnt, neon, simd128    the bodies: here; the caller:
+//           ep9_heap heap.rs Sweeper::sweep_page_with (the lean walk: no zap, no CHECK)
+// sweep()   the pick of this table: once per process, from the bitset and EP9_SIMD (the forms of
+//           the module doc; this table has no old name)
+// sweep_report()   "SIMD-REPORT-SWEEP target=<arch> sweep=<body>"
+// ```
+//
+// One call is one small page of `ep9_heap`: SWEEP_WORDS words of the VO bitmap and of the mark
+// bitmap (64 granules a word), SWEEP_LINES lines (one line = 32 granules = one u32 half of a
+// word, the low half first). For each word w, with v = vo[w], m = mk[w], a = v & m (the live
+// cells) and, per half h (line l = 2w + h), x = the half of a and y = the half of v:
+//
+//   live += popcount(a)          dead += popcount(v & !m)
+//   lines[l] = (x != 0)          a live cell starts in line l
+//   ends[l]  = ((y & !x) < x)    no cell (live or dead) starts after the last live one of line l
+//                                (x != 0 is implied; unsigned compare)
+//   vo[w] = a                    mk[w] = a & keep if v != 0, else mk[w] (left as it was)
+//
+// So every body is 3 pure passes over the words, and the store-backs. The caller then sizes the
+// last live cell of each line l with ends[l] and no live start in line l + 1 (it may reach into
+// the next lines): that fix stays scalar and reads live cells only.
+
+/// Words of one bitmap of a small page (`ep9_heap`: 256 KiB pages, 8-byte granules).
+pub const SWEEP_WORDS: usize = 512;
+/// Lines of a small page: 2 per bitmap word.
+pub const SWEEP_LINES: usize = 2 * SWEEP_WORDS;
+
+/// What one sweep bitmap pass counted.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct SweepCounts {
+    /// Bits of `vo & mk`: the cells kept.
+    pub live: u32,
+    /// Bits of `vo & !mk`: the cells freed.
+    pub dead: u32,
+}
+
+/// A sweep bitmap body (the pass of the section comment above).
+///
+/// # Safety
+///
+/// `vo` and `mk` point to [`SWEEP_WORDS`] u64 each (8-aligned), `lines` and `ends` to
+/// [`SWEEP_LINES`] bytes each; the 4 ranges do not overlap, and no other thread reads or writes
+/// them during the call. The CPU check is not the caller's: [`SweepBody::bitmaps`] hands out a
+/// body only when this CPU and build have it.
+pub type SweepBitmaps =
+    unsafe fn(vo: *mut u64, mk: *mut u64, keep: u64, lines: *mut u8, ends: *mut u8) -> SweepCounts;
+
+/// The bodies of the sweep bitmap pass.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum SweepBody {
+    /// The reference: one word at a time.
+    Scalar = 1,
+    /// x86-64 base: 2 words per step.
+    Sse2 = 2,
+    /// x86-64 AVX2: 4 words per step (population count by nibble table).
+    Avx2 = 3,
+    /// x86-64 AVX-512 VL + VPOPCNTDQ on 256-bit lanes: 4 words per step, mask compares.
+    Avx512Popcnt = 4,
+    /// aarch64 NEON: 4 words per step (`cnt`).
+    Neon = 5,
+    /// wasm32 simd128: 4 words per step (`i8x16.popcnt`); a build fact.
+    Simd128 = 6,
+}
+
+impl SweepBody {
+    /// Every body, in order.
+    pub const ALL: [SweepBody; 6] = [
+        SweepBody::Scalar,
+        SweepBody::Sse2,
+        SweepBody::Avx2,
+        SweepBody::Avx512Popcnt,
+        SweepBody::Neon,
+        SweepBody::Simd128,
+    ];
+
+    /// The `EP9_SIMD` name of the body.
+    pub const fn name(self) -> &'static str {
+        match self {
+            SweepBody::Scalar => "scalar",
+            SweepBody::Sse2 => "sse2",
+            SweepBody::Avx2 => "avx2",
+            SweepBody::Avx512Popcnt => "avx512-popcnt",
+            SweepBody::Neon => "neon",
+            SweepBody::Simd128 => "simd128",
+        }
+    }
+
+    /// Whether this build and the running CPU can run the body.
+    pub fn available(self) -> bool {
+        match self {
+            SweepBody::Scalar => true,
+            // SSE2 is part of the x86-64 base.
+            SweepBody::Sse2 => cfg!(target_arch = "x86_64"),
+            SweepBody::Avx2 => cfg!(target_arch = "x86_64") && has(AVX2),
+            SweepBody::Avx512Popcnt => cfg!(target_arch = "x86_64") && has(AVX512_POPCNT),
+            SweepBody::Neon => cfg!(target_arch = "aarch64") && has(NEON),
+            SweepBody::Simd128 => {
+                cfg!(all(target_arch = "wasm32", target_feature = "simd128")) && has(SIMD128)
+            }
+        }
+    }
+
+    /// The pass of the body, if this CPU and build have it (the only way to get a SIMD body:
+    /// it is handed out only after the check).
+    pub fn bitmaps(self) -> Option<SweepBitmaps> {
+        if !self.available() {
+            return None;
+        }
+        Some(match self {
+            #[cfg(target_arch = "x86_64")]
+            SweepBody::Sse2 => sweep_x86::sse2,
+            #[cfg(target_arch = "x86_64")]
+            SweepBody::Avx2 => sweep_x86::avx2,
+            #[cfg(target_arch = "x86_64")]
+            SweepBody::Avx512Popcnt => sweep_x86::avx512,
+            #[cfg(target_arch = "aarch64")]
+            SweepBody::Neon => sweep_arm::neon,
+            #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+            SweepBody::Simd128 => sweep_wasm::simd128,
+            _ => sweep_scalar,
+        })
+    }
+}
+
+impl Body for SweepBody {
+    const TABLE: &'static str = "sweep";
+    fn all() -> &'static [Self] {
+        &SweepBody::ALL
+    }
+    fn best_order() -> &'static [Self] {
+        &[
+            SweepBody::Avx512Popcnt,
+            SweepBody::Avx2,
+            SweepBody::Sse2,
+            SweepBody::Neon,
+            SweepBody::Simd128,
+        ]
+    }
+    fn fallback() -> Self {
+        SweepBody::Scalar
+    }
+    fn name(self) -> &'static str {
+        SweepBody::name(self)
+    }
+    fn available(self) -> bool {
+        SweepBody::available(self)
+    }
+}
+
+/// The picked body of the SWEEP table (`SweepBody as u8`), 0 before the first pick.
+static SWEEP: AtomicU8 = AtomicU8::new(0);
+
+/// The body of the SWEEP table for this process.
+#[inline]
+pub fn sweep() -> SweepBody {
+    match SWEEP.load(Ordering::Relaxed) {
+        1 => SweepBody::Scalar,
+        2 => SweepBody::Sse2,
+        3 => SweepBody::Avx2,
+        4 => SweepBody::Avx512Popcnt,
+        5 => SweepBody::Neon,
+        6 => SweepBody::Simd128,
+        _ => pick_sweep(),
+    }
+}
+
+/// Picks the SWEEP body from the bitset and `EP9_SIMD`, once per process (two threads may both
+/// pick; they store the same value).
+#[cold]
+#[inline(never)]
+fn pick_sweep() -> SweepBody {
+    let b: SweepBody = pick(std::env::var("EP9_SIMD").ok().as_deref(), None);
+    SWEEP.store(b as u8, Ordering::Relaxed);
+    b
+}
+
+/// The pass of the SWEEP pick of this process.
+#[inline]
+pub fn sweep_bitmaps() -> SweepBitmaps {
+    sweep().bitmaps().unwrap_or(sweep_scalar)
+}
+
+/// One line: the target and the SWEEP body of this process (`SIMD-REPORT-SWEEP target=aarch64
+/// sweep=neon`). A run that forces the body prints it (never inside a timed run).
+pub fn sweep_report() -> String {
+    format!(
+        "SIMD-REPORT-SWEEP target={} sweep={}",
+        std::env::consts::ARCH,
+        sweep().name()
+    )
+}
+
+/// The scalar body (the reference of every other body).
+///
+/// # Safety
+///
+/// The contract of [`SweepBitmaps`].
+pub unsafe fn sweep_scalar(
+    vo: *mut u64,
+    mk: *mut u64,
+    keep: u64,
+    lines: *mut u8,
+    ends: *mut u8,
+) -> SweepCounts {
+    let mut c = SweepCounts::default();
+    for w in 0..SWEEP_WORDS {
+        // SAFETY: w < SWEEP_WORDS and 2w + 1 < SWEEP_LINES: inside the 4 ranges of the contract.
+        unsafe {
+            let v = vo.add(w).read();
+            let m = mk.add(w).read();
+            let a = v & m;
+            c.live += a.count_ones();
+            c.dead += (v & !m).count_ones();
+            for h in 0..2 {
+                let x = (a >> (32 * h)) as u32;
+                let y = (v >> (32 * h)) as u32;
+                lines.add(2 * w + h).write(u8::from(x != 0));
+                ends.add(2 * w + h).write(u8::from(y & !x < x));
+            }
+            vo.add(w).write(a);
+            if v != 0 {
+                mk.add(w).write(a & keep);
+            }
+        }
+    }
+    c
+}
+
+/// Byte i of `SPREAD[m]` is bit i of `m` (8 mask bits to 8 line bytes).
+#[cfg(target_arch = "x86_64")]
+static SPREAD: [u64; 256] = {
+    let mut t = [0u64; 256];
+    let mut m = 0;
+    while m < 256 {
+        let mut i = 0;
+        while i < 8 {
+            if m >> i & 1 != 0 {
+                t[m] |= 1 << (8 * i);
+            }
+            i += 1;
+        }
+        m += 1;
+    }
+    t
+};
+
+#[cfg(target_arch = "x86_64")]
+mod sweep_x86 {
+    use super::{SPREAD, SWEEP_WORDS, SweepCounts};
+    use core::arch::x86_64::{
+        __m128i, __m256i, _mm_and_si128, _mm_andnot_si128, _mm_castsi128_ps, _mm_cmpeq_epi32,
+        _mm_cmpgt_epi32, _mm_loadu_si128, _mm_movemask_ps, _mm_or_si128, _mm_set1_epi32,
+        _mm_set1_epi64x, _mm_setzero_si128, _mm_shuffle_epi32, _mm_storeu_si128, _mm_xor_si128,
+        _mm256_add_epi8, _mm256_add_epi64, _mm256_and_si256, _mm256_andnot_si256,
+        _mm256_blendv_epi8, _mm256_castsi256_ps, _mm256_cmpeq_epi32, _mm256_cmpeq_epi64,
+        _mm256_cmpgt_epi32, _mm256_cmplt_epu32_mask, _mm256_extract_epi64, _mm256_loadu_si256,
+        _mm256_mask_blend_epi64, _mm256_movemask_ps, _mm256_popcnt_epi64, _mm256_sad_epu8,
+        _mm256_set1_epi8, _mm256_set1_epi32, _mm256_set1_epi64x, _mm256_setr_epi8,
+        _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_srli_epi16, _mm256_storeu_si256,
+        _mm256_test_epi32_mask, _mm256_test_epi64_mask, _mm256_xor_si256,
+    };
+
+    /// Writes the 8 line bytes of mask `m` (bit i = line i) at `p`.
+    ///
+    /// # Safety
+    ///
+    /// `p` is valid for 8 byte writes.
+    #[inline(always)]
+    unsafe fn spread8(p: *mut u8, m: u32) {
+        // SAFETY: m < 256 (a movemask or mask of 8 lanes); the caller gives 8 bytes at `p`.
+        unsafe { p.cast::<u64>().write_unaligned(SPREAD[m as usize & 0xff]) };
+    }
+
+    /// The byte population counts of `x` (nibble table).
+    #[target_feature(enable = "avx2")]
+    fn popcnt8(x: __m256i) -> __m256i {
+        let low = _mm256_set1_epi8(0x0f);
+        let lut = _mm256_setr_epi8(
+            0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2,
+            3, 3, 4,
+        );
+        let lo = _mm256_and_si256(x, low);
+        let hi = _mm256_and_si256(_mm256_srli_epi16::<4>(x), low);
+        _mm256_add_epi8(_mm256_shuffle_epi8(lut, lo), _mm256_shuffle_epi8(lut, hi))
+    }
+
+    /// The sum of the 4 u64 lanes of `x` (a count of at most 32768 bits).
+    #[target_feature(enable = "avx2")]
+    fn sum4(x: __m256i) -> u32 {
+        (_mm256_extract_epi64::<0>(x)
+            + _mm256_extract_epi64::<1>(x)
+            + _mm256_extract_epi64::<2>(x)
+            + _mm256_extract_epi64::<3>(x)) as u32
+    }
+
+    /// The SSE2 body: 2 words (4 lines) per step; scalar population counts.
+    ///
+    /// # Safety
+    ///
+    /// The contract of [`super::SweepBitmaps`] (SSE2 is part of the x86-64 base).
+    #[target_feature(enable = "sse2")]
+    pub(super) unsafe fn sse2(
+        vo: *mut u64,
+        mk: *mut u64,
+        keep: u64,
+        lines: *mut u8,
+        ends: *mut u8,
+    ) -> SweepCounts {
+        let mut c = SweepCounts::default();
+        let keepv = _mm_set1_epi64x(keep as i64);
+        let sign = _mm_set1_epi32(i32::MIN);
+        let zero = _mm_setzero_si128();
+        let mut w = 0;
+        while w < SWEEP_WORDS {
+            // SAFETY: w + 2 <= SWEEP_WORDS and 2w + 4 <= SWEEP_LINES: inside the 4 ranges of
+            // the contract; unaligned loads and stores.
+            unsafe {
+                let v = _mm_loadu_si128(vo.add(w).cast::<__m128i>());
+                let m = _mm_loadu_si128(mk.add(w).cast::<__m128i>());
+                let a = _mm_and_si128(v, m);
+                for i in w..w + 2 {
+                    let (vi, mi) = (vo.add(i).read(), mk.add(i).read());
+                    c.live += (vi & mi).count_ones();
+                    c.dead += (vi & !mi).count_ones();
+                }
+                let nz = _mm_cmpeq_epi32(_mm_cmpeq_epi32(a, zero), zero);
+                let rest = _mm_andnot_si128(a, v);
+                let lt = _mm_cmpgt_epi32(_mm_xor_si128(a, sign), _mm_xor_si128(rest, sign));
+                let lm = _mm_movemask_ps(_mm_castsi128_ps(nz)) as u32;
+                let em = _mm_movemask_ps(_mm_castsi128_ps(lt)) as u32;
+                lines
+                    .add(2 * w)
+                    .cast::<u32>()
+                    .write_unaligned(SPREAD[lm as usize] as u32);
+                ends.add(2 * w)
+                    .cast::<u32>()
+                    .write_unaligned(SPREAD[em as usize] as u32);
+                // v == 0 per 64-bit lane: both 32-bit halves equal 0.
+                let z32 = _mm_cmpeq_epi32(v, zero);
+                let z64 = _mm_and_si128(z32, _mm_shuffle_epi32::<0xB1>(z32));
+                let mk_new = _mm_or_si128(
+                    _mm_and_si128(z64, m),
+                    _mm_andnot_si128(z64, _mm_and_si128(a, keepv)),
+                );
+                _mm_storeu_si128(vo.add(w).cast::<__m128i>(), a);
+                _mm_storeu_si128(mk.add(w).cast::<__m128i>(), mk_new);
+            }
+            w += 2;
+        }
+        c
+    }
+
+    /// The AVX2 body: 4 words (8 lines) per step; population counts by nibble table.
+    ///
+    /// # Safety
+    ///
+    /// The contract of [`super::SweepBitmaps`], on a CPU with AVX2.
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn avx2(
+        vo: *mut u64,
+        mk: *mut u64,
+        keep: u64,
+        lines: *mut u8,
+        ends: *mut u8,
+    ) -> SweepCounts {
+        let keepv = _mm256_set1_epi64x(keep as i64);
+        let sign = _mm256_set1_epi32(i32::MIN);
+        let zero = _mm256_setzero_si256();
+        let mut live = zero;
+        let mut dead = zero;
+        let mut w = 0;
+        while w < SWEEP_WORDS {
+            // SAFETY: w + 4 <= SWEEP_WORDS and 2w + 8 <= SWEEP_LINES: inside the 4 ranges of
+            // the contract; unaligned loads and stores.
+            unsafe {
+                let v = _mm256_loadu_si256(vo.add(w).cast::<__m256i>());
+                let m = _mm256_loadu_si256(mk.add(w).cast::<__m256i>());
+                let a = _mm256_and_si256(v, m);
+                let d = _mm256_andnot_si256(m, v);
+                live = _mm256_add_epi64(live, _mm256_sad_epu8(popcnt8(a), zero));
+                dead = _mm256_add_epi64(dead, _mm256_sad_epu8(popcnt8(d), zero));
+                let z = _mm256_cmpeq_epi32(a, zero);
+                let rest = _mm256_andnot_si256(a, v);
+                let lt =
+                    _mm256_cmpgt_epi32(_mm256_xor_si256(a, sign), _mm256_xor_si256(rest, sign));
+                let lm = !(_mm256_movemask_ps(_mm256_castsi256_ps(z)) as u32) & 0xff;
+                let em = _mm256_movemask_ps(_mm256_castsi256_ps(lt)) as u32;
+                spread8(lines.add(2 * w), lm);
+                spread8(ends.add(2 * w), em);
+                let z64 = _mm256_cmpeq_epi64(v, zero);
+                let mk_new = _mm256_blendv_epi8(_mm256_and_si256(a, keepv), m, z64);
+                _mm256_storeu_si256(vo.add(w).cast::<__m256i>(), a);
+                _mm256_storeu_si256(mk.add(w).cast::<__m256i>(), mk_new);
+            }
+            w += 4;
+        }
+        SweepCounts {
+            live: sum4(live),
+            dead: sum4(dead),
+        }
+    }
+
+    /// The AVX-512 VL + VPOPCNTDQ body on 256-bit lanes: 4 words (8 lines) per step; mask
+    /// compares.
+    ///
+    /// # Safety
+    ///
+    /// The contract of [`super::SweepBitmaps`], on a CPU with AVX-512 F, VL and VPOPCNTDQ.
+    #[target_feature(enable = "avx512f,avx512vl,avx512vpopcntdq,avx2")]
+    pub(super) unsafe fn avx512(
+        vo: *mut u64,
+        mk: *mut u64,
+        keep: u64,
+        lines: *mut u8,
+        ends: *mut u8,
+    ) -> SweepCounts {
+        let keepv = _mm256_set1_epi64x(keep as i64);
+        let zero = _mm256_setzero_si256();
+        let mut live = zero;
+        let mut dead = zero;
+        let mut w = 0;
+        while w < SWEEP_WORDS {
+            // SAFETY: w + 4 <= SWEEP_WORDS and 2w + 8 <= SWEEP_LINES: inside the 4 ranges of
+            // the contract; unaligned loads and stores.
+            unsafe {
+                let v = _mm256_loadu_si256(vo.add(w).cast::<__m256i>());
+                let m = _mm256_loadu_si256(mk.add(w).cast::<__m256i>());
+                let a = _mm256_and_si256(v, m);
+                let d = _mm256_andnot_si256(m, v);
+                live = _mm256_add_epi64(live, _mm256_popcnt_epi64(a));
+                dead = _mm256_add_epi64(dead, _mm256_popcnt_epi64(d));
+                let lm = _mm256_test_epi32_mask(a, a) as u32;
+                let em = _mm256_cmplt_epu32_mask(_mm256_andnot_si256(a, v), a) as u32;
+                spread8(lines.add(2 * w), lm);
+                spread8(ends.add(2 * w), em);
+                let nz64 = _mm256_test_epi64_mask(v, v);
+                let mk_new = _mm256_mask_blend_epi64(nz64, m, _mm256_and_si256(a, keepv));
+                _mm256_storeu_si256(vo.add(w).cast::<__m256i>(), a);
+                _mm256_storeu_si256(mk.add(w).cast::<__m256i>(), mk_new);
+            }
+            w += 4;
+        }
+        SweepCounts {
+            live: sum4(live),
+            dead: sum4(dead),
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+mod sweep_arm {
+    use super::{SWEEP_WORDS, SweepCounts};
+    use core::arch::aarch64::{
+        uint8x8_t, uint32x4_t, vaddvq_u8, vand_u8, vandq_u64, vbicq_u32, vbicq_u64, vbslq_u64,
+        vceqzq_u64, vcltq_u32, vcntq_u8, vcombine_u16, vdup_n_u8, vdupq_n_u32, vdupq_n_u64,
+        vld1q_u64, vmovn_u16, vmovn_u32, vreinterpretq_u8_u64, vreinterpretq_u32_u64, vst1_u8,
+        vst1q_u64, vtstq_u32,
+    };
+
+    /// 8 lane masks (0 or all ones; lines 8k..8k+8) to 8 bytes 0 or 1.
+    #[target_feature(enable = "neon")]
+    fn bytes8(lo: uint32x4_t, hi: uint32x4_t) -> uint8x8_t {
+        vand_u8(
+            vmovn_u16(vcombine_u16(vmovn_u32(lo), vmovn_u32(hi))),
+            vdup_n_u8(1),
+        )
+    }
+
+    /// The NEON body: 4 words (8 lines) per step; `cnt` population counts.
+    ///
+    /// # Safety
+    ///
+    /// The contract of [`super::SweepBitmaps`], on a CPU with NEON.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn neon(
+        vo: *mut u64,
+        mk: *mut u64,
+        keep: u64,
+        lines: *mut u8,
+        ends: *mut u8,
+    ) -> SweepCounts {
+        let keepv = vdupq_n_u64(keep);
+        let mut c = SweepCounts::default();
+        let mut w = 0;
+        while w < SWEEP_WORDS {
+            let mut lm = [vdupq_n_u32(0); 2];
+            let mut em = lm;
+            for (k, (lmk, emk)) in lm.iter_mut().zip(em.iter_mut()).enumerate() {
+                let i = w + 2 * k;
+                // SAFETY: i + 2 <= SWEEP_WORDS: inside the 2 bitmaps of the contract.
+                let (v, m) = unsafe { (vld1q_u64(vo.add(i)), vld1q_u64(mk.add(i))) };
+                let a = vandq_u64(v, m);
+                let d = vbicq_u64(v, m);
+                // Each byte count is at most 8, so 16 of them fit a u8.
+                c.live += u32::from(vaddvq_u8(vcntq_u8(vreinterpretq_u8_u64(a))));
+                c.dead += u32::from(vaddvq_u8(vcntq_u8(vreinterpretq_u8_u64(d))));
+                let x = vreinterpretq_u32_u64(a);
+                let y = vreinterpretq_u32_u64(v);
+                *lmk = vtstq_u32(x, x);
+                *emk = vcltq_u32(vbicq_u32(y, x), x);
+                let mk_new = vbslq_u64(vceqzq_u64(v), m, vandq_u64(a, keepv));
+                // SAFETY: as for the loads.
+                unsafe {
+                    vst1q_u64(vo.add(i), a);
+                    vst1q_u64(mk.add(i), mk_new);
+                }
+            }
+            // SAFETY: 2w + 8 <= SWEEP_LINES: inside the 2 line ranges of the contract.
+            unsafe {
+                vst1_u8(lines.add(2 * w), bytes8(lm[0], lm[1]));
+                vst1_u8(ends.add(2 * w), bytes8(em[0], em[1]));
+            }
+            w += 4;
+        }
+        c
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+mod sweep_wasm {
+    use super::{SWEEP_WORDS, SweepCounts};
+    use core::arch::wasm32::{
+        i8x16_narrow_i16x8, i8x16_popcnt, i16x8_narrow_i32x4, i32x4_add, i64x2_eq,
+        i64x2_extract_lane, i64x2_splat, u16x8_extadd_pairwise_u8x16, u32x4_extadd_pairwise_u16x8,
+        u32x4_extract_lane, u32x4_lt, u32x4_ne, u32x4_splat, v128, v128_and, v128_andnot,
+        v128_bitselect, v128_load, v128_store,
+    };
+
+    /// The simd128 body: 4 words (8 lines) per step; `i8x16.popcnt`.
+    ///
+    /// # Safety
+    ///
+    /// The contract of [`super::SweepBitmaps`] (simd128 is on for the whole build).
+    pub(super) unsafe fn simd128(
+        vo: *mut u64,
+        mk: *mut u64,
+        keep: u64,
+        lines: *mut u8,
+        ends: *mut u8,
+    ) -> SweepCounts {
+        let keepv = i64x2_splat(keep as i64);
+        let zero = i64x2_splat(0);
+        let one = u32x4_splat(1);
+        let count =
+            |x: v128| u32x4_extadd_pairwise_u16x8(u16x8_extadd_pairwise_u8x16(i8x16_popcnt(x)));
+        let mut live = zero;
+        let mut dead = zero;
+        let mut w = 0;
+        while w < SWEEP_WORDS {
+            let mut lm = [zero; 2];
+            let mut em = [zero; 2];
+            for k in 0..2 {
+                let i = w + 2 * k;
+                // SAFETY: i + 2 <= SWEEP_WORDS: inside the 2 bitmaps of the contract.
+                let (v, m) = unsafe {
+                    (
+                        v128_load(vo.add(i).cast::<v128>()),
+                        v128_load(mk.add(i).cast::<v128>()),
+                    )
+                };
+                let a = v128_and(v, m);
+                let d = v128_andnot(v, m);
+                live = i32x4_add(live, count(a));
+                dead = i32x4_add(dead, count(d));
+                lm[k] = v128_and(u32x4_ne(a, zero), one);
+                em[k] = v128_and(u32x4_lt(v128_andnot(v, a), a), one);
+                let mk_new = v128_bitselect(m, v128_and(a, keepv), i64x2_eq(v, zero));
+                // SAFETY: as for the loads.
+                unsafe {
+                    v128_store(vo.add(i).cast::<v128>(), a);
+                    v128_store(mk.add(i).cast::<v128>(), mk_new);
+                }
+            }
+            let lb = i8x16_narrow_i16x8(i16x8_narrow_i32x4(lm[0], lm[1]), zero);
+            let eb = i8x16_narrow_i16x8(i16x8_narrow_i32x4(em[0], em[1]), zero);
+            // SAFETY: 2w + 8 <= SWEEP_LINES: inside the 2 line ranges of the contract.
+            unsafe {
+                lines
+                    .add(2 * w)
+                    .cast::<i64>()
+                    .write_unaligned(i64x2_extract_lane::<0>(lb));
+                ends.add(2 * w)
+                    .cast::<i64>()
+                    .write_unaligned(i64x2_extract_lane::<0>(eb));
+            }
+            w += 4;
+        }
+        let sum = |x: v128| {
+            u32x4_extract_lane::<0>(x)
+                + u32x4_extract_lane::<1>(x)
+                + u32x4_extract_lane::<2>(x)
+                + u32x4_extract_lane::<3>(x)
+        };
+        SweepCounts {
+            live: sum(live),
+            dead: sum(dead),
+        }
+    }
+}
