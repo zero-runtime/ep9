@@ -1,0 +1,1691 @@
+handler	jit_ir	jitless_ir	delta_ir
+TestEqual	938422973	804493332	133929641
+GetKeyedProperty_cold	264726026	133310408	131415618
+ep9_vm::interp::dsl::record_pair_next::<76>	129783409	0	129783409
+ep9_vm::string::array_index	144586514	80285811	64300703
+GetKeyedProperty	489931881	439327457	50604424
+CallProperty0	2190097051	2146140873	43956178
+SetKeyedProperty_cold	47256726	23486400	23770326
+CallProperty1	2059191062	2037984506	21206556
+TestEqual_cold	172127857	151319938	20807919
+ep9_vm::interp::dsl::record_call_next::<1>	13083672	0	13083672
+CallProperty	1013926114	1001039502	12886612
+SetKeyedProperty	153073431	140532473	12540958
+CallProperty2	914918154	902596144	12322010
+ForInNext_cold	25933832	22692789	3241043
+ep9_vm::interp::ops::record_call_out	10117931	7359192	2758739
+Add_cold	32167052	29510047	2657005
+CreateClosure_cold	9046868	7114536	1932332
+ep9_vm::interp::scaled::step::<ep9_vm::interp::dsl::S2>	657764572	656496952	1267620
+CallUndefinedReceiver1	45647095	44532881	1114214
+ep9_vm::interp::scaled::step_cold::<ep9_vm::interp::dsl::S2>	375495861	374530690	965171
+TestGreaterThanOrEqual	67863611	67047030	816581
+_int_malloc	28109670	27550225	559445
+ep9_vm::interp::dsl::record_next::<770>	460270	0	460270
+ep9_vm::interp::ops::forward_or_call	468656323	468205667	450656
+CallUndefinedReceiver	28320220	27915996	404224
+__memcmp_avx2_movbe	27275525	27016129	259396
+ep9_vm::interp::dsl::skip_next::<35>	189906	0	189906
+unlink_chunk.isra.0	3000262	2838297	161965
+TestLessThan	350136108	349998444	137664
+CallUndefinedReceiver2	5741982	5649900	92082
+TestGreaterThan	13347493	13278151	69342
+StaInArrayLiteral_cold	114471	47050	67421
+Negate	268467	210070	58397
+ForInPrepare	595791	567420	28371
+JumpLoop	113697513	113679846	17667
+_int_free_merge_chunk	6491670	6479777	11893
+<ep9_vm::unit::LoadedUnit>::load	2108335	2098587	9748
+malloc	10452223	10444462	7761
+<ep9_bytecode::builder::FunctionBuilder>::add_const	4244698	4238034	6664
+<ep9_bytecode::builder::StringTable>::intern	1708778	1703186	5592
+CallUndefinedReceiver0	169477	165796	3681
+hashbrown::map::equivalent_key::<ep9_bytecode::builder::PendingConst, ep9_bytecode::builder::PendingConst, u32>::{closure#0}	625571	621985	3586
+_int_free_maybe_consolidate	2482218	2479111	3107
+<ep9_frontend::scope::collect::Builder>::name	2124328	2121752	2576
+ep9_frontend::scope::analyze_full	5956960	5955456	1504
+<ep9_frontend::scope::collect::Builder>::declare_full	1285427	1284923	504
+<hashbrown::map::HashMap<&str, ep9_frontend::scope::NameId, std::hash::random::RandomState>>::insert	165177	164686	491
+TestLessThanOrEqual_cold	8814	8362	452
+ep9_vm::interp::dsl::record_next::<1027>	432	0	432
+ToNumber_cold	3338	2950	388
+malloc_consolidate	3013729	3013388	341
+ep9_heap::trace::find_cell	41560	41292	268
+Sub	1632831	1632565	266
+<ep9_frontend::scope::collect::Builder>::lookup	4242222	4241994	228
+<alloc::raw_vec::RawVec<ep9_vm::literal_site::NestedArray>>::grow_one	192	0	192
+<ep9_frontend::scope::collect::Builder>::finish_function	182115	181946	169
+free	8780081	8779925	156
+<ep9_heap::heap::Heap>::collect_scanning	54958651	54958564	87
+calloc	1321902	1321828	74
+core::ptr::drop_glue::<ep9_vm::isolate::Isolate>	103484	103410	74
+<alloc::raw_vec::RawVec<ep9_vm::regexp::CacheEntry>>::grow_one	72	0	72
+<ep9_heap::trace::Tracer>::mark	71581483	71581439	44
+ep9_vm::profile::put_key	44	0	44
+_dl_relocate_object	629862	629823	39
+__malloc_arena_thread_freeres	32104	32068	36
+core::str::converts::from_utf8	1691861	1691828	33
+ep9_vm::builtins::check_tables	356587	356557	30
+<hashbrown::raw::RawTable<(ep9_bytecode::builder::Label, u32)>>::reserve_rehash::<hashbrown::map::make_hasher<ep9_bytecode::builder::Label, u32, std::hash::random::RandomState>::{closure#0}>	840337	840313	24
+Sub_cold	515	495	20
+ep9_vm::interp::dsl::record_next::<513>	18	0	18
+<ep9_heap::trace::Tracer>::visit_weak	4178980	4178964	16
+Add	28663392	28663380	12
+Mul	92	80	12
+__strrchr_avx2	39	29	10
+<&usize as core::fmt::Display>::fmt	730	722	8
+<hashbrown::raw::RawTable<(ep9_bytecode::builder::Label, ())>>::reserve_rehash::<hashbrown::map::make_hasher<ep9_bytecode::builder::Label, (), std::hash::random::RandomState>::{closure#0}>	344731	344723	8
+__strncmp_avx2	830	824	6
+(below main)	40	40	0
+<&std::fs::File as alloc::io::read::Read>::read_to_string	100	100	0
+<&str as core::fmt::Display>::fmt	300	300	0
+<<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_lhs_expression_or_higher_impl as core::ops::function::FnOnce<(&mut oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>,)>>::call_once	42655	42655	0
+<[ep9_bytecode::unit::Handler]>::sort_by::<<ep9_bytecode::builder::FunctionBuilder>::finish::{closure#4}>	5453	5453	0
+<alloc::boxed::Box<[u8]> as core::clone::Clone>::clone	3959	3959	0
+<alloc::collections::btree::map::BTreeMap<u32, alloc::collections::btree::set_val::SetValZST>>::insert	92387	92387	0
+<alloc::collections::btree::map::entry::OccupiedEntry<u32, alloc::collections::btree::set_val::SetValZST>>::remove_kv	11712	11712	0
+<alloc::collections::btree::node::BalancingContext<u32, alloc::collections::btree::set_val::SetValZST>>::bulk_steal_right	1087	1087	0
+<alloc::collections::btree::node::BalancingContext<u32, alloc::collections::btree::set_val::SetValZST>>::merge_tracking_child_edge::<alloc::alloc::Global>	7624	7624	0
+<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u32, alloc::collections::btree::set_val::SetValZST, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<u32, alloc::collections::btree::set_val::SetValZST>>::remove_kv::{closure#0}, alloc::alloc::Global>	22607	22607	0
+<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u32, usize, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<u32, usize>>::remove_kv::{closure#0}, alloc::alloc::Global>	2448	2448	0
+<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo>>::remove_kv::{closure#0}, alloc::alloc::Global>	172	172	0
+<alloc::collections::vec_deque::VecDeque<ep9_frontend::bytecodegen::Job>>::grow	16	16	0
+<alloc::ffi::c_str::CString>::_from_vec_unchecked	56	56	0
+<alloc::io::buffered::bufwriter::BufWriter<std::io::stdio::StdoutRaw>>::flush_buf	42	42	0
+<alloc::raw_vec::RawVec<&str>>::grow_one	48	48	0
+<alloc::raw_vec::RawVec<(u32, ep9_heap::roots::Entry)>>::grow_one	240	240	0
+<alloc::raw_vec::RawVec<alloc::boxed::Box<[u32]>>>::grow_one	1272	1272	0
+<alloc::raw_vec::RawVec<alloc::boxed::Box<ep9_vm::function_info::FunctionInfo>>>::grow_one	48	48	0
+<alloc::raw_vec::RawVec<alloc::boxed::Box<str>>>::grow_one	1608	1608	0
+<alloc::raw_vec::RawVec<alloc::vec::Vec<alloc::string::String>>>::grow_one	43704	43704	0
+<alloc::raw_vec::RawVec<core::option::Option<alloc::boxed::Box<[u16]>>>>::grow_one	456	456	0
+<alloc::raw_vec::RawVec<core::option::Option<ep9_bytecode::operand::ConstIndex>>>::grow_one	36096	36096	0
+<alloc::raw_vec::RawVec<core::ptr::non_null::NonNull<ep9_heap::barrier::Slot>>>::grow_one	744	744	0
+<alloc::raw_vec::RawVec<ep9_bytecode::builder::PendingConst>>::grow_one	87072	87072	0
+<alloc::raw_vec::RawVec<ep9_bytecode::decode::Instruction>>::grow_one	2304	2304	0
+<alloc::raw_vec::RawVec<ep9_bytecode::feedback::FeedbackSlotKind>>::grow_one	89496	89496	0
+<alloc::raw_vec::RawVec<ep9_bytecode::unit::Handler>>::grow_one	672	672	0
+<alloc::raw_vec::RawVec<ep9_bytecode::unit::ImportEntry<ep9_bytecode::string::UnitString>>>::grow_one	24	24	0
+<alloc::raw_vec::RawVec<ep9_frontend::bytecodegen::Job>>::grow_one	20976	20976	0
+<alloc::raw_vec::RawVec<ep9_frontend::bytecodegen::regopt::Ev>>::grow_one	62808	62808	0
+<alloc::raw_vec::RawVec<ep9_frontend::bytecodegen::stmt::UsingRegion>>::grow_one	1848	1848	0
+<alloc::raw_vec::RawVec<ep9_frontend::bytecodegen::stmt::UsingResource>>::grow_one	24	24	0
+<alloc::raw_vec::RawVec<ep9_frontend::scope::Binding>>::grow_one	24	24	0
+<alloc::raw_vec::RawVec<ep9_frontend::scope::FunctionInfo>>::grow_one	240	240	0
+<alloc::raw_vec::RawVec<ep9_frontend::scope::Param>>::grow_one	672	672	0
+<alloc::raw_vec::RawVec<ep9_frontend::scope::Reference>>::grow_one	120	120	0
+<alloc::raw_vec::RawVec<ep9_frontend::scope::ScopeId>>::grow_one	61224	61224	0
+<alloc::raw_vec::RawVec<ep9_frontend::scope::ScopeInfo>>::grow_one	24	24	0
+<alloc::raw_vec::RawVec<ep9_frontend::scope::collect::FunctionExtra>>::grow_one	240	240	0
+<alloc::raw_vec::RawVec<ep9_frontend::surrogate::Lone>>::grow_one	40320	40320	0
+<alloc::raw_vec::RawVec<ep9_heap::memory::Chunk>>::grow_one	24	24	0
+<alloc::raw_vec::RawVec<ep9_heap::roots::HandleSlot>>::grow_one	48	48	0
+<alloc::raw_vec::RawVec<ep9_heap::roots::WeakHandle>>::grow_one	24	24	0
+<alloc::raw_vec::RawVec<ep9_vm::array_buffer::Entry>>::grow_one	6624	6624	0
+<alloc::raw_vec::RawVec<ep9_vm::fuse::Subject>>::grow_one	120	120	0
+<alloc::raw_vec::RawVec<oxc_index::IndexVec<oxc_syntax::class::ElementId, oxc_semantic::class::table::Element>>>::grow_one	24	24	0
+<alloc::raw_vec::RawVec<oxc_regular_expression::parser::reader::ast::CodePoint>>::grow_one	2760	2760	0
+<alloc::raw_vec::RawVec<regress::classicalbacktrack::BacktrackInsn<regress::position::IndexPosition>>>::grow_one	48	48	0
+<alloc::raw_vec::RawVec<regress::codepointset::Interval>>::grow_one	888	888	0
+<alloc::raw_vec::RawVec<regress::insn::Insn>>::grow_one	1464	1464	0
+<alloc::raw_vec::RawVec<regress::ir::Node>>::grow_one	2832	2832	0
+<alloc::raw_vec::RawVec<std::sync::mpmc::waker::Entry>>::grow_one	23	23	0
+<alloc::raw_vec::RawVec<u16>>::grow_one	1540	1540	0
+<alloc::raw_vec::RawVec<u32>>::grow_one	107020	107020	0
+<alloc::raw_vec::RawVec<u64>>::grow_one	1152	1152	0
+<alloc::raw_vec::RawVec<usize>>::grow_one	406631	406631	0
+<alloc::raw_vec::RawVecInner>::try_allocate_in	76114	76114	0
+<alloc::rc::Rc<[core::option::Option<alloc::boxed::Box<[u16]>>]>>::drop_slow	304	304	0
+<alloc::rc::Rc<[ep9_vm::stub_cache::Entry; 8192]>>::drop_slow	85	85	0
+<alloc::rc::Rc<core::cell::RefCell<ep9_vm::array_buffer::Table>>>::drop_slow	37	37	0
+<alloc::rc::Rc<core::cell::RefCell<ep9_vm::atoms::AtomTable>>>::drop_slow	15	15	0
+<alloc::rc::Rc<core::cell::RefCell<ep9_vm::regexp::Legacy>>>::drop_slow	23	23	0
+<alloc::rc::Rc<core::cell::RefCell<ep9_vm::regexp::Programs>>>::drop_slow	1655	1655	0
+<alloc::rc::Rc<ep9_vm::regexp::Compiled>>::drop_slow	2953	2953	0
+<alloc::rc::Rc<ep9_vm::runtime::Shared>>::drop_slow	20	20	0
+<alloc::rc::Rc<ep9_vm::symbol::SymbolRoots>>::drop_slow	11	11	0
+<alloc::string::String as core::fmt::Write>::write_str	3993	3993	0
+<alloc::string::String>::from_utf8_lossy	66	66	0
+<alloc::sync::Arc<core::sync::atomic::Atomic<u32>>>::drop_slow	5	5	0
+<alloc::sync::Arc<ep9_frontend::worker::Mailbox>>::drop_slow	16	16	0
+<alloc::sync::Arc<ep9_platform::waiters::Inbox>>::drop_slow	11	11	0
+<alloc::sync::Arc<std::sync::poison::mutex::Mutex<alloc::vec::Vec<alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output = ()> + core::marker::Send>>>>>::drop_slow	28	28	0
+<alloc::sync::Arc<std::thread::lifecycle::Packet<()>>>::drop_slow	29	29	0
+<alloc::sync::Arc<std::thread::lifecycle::Packet<u8>>>::drop_slow	27	27	0
+<alloc::sync::Arc<std::thread::scoped::ScopeData>>::drop_slow	12	12	0
+<alloc::sync::Arc<std::thread::thread::Inner, std::alloc::System>>::drop_slow	44	44	0
+<alloc::vec::Vec<&str> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<&str, core::str::iter::Split<char>>>::from_iter	273600	273600	0
+<alloc::vec::Vec<ep9_bytecode::unit::PositionEntry> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<ep9_bytecode::unit::PositionEntry, core::iter::adapters::map::Map<core::slice::iter::Iter<(u32, u32, bool)>, <ep9_bytecode::builder::FunctionBuilder>::finish::{closure#5}>>>::from_iter	823787	823787	0
+<alloc::vec::Vec<oxc_diagnostics::OxcDiagnostic>>::extend_trusted::<core::iter::adapters::map::Map<alloc::vec::drain::Drain<oxc_parser::diagnostics::ParserDiagnostic>, <oxc_parser::diagnostics::ParserDiagnostic>::into_diagnostic>>	86	86	0
+<bool as alloc::vec::spec_from_elem::SpecFromElem>::from_elem::<alloc::alloc::Global>	34504	34504	0
+<core::bstr::ByteStr as core::fmt::Display>::fmt	51	51	0
+<core::cell::once::OnceCell<ep9_vm::literal_site::SharedSlots>>::try_init::<<core::cell::once::OnceCell<ep9_vm::literal_site::SharedSlots>>::get_or_init<ep9_vm::literal_site::shared_slot::{closure#0}>::{closure#0}, !>	432267	432267	0
+<core::fmt::Formatter>::pad	1440	1440	0
+<core::fmt::Formatter>::pad_integral::write_prefix	210	210	0
+<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write	5651206	5651206	0
+<core::iter::adapters::filter_map::FilterMap<core::iter::adapters::filter::Filter<alloc::vec::into_iter::IntoIter<(u32, u32)>, <ep9_vm::literal_site::SharedSlots>::with_plans::{closure#0}>, <ep9_vm::literal_site::SharedSlots>::with_plans::{closure#1}> as core::iter::traits::iterator::Iterator>::next	759	759	0
+<core::iter::adapters::peekable::Peekable<alloc::vec::into_iter::IntoIter<u32>> as core::clone::Clone>::clone	205	205	0
+<core::iter::adapters::take::Take<core::iter::adapters::enumerate::Enumerate<core::slice::iter::Iter<ep9_frontend::bytecodegen::regopt::Ev>>> as core::iter::traits::iterator::Iterator>::nth	853605	853605	0
+<core::iter::adapters::take::Take<core::iter::adapters::enumerate::Enumerate<core::slice::iter::Iter<u8>>> as core::iter::traits::iterator::Iterator>::nth	64	64	0
+<core::option::Option<u16>>::map_or::<u64, ep9_vm::builtins::define::{closure#4}>	964	964	0
+<core::option::Option<u8>>::filter::<ep9_vm::builtins::install_pass::{closure#7}::{closure#0}>	24108	24108	0
+<core::str::lossy::Utf8Chunks as core::iter::traits::iterator::Iterator>::next	487	487	0
+<ep9_bytecode::builder::FunctionBuilder>::array_boilerplate	450	450	0
+<ep9_bytecode::builder::FunctionBuilder>::emit	12427320	12427320	0
+<ep9_bytecode::builder::FunctionBuilder>::finish	27385678	27385678	0
+<ep9_bytecode::builder::FunctionBuilder>::jump_table	148	148	0
+<ep9_bytecode::builder::FunctionBuilder>::new_label	14837	14837	0
+<ep9_bytecode::builder::FunctionBuilder>::new_register_list	45	45	0
+<ep9_bytecode::builder::FunctionBuilder>::object_boilerplate	2205	2205	0
+<ep9_bytecode::builder::UnitBuilder>::finish	1360091	1360091	0
+<ep9_bytecode::builder::UnitBuilder>::new	66	66	0
+<ep9_bytecode::builder::UnitBuilder>::set_function	60624	60624	0
+<ep9_bytecode::decode::Instruction>::operand	14183458	14183458	0
+<ep9_bytecode::decode::Instruction>::register	22678	22678	0
+<ep9_bytecode::decode::Instruction>::unsigned	7562	7562	0
+<ep9_bytecode::decode::Instructions as core::iter::traits::iterator::Iterator>::next	8199308	8199308	0
+<ep9_bytecode::opcodes::Opcode>::from_u8	834545	834545	0
+<ep9_bytecode::operand::RegisterList>::get	256	256	0
+<ep9_bytecode::sha256::Sha256>::update	328914826	328914826	0
+<ep9_bytecode::string::UnitString>::new	2492540	2492540	0
+<ep9_frontend::bytecodegen::func::FnGen>::arguments_into	532119	532119	0
+<ep9_frontend::bytecodegen::func::FnGen>::assignment	934663	934663	0
+<ep9_frontend::bytecodegen::func::FnGen>::binary	379748	379748	0
+<ep9_frontend::bytecodegen::func::FnGen>::bind_identifier	54545	54545	0
+<ep9_frontend::bytecodegen::func::FnGen>::bind_pattern	82	82	0
+<ep9_frontend::bytecodegen::func::FnGen>::bind_value_in_acc	47082	47082	0
+<ep9_frontend::bytecodegen::func::FnGen>::block	147	147	0
+<ep9_frontend::bytecodegen::func::FnGen>::boilerplate_value	85260	85260	0
+<ep9_frontend::bytecodegen::func::FnGen>::branch	344917	344917	0
+<ep9_frontend::bytecodegen::func::FnGen>::branch_dir	56863	56863	0
+<ep9_frontend::bytecodegen::func::FnGen>::branch_if_false	10199	10199	0
+<ep9_frontend::bytecodegen::func::FnGen>::branch_if_true	16126	16126	0
+<ep9_frontend::bytecodegen::func::FnGen>::call	886393	886393	0
+<ep9_frontend::bytecodegen::func::FnGen>::callee_and_receiver	237845	237845	0
+<ep9_frontend::bytecodegen::func::FnGen>::class_constructor_prologue	38073	38073	0
+<ep9_frontend::bytecodegen::func::FnGen>::computed_member	124731	124731	0
+<ep9_frontend::bytecodegen::func::FnGen>::create_closure	81984	81984	0
+<ep9_frontend::bytecodegen::func::FnGen>::create_context	12903	12903	0
+<ep9_frontend::bytecodegen::func::FnGen>::declared	48246	48246	0
+<ep9_frontend::bytecodegen::func::FnGen>::delete	82	82	0
+<ep9_frontend::bytecodegen::func::FnGen>::delete_member	227	227	0
+<ep9_frontend::bytecodegen::func::FnGen>::dynamic_callee	273	273	0
+<ep9_frontend::bytecodegen::func::FnGen>::emit_arith	71493	71493	0
+<ep9_frontend::bytecodegen::func::FnGen>::emit_arith_smi	27987	27987	0
+<ep9_frontend::bytecodegen::func::FnGen>::emit_call	405882	405882	0
+<ep9_frontend::bytecodegen::func::FnGen>::emit_compare	143964	143964	0
+<ep9_frontend::bytecodegen::func::FnGen>::emit_return	168105	168105	0
+<ep9_frontend::bytecodegen::func::FnGen>::enter	3318280	3318280	0
+<ep9_frontend::bytecodegen::func::FnGen>::enter_scope	133922	133922	0
+<ep9_frontend::bytecodegen::func::FnGen>::exit_scope	120198	120198	0
+<ep9_frontend::bytecodegen::func::FnGen>::expr	2432127	2432127	0
+<ep9_frontend::bytecodegen::func::FnGen>::expr_effect	417674	417674	0
+<ep9_frontend::bytecodegen::func::FnGen>::expr_inner	2518410	2518410	0
+<ep9_frontend::bytecodegen::func::FnGen>::expr_pos	25000	25000	0
+<ep9_frontend::bytecodegen::func::FnGen>::expr_to_temp	237964	237964	0
+<ep9_frontend::bytecodegen::func::FnGen>::finish	112569	112569	0
+<ep9_frontend::bytecodegen::func::FnGen>::for_head_assign	563	563	0
+<ep9_frontend::bytecodegen::func::FnGen>::for_head_rhs	549	549	0
+<ep9_frontend::bytecodegen::func::FnGen>::for_in::{closure#0}	630	630	0
+<ep9_frontend::bytecodegen::func::FnGen>::for_in_var_initializer	71	71	0
+<ep9_frontend::bytecodegen::func::FnGen>::for_loop_tail	52716	52716	0
+<ep9_frontend::bytecodegen::func::FnGen>::function_declaration	23450	23450	0
+<ep9_frontend::bytecodegen::func::FnGen>::function_id	204982	204982	0
+<ep9_frontend::bytecodegen::func::FnGen>::get_prepared	14617	14617	0
+<ep9_frontend::bytecodegen::func::FnGen>::hoist_functions	207586	207586	0
+<ep9_frontend::bytecodegen::func::FnGen>::if_branch	192007	192007	0
+<ep9_frontend::bytecodegen::func::FnGen>::implicit	2554675	2554675	0
+<ep9_frontend::bytecodegen::func::FnGen>::init_frame_bindings	133080	133080	0
+<ep9_frontend::bytecodegen::func::FnGen>::init_holes	249121	249121	0
+<ep9_frontend::bytecodegen::func::FnGen>::jump_loop	17496	17496	0
+<ep9_frontend::bytecodegen::func::FnGen>::leave	15543	15543	0
+<ep9_frontend::bytecodegen::func::FnGen>::load_binding_raw	1570035	1570035	0
+<ep9_frontend::bytecodegen::func::FnGen>::load_completion_value	415	415	0
+<ep9_frontend::bytecodegen::func::FnGen>::load_member	1810563	1810563	0
+<ep9_frontend::bytecodegen::func::FnGen>::load_ref	768136	768136	0
+<ep9_frontend::bytecodegen::func::FnGen>::local_register	556174	556174	0
+<ep9_frontend::bytecodegen::func::FnGen>::loop_target	2098	2098	0
+<ep9_frontend::bytecodegen::func::FnGen>::member_callee	724063	724063	0
+<ep9_frontend::bytecodegen::func::FnGen>::member_ref	550525	550525	0
+<ep9_frontend::bytecodegen::func::FnGen>::named_value	113781	113781	0
+<ep9_frontend::bytecodegen::func::FnGen>::new	331852	331852	0
+<ep9_frontend::bytecodegen::func::FnGen>::number	107196	107196	0
+<ep9_frontend::bytecodegen::func::FnGen>::object_value	10731	10731	0
+<ep9_frontend::bytecodegen::func::FnGen>::perform	6464	6464	0
+<ep9_frontend::bytecodegen::func::FnGen>::perform_now	62685	62685	0
+<ep9_frontend::bytecodegen::func::FnGen>::prepare_simple	162408	162408	0
+<ep9_frontend::bytecodegen::func::FnGen>::prologue_and_params	178261	178261	0
+<ep9_frontend::bytecodegen::func::FnGen>::put_prepared	609272	609272	0
+<ep9_frontend::bytecodegen::func::FnGen>::reference_of	400155	400155	0
+<ep9_frontend::bytecodegen::func::FnGen>::release	19354	19354	0
+<ep9_frontend::bytecodegen::func::FnGen>::runtime	94	94	0
+<ep9_frontend::bytecodegen::func::FnGen>::scope_of	703	703	0
+<ep9_frontend::bytecodegen::func::FnGen>::smi	253	253	0
+<ep9_frontend::bytecodegen::func::FnGen>::sta_global	6445	6445	0
+<ep9_frontend::bytecodegen::func::FnGen>::statement	2200	2200	0
+<ep9_frontend::bytecodegen::func::FnGen>::statement_inner	612047	612047	0
+<ep9_frontend::bytecodegen::func::FnGen>::statement_kind	1095341	1095341	0
+<ep9_frontend::bytecodegen::func::FnGen>::statements	1059520	1059520	0
+<ep9_frontend::bytecodegen::func::FnGen>::static_member	2056949	2056949	0
+<ep9_frontend::bytecodegen::func::FnGen>::store_binding_init	416	416	0
+<ep9_frontend::bytecodegen::func::FnGen>::store_binding_raw	238916	238916	0
+<ep9_frontend::bytecodegen::func::FnGen>::store_ref	198054	198054	0
+<ep9_frontend::bytecodegen::func::FnGen>::switch::{closure#0}	46844	46844	0
+<ep9_frontend::bytecodegen::func::FnGen>::temp	3550	3550	0
+<ep9_frontend::bytecodegen::func::FnGen>::temps	24640	24640	0
+<ep9_frontend::bytecodegen::func::FnGen>::try_catch	13013	13013	0
+<ep9_frontend::bytecodegen::func::FnGen>::try_finally::<<ep9_frontend::bytecodegen::func::FnGen>::try_stmt::{closure#0}, <ep9_frontend::bytecodegen::func::FnGen>::try_stmt::{closure#1}>	778	778	0
+<ep9_frontend::bytecodegen::func::FnGen>::try_finally::<<ep9_frontend::bytecodegen::func::FnGen>::try_stmt::{closure#2}, <ep9_frontend::bytecodegen::func::FnGen>::try_stmt::{closure#3}>	707	707	0
+<ep9_frontend::bytecodegen::func::FnGen>::typeof_operand	22	22	0
+<ep9_frontend::bytecodegen::func::FnGen>::update	39991	39991	0
+<ep9_frontend::bytecodegen::func::FnGen>::var_decl	130976	130976	0
+<ep9_frontend::bytecodegen::func::FnGen>::var_initializer	130971	130971	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::bind	79960	79960	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::bitwise_not	420	420	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::bound_label	216	216	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::construct	36471	36471	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::create_array_literal	890	890	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::create_empty_array_literal	5118	5118	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::create_empty_object_literal	1816	1816	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::create_object_literal	4116	4116	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::delete_property_sloppy	34	34	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::delete_property_strict	34	34	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::for_in_enumerate	306	306	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::for_in_next	441	441	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::for_in_prepare	396	396	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::for_in_step	306	306	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::get_keyed_property	78	78	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::jump	36928	36928	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::jump_if_false	58788	58788	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::jump_if_for_in_done	396	396	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::jump_if_to_boolean_false	7514	7514	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::jump_if_to_boolean_true	6086	6086	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::jump_if_true	6562	6562	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::jump_if_undefined	306	306	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::jump_if_undefined_or_null	306	306	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::lda_current_function	44	44	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::lda_false	18260	18260	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::lda_smi	140	140	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::lda_true	13118	13118	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::lda_undefined	924	924	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::lda_zero	198	198	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::ldar	28044	28044	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::logical_not	176	176	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::mov	152	152	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::negate	183	183	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::star	4908	4908	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::throw	908	908	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::to_boolean_logical_not	1100	1100	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::to_number	70	70	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::to_object	306	306	0
+<ep9_frontend::bytecodegen::regopt::Emitter>::type_of	35	35	0
+<ep9_frontend::bytecodegen::regopt::Replay>::emit_lazy	1112353	1112353	0
+<ep9_frontend::bytecodegen::regopt::Replay>::emit_transfer	3727788	3727788	0
+<ep9_frontend::bytecodegen::regopt::Replay>::flush	1944710	1944710	0
+<ep9_frontend::bytecodegen::regopt::Replay>::holder	2585605	2585605	0
+<ep9_frontend::bytecodegen::regopt::Replay>::input	878520	878520	0
+<ep9_frontend::bytecodegen::regopt::Replay>::join	5197459	5197459	0
+<ep9_frontend::bytecodegen::regopt::Replay>::leave	5566776	5566776	0
+<ep9_frontend::bytecodegen::regopt::Replay>::materialize	665129	665129	0
+<ep9_frontend::bytecodegen::regopt::Replay>::save_value	14757035	14757035	0
+<ep9_frontend::bytecodegen::regopt::Replay>::transfer	6944539	6944539	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_array_expression	36488	36488	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_arrow_function_expression	49	49	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_assignment_expression	259237	259237	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_assignment_target	42	42	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_binary_expression	137005	137005	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_binding_pattern	116003	116003	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_block_statement	141221	141221	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_break_statement	2101	2101	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_conditional_expression	5350	5350	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_declaration	144614	144614	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_directives	5472	5472	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_do_while_statement	66	66	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_expression	1117877	1117877	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_for_in_statement	414	414	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_for_statement	13691	13691	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_formal_parameter_list	76632	76632	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_formal_parameter_rest	41	41	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_function	169273	169273	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_if_statement	68404	68404	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_labeled_statement	34	34	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_new_expression	273269	273269	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_object_expression	9090	9090	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_private_field_expression	564501	564501	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_property_key	3081	3081	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_return_statement	27262	27262	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_sequence_expression	170	170	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_simple_assignment_target	194634	194634	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_statement	232549	232549	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_switch_statement	8684	8684	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_throw_statement	151530	151530	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_try_statement	3371	3371	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_update_expression	3965	3965	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_variable_declarator	10017	10017	0
+<ep9_frontend::depth::DepthPass<false> as oxc_ast_visit::generated::visit::Visit>::visit_with_statement	1100	1100	0
+<ep9_frontend::prescan::Scanner>::asi	476478	476478	0
+<ep9_frontend::prescan::Scanner>::bump_stmt	36	36	0
+<ep9_frontend::prescan::Scanner>::number	508020	508020	0
+<ep9_frontend::prescan::Scanner>::run	67042071	67042071	0
+<ep9_frontend::prescan::Tok as core::cmp::PartialEq>::eq	703662	703662	0
+<ep9_frontend::scope::collect::Builder as oxc_ast_visit::generated::visit::Visit>::visit_call_expression	530180	530180	0
+<ep9_frontend::scope::collect::Builder as oxc_ast_visit::generated::visit::Visit>::visit_catch_clause	2841	2841	0
+<ep9_frontend::scope::collect::Builder as oxc_ast_visit::generated::visit::Visit>::visit_this_expression	361259	361259	0
+<ep9_frontend::scope::collect::Builder>::arguments_binding	120	120	0
+<ep9_frontend::scope::collect::Builder>::decl_ident	344867	344867	0
+<ep9_frontend::scope::collect::Builder>::decl_pattern	93645	93645	0
+<ep9_frontend::scope::collect::Builder>::enter	18940	18940	0
+<ep9_frontend::scope::collect::Builder>::for_in_of	842	842	0
+<ep9_frontend::scope::collect::Builder>::function	453901	453901	0
+<ep9_frontend::scope::collect::Builder>::identifier	1736649	1736649	0
+<ep9_frontend::scope::collect::Builder>::if_branch	129308	129308	0
+<ep9_frontend::scope::collect::Builder>::new_function	147245	147245	0
+<ep9_frontend::scope::collect::Builder>::new_scope	516371	516371	0
+<ep9_frontend::scope::collect::Builder>::params	257135	257135	0
+<ep9_frontend::scope::collect::Builder>::pseudo	299919	299919	0
+<ep9_frontend::worker::Gone as core::ops::drop::Drop>::drop	36	36	0
+<ep9_frontend::worker::Worker>::send	56	56	0
+<ep9_frontend::worker::Worker>::spawn	105	105	0
+<ep9_frontend::worker::run<core::result::Result<core::result::Result<ep9_bytecode::unit::VerifiedUnit, ep9_frontend::bytecodegen::CodegenError>, ep9_frontend::CompileError>, ep9_frontend::with_front_end_at<core::result::Result<ep9_bytecode::unit::VerifiedUnit, ep9_frontend::bytecodegen::CodegenError>, ep9_frontend::bytecodegen::compile::{closure#0}>::{closure#0}>::{closure#0} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}	82	82	0
+<ep9_heap::heap::Heap>::alloc	5062052	5062052	0
+<ep9_heap::heap::Heap>::alloc_slow	84737778	84737778	0
+<ep9_heap::heap::Heap>::collect_at	12	12	0
+<ep9_heap::heap::Heap>::collect_if_triggered	991197	991197	0
+<ep9_heap::heap::Heap>::new_weak	43	43	0
+<ep9_heap::heap::Inner>::finish_sweeping	32681	32681	0
+<ep9_heap::heap::Inner>::fresh_page	146007	146007	0
+<ep9_heap::heap::Sweeper>::sweep_page_with::<false>	311934761	311934761	0
+<ep9_heap::memory::Memory>::evict_cached	1062	1062	0
+<ep9_heap::memory::Memory>::free_small_page	18779	18779	0
+<ep9_heap::remembered::Remembered>::grow	116104	116104	0
+<ep9_heap::roots::Handles>::visit_strong	408	408	0
+<ep9_heap::trace::Tracer>::drain	287945129	287945129	0
+<ep9_heap::trace::Tracer>::trace_one_outlined	1680	1680	0
+<ep9_heap::trace::Tracer>::visit_slots	442224298	442224298	0
+<ep9_heap::trace::Tracer>::visit_slots_by_card	89968	89968	0
+<ep9_platform::va::Reservation>::commit	67080	67080	0
+<ep9_platform::va::Reservation>::decommit	22852	22852	0
+<ep9_platform::va::Reservation>::reserve_at	65	65	0
+<ep9_platform::waiters::Agent as core::ops::drop::Drop>::drop	18	18	0
+<ep9_regexp::Flags>::to_letters	48961	48961	0
+<ep9_regexp::Rx0 as ep9_regexp::Backend>::compile	44237	44237	0
+<ep9_vm::abi::Cx>::call::<ep9_vm::abi::local::Local, ep9_vm::abi::local::Local<ep9_vm::abi::local::JsObject>>	7800	7800	0
+<ep9_vm::abi::Cx>::code_unit_at	3400	3400	0
+<ep9_vm::abi::Cx>::define_property_or_throw::<ep9_vm::abi::local::Local<ep9_vm::abi::local::JsArray>, ep9_vm::abi::local::Local<ep9_vm::abi::local::JsKey>>	510	510	0
+<ep9_vm::abi::Cx>::get_prototype_from_constructor::<ep9_vm::abi::local::Local<ep9_vm::abi::local::JsObject>>	6486	6486	0
+<ep9_vm::abi::Cx>::has_intrinsic	1817760	1817760	0
+<ep9_vm::abi::Cx>::intrinsic	3032320	3032320	0
+<ep9_vm::abi::Cx>::new_string	870	870	0
+<ep9_vm::abi::Cx>::new_string_utf16	173351	173351	0
+<ep9_vm::abi::Cx>::perform_microtask_checkpoint	191	191	0
+<ep9_vm::abi::Cx>::push_code_units	161573	161573	0
+<ep9_vm::abi::Cx>::record_forwarder	216	216	0
+<ep9_vm::abi::Cx>::require_class	59086	59086	0
+<ep9_vm::abi::Cx>::run_script	107	107	0
+<ep9_vm::abi::Cx>::search	65907822	65907822	0
+<ep9_vm::abi::Cx>::set::<ep9_vm::abi::local::Local<ep9_vm::abi::local::JsObject>, &str, ep9_vm::abi::local::Local>	4808960	4808960	0
+<ep9_vm::abi::Cx>::slot::<ep9_vm::abi::local::Local<ep9_vm::abi::local::JsObject>>	82340	82340	0
+<ep9_vm::abi::Cx>::this_primitive_value::<ep9_vm::abi::local::Local>	438627	438627	0
+<ep9_vm::abi::Cx>::to_object::<ep9_vm::abi::local::Local>	2555748	2555748	0
+<ep9_vm::array_buffer::BufferTable>::new::{closure#0}	288	288	0
+<ep9_vm::atoms::AtomTable>::rebuild	1828376	1828376	0
+<ep9_vm::builtins::IntrinsicId>::root	855840	855840	0
+<ep9_vm::builtins::IntrinsicId>::slot	1198176	1198176	0
+<ep9_vm::builtins::LazyGroups>::compute	236708	236708	0
+<ep9_vm::function_info::FunctionInfo>::constant_entry	87380	87380	0
+<ep9_vm::fuse::Registry>::new::{closure#0}	36	36	0
+<ep9_vm::isolate::Isolate>::register_host_function	167	167	0
+<ep9_vm::isolate::Isolate>::take_unhandled_rejections	82	82	0
+<ep9_vm::jobs::JobState>::new::{closure#0}	864	864	0
+<ep9_vm::numconv::AsciiBuf<32>>::push_u32	682832	682832	0
+<ep9_vm::regexp::ProgramTable>::insert	44774	44774	0
+<ep9_vm::regexp::ProgramTable>::new::{closure#0}	56267	56267	0
+<ep9_vm::regexp::ProgramTable>::new::{closure#1}	312	312	0
+<ep9_vm::runtime::Runtime>::new::{closure#0}	200481	200481	0
+<ep9_vm::string::JsStr>::hash_field	87044081	87044081	0
+<ep9_vm::string::JsStr>::to_string_lossy	9319	9319	0
+<ep9_vm::string::JsStr>::to_utf16	5866	5866	0
+<ep9_vm::string::search::Kernel>::detect_slow	35	35	0
+<ep9_vm::stub_cache::StubCache>::new::{closure#0}	135276	135276	0
+<ep9_vm::weakref::KeptObjects>::new::{closure#0}	372	372	0
+<ep9_vm::weakref::KeptObjects>::new::{closure#1}	204	204	0
+<f64 as core::str::traits::FromStr>::from_str	1412575	1412575	0
+<hashbrown::map::HashMap<(oxc_syntax::scope::ScopeId, oxc_str::ident::Ident), oxc_syntax::symbol::SymbolId, rustc_hash::FxBuildHasher>>::insert	222970	222970	0
+<hashbrown::map::HashMap<ep9_bytecode::builder::Label, (), std::hash::random::RandomState>>::insert	427284	427284	0
+<hashbrown::map::HashMap<oxc_str::ident::Ident, oxc_syntax::symbol::SymbolId, oxc_str::ident_hasher::IdentBuildHasher, &oxc_allocator::arena::Arena>>::insert	428295	428295	0
+<hashbrown::map::HashMap<u32, oxc_str::js_str::JSStr, rustc_hash::FxBuildHasher>>::insert	7116	7116	0
+<hashbrown::raw::RawTable<(&str, ep9_frontend::scope::NameId)>>::reserve_rehash::<hashbrown::map::make_hasher<&str, ep9_frontend::scope::NameId, std::hash::random::RandomState>::{closure#0}>	167343	167343	0
+<hashbrown::raw::RawTable<((ep9_bytecode::feedback::FeedbackSlotKind, u32), ep9_bytecode::operand::FeedbackSlot)>>::reserve_rehash::<hashbrown::map::make_hasher<(ep9_bytecode::feedback::FeedbackSlotKind, u32), ep9_bytecode::operand::FeedbackSlot, std::hash::random::RandomState>::{closure#0}>	17687	17687	0
+<hashbrown::raw::RawTable<((oxc_syntax::scope::ScopeId, oxc_str::ident::Ident), oxc_syntax::symbol::SymbolId)>>::reserve_rehash::<hashbrown::map::make_hasher<(oxc_syntax::scope::ScopeId, oxc_str::ident::Ident), oxc_syntax::symbol::SymbolId, rustc_hash::FxBuildHasher>::{closure#0}>	156496	156496	0
+<hashbrown::raw::RawTable<(ep9_bytecode::string::UnitString, ep9_bytecode::operand::StringId)>>::reserve_rehash::<hashbrown::map::make_hasher<ep9_bytecode::string::UnitString, ep9_bytecode::operand::StringId, std::hash::random::RandomState>::{closure#0}>	163773	163773	0
+<hashbrown::raw::RawTable<(ep9_vm::builtins::IntrinsicId, ())>>::reserve_rehash::<hashbrown::map::make_hasher<ep9_vm::builtins::IntrinsicId, (), std::hash::random::RandomState>::{closure#0}>	9256	9256	0
+<hashbrown::raw::RawTable<(oxc_str::ident::Ident, oxc_allocator::vec::Vec<oxc_syntax::reference::ReferenceId>), &oxc_allocator::arena::Arena>>::reserve_rehash::<hashbrown::map::make_hasher<oxc_str::ident::Ident, oxc_allocator::vec::Vec<oxc_syntax::reference::ReferenceId>, oxc_str::ident_hasher::IdentBuildHasher>::{closure#0}>	1418	1418	0
+<hashbrown::raw::RawTable<(oxc_str::ident::Ident, oxc_syntax::symbol::SymbolId), &oxc_allocator::arena::Arena>>::reserve_rehash::<hashbrown::map::make_hasher<oxc_str::ident::Ident, oxc_syntax::symbol::SymbolId, oxc_str::ident_hasher::IdentBuildHasher>::{closure#0}>	280588	280588	0
+<hashbrown::raw::RawTable<(oxc_syntax::symbol::SymbolId, oxc_allocator::vec::Vec<oxc_semantic::scoping::Redeclaration>)>>::reserve_rehash::<hashbrown::map::make_hasher<oxc_syntax::symbol::SymbolId, oxc_allocator::vec::Vec<oxc_semantic::scoping::Redeclaration>, rustc_hash::FxBuildHasher>::{closure#0}>	2504	2504	0
+<hashbrown::raw::RawTable<(u32, core::option::Option<oxc_str::js_str::JSStr>)>>::reserve_rehash::<hashbrown::map::make_hasher<u32, core::option::Option<oxc_str::js_str::JSStr>, rustc_hash::FxBuildHasher>::{closure#0}>	4785	4785	0
+<hashbrown::raw::RawTable<(u8, ())>>::reserve_rehash::<hashbrown::map::make_hasher<u8, (), std::hash::random::RandomState>::{closure#0}>	1884	1884	0
+<hashbrown::raw::RawTable<(usize, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<usize, usize, std::hash::random::RandomState>::{closure#0}>	1024	1024	0
+<hashbrown::raw::RawTableInner>::fallible_with_capacity::<&oxc_allocator::arena::Arena>	125920	125920	0
+<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>	713330	713330	0
+<hashbrown::raw::RawTableInner>::find_insert_index	44	44	0
+<memchr::arch::x86_64::avx2::packedpair::Finder>::find_impl	254	254	0
+<memchr::arch::x86_64::avx2::packedpair::Finder>::with_pair_impl	105	105	0
+<memchr::memmem::FinderBuilder>::build_forward_with_ranker::<memchr::arch::all::packedpair::DefaultFrequencyRank, alloc::vec::Vec<u8>>	360	360	0
+<oxc_allocator::arena::Arena>::alloc_layout_slow	30	30	0
+<oxc_allocator::arena::Arena>::try_alloc_layout_slow	2	2	0
+<oxc_allocator::arena::Arena>::try_alloc_layout_slow_impl	514	514	0
+<oxc_allocator::vec2::Vec<oxc_ast::ast::js::Argument, oxc_allocator::arena::Arena>>::push	48153	48153	0
+<oxc_allocator::vec2::Vec<oxc_ast::ast::js::ArrayExpressionElement, oxc_allocator::arena::Arena>>::push	189	189	0
+<oxc_allocator::vec2::Vec<oxc_ast::ast::js::ObjectPropertyKind, oxc_allocator::arena::Arena>>::push	1680	1680	0
+<oxc_allocator::vec2::raw_vec::RawVec<_, _>>::finish_grow::grow::<oxc_allocator::arena::Arena>	442716	442716	0
+<oxc_allocator::vec2::raw_vec::RawVec<_, _>>::reserve::do_reserve_and_handle::<u8, oxc_allocator::arena::Arena>	680	680	0
+<oxc_ast::ast::js::ArrowFunctionExpression>::has_use_strict_directive	4	4	0
+<oxc_ast::ast::js::AssignmentTarget as oxc_parser::js::grammar::CoverGrammar<oxc_ast::ast::js::Expression, ep9_frontend::l1::L1Config<true>>>::cover	86437	86437	0
+<oxc_ast::ast::js::BindingPattern as oxc_ecmascript::bound_names::BoundNames>::bound_names::<<oxc_ast::ast::js::VariableDeclarator as oxc_semantic::binder::Binder>::bind::{closure#0}>	74144	74144	0
+<oxc_ast::ast::js::BindingPattern as oxc_ecmascript::bound_names::BoundNames>::bound_names::<<oxc_ast::ast::js::VariableDeclarator as oxc_semantic::binder::Binder>::bind::{closure#1}>	246108	246108	0
+<oxc_ast::ast::js::BindingPattern as oxc_ecmascript::bound_names::BoundNames>::bound_names::<oxc_semantic::checker::javascript::check_variable_declarator_redeclaration::{closure#0}>	56606	56606	0
+<oxc_ast::ast::js::BindingRestElement as oxc_semantic::binder::Binder>::bind	20	20	0
+<oxc_ast::ast::js::ConditionalExpression>::boxed::<oxc_parser::ast_builder::ParserAstBuilder>	8346	8346	0
+<oxc_ast::ast::js::Function as oxc_semantic::binder::Binder>::bind	84361	84361	0
+<oxc_ast::ast::js::SimpleAssignmentTarget as oxc_parser::js::grammar::CoverGrammar<oxc_ast::ast::js::Expression, ep9_frontend::l1::L1Config<true>>>::cover	132126	132126	0
+<oxc_parser::Parser<ep9_frontend::l1::L1Config<true>>>::parse	736	736	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::advance	14010994	14010994	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::asi	15737	15737	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::check_identifier_with_span	10926	10926	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::check_missing_initializer	23949	23949	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::checkpoint_with_error_recovery	672	672	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::cover_arrow_head_as_expression	966	966	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::cover_binding_as_expression	714	714	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::cover_parameter_as_expression	784	784	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::expect_conditional_alternative	1284	1284	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::is_parenthesized_arrow_function_expression_after_lparen	80354	80354	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::next_token_can_follow_modifier	650	650	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_any_for_loop	5592	5592	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_array_expression	11101	11101	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_array_expression_element	37544	37544	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_arrow_function_expression_body	63	63	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_assignment_expression_or_higher_impl	4864883	4864883	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_binary_expression_rest	1015735	1015735	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_binding_identifier	5412	5412	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_binding_pattern	313944	313944	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_decorators	67599	67599	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_delimited_list::<<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_call_argument, oxc_ast::ast::js::Argument>	332203	332203	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_delimited_list_rest::<<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_array_expression_element, oxc_ast::ast::js::ArrayExpressionElement>	77790	77790	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_delimited_list_rest::<<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_call_argument, oxc_ast::ast::js::Argument>	275496	275496	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_delimited_list_rest::<<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_object_expression_property, oxc_ast::ast::js::ObjectPropertyKind>	11257	11257	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_directives_and_statements	733012	733012	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_expr	35874	35874	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_expression_or_labeled_statement	637504	637504	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_for_in_loop	693	693	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_for_loop	32053	32053	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_formal_parameter_with_decorators	210022	210022	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_formal_parameters	340544	340544	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_function	344021	344021	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_function_declaration	20119	20119	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_function_id	60351	60351	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_function_impl	76544	76544	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_identifier_expression	41840	41840	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_initializer	21	21	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_label_identifier	343	343	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_lhs_expression_rest	4272986	4272986	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_literal_expression	745820	745820	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_literal_regexp	11555	11555	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_modifiers	55823	55823	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_new_expression	157035	157035	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_normal_list::<<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_block::{closure#0}, oxc_ast::ast::js::Statement>	498906	498906	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_object_expression	13585	13585	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_object_expression_property	32094	32094	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_paren_expression	116520	116520	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_parenthesized_arrow_function_head	49	49	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_parenthesized_expression	129102	129102	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_possible_js_parenthesized_expression	2968	2968	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_property_name	17215	17215	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_rest_element_for_formal_parameter	56	56	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_reused_parenthesized_expression_rest	714	714	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_sequence_expression	316	316	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_simple_unary_expression	36023	36023	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_statement_list_item	1162342	1162342	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_this_expression	18900	18900	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_try_statement::{closure#0}	3488	3488	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_try_statement::{closure#1}	82	82	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_unary_expression	45258	45258	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_unary_expression_or_higher	20758	20758	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_variable_declaration	226725	226725	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_variable_declaration_for_statement	6120	6120	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::parse_variable_declarator	240744	240744	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::re_lex_right_angle	138323	138323	0
+<oxc_parser::ParserImpl<ep9_frontend::l1::L1Config<true>>>::try_parse_arrow_function_expression::<true>	46103	46103	0
+<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::get_js_string	70131	70131	0
+<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::identifier_name_handler	3839996	3839996	0
+<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::next_token	46850	46850	0
+<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::peek_token	2002	2002	0
+<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::read_decimal_digits_after_first_digit	146404	146404	0
+<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::read_next_token	2989	2989	0
+<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::read_next_token_at_end	29	29	0
+<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::read_string_escape_sequence	1205631	1205631	0
+<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::rewind	32565	32565	0
+<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::skip_multi_line_comment_after_line_break	134	134	0
+<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::skip_single_line_comment	7824	7824	0
+<oxc_parser::lexer::kind::Kind>::is_identifier_reference	9331	9331	0
+<oxc_parser::lexer::kind::Kind>::is_literal	14931	14931	0
+<oxc_parser::lexer::trivia_builder::TriviaBuilder>::add_comment	26924	26924	0
+<oxc_parser::lexer::trivia_builder::TriviaBuilder>::attach_pending_comments	25	25	0
+<oxc_parser::lexer::trivia_builder::TriviaBuilder>::attach_pending_comments_to_token	2583	2583	0
+<oxc_parser::module_record::ModuleRecordBuilder>::build	74	74	0
+<oxc_regular_expression::parser::parser_impl::LiteralParser>::parse	20529	20529	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::consume_group_name	135	135	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::consume_quantifier	18761	18761	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::consume_reg_exp_unicode_escape_sequence	3437	3437	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::parse_assertion	13425	13425	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::parse_atom_escape	5156	5156	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::parse_capturing_group	9162	9162	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::parse_character_class	6557	6557	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::parse_character_class_escape_unicode	380	380	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::parse_character_escape	5863	5863	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::parse_class_atom	7691	7691	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::parse_class_contents	4891	4891	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::parse_disjunction	60402	60402	0
+<oxc_regular_expression::parser::pattern_parser::pattern_parser_impl::PatternParser>::parse_ignore_group	6670	6670	0
+<oxc_regular_expression::parser::reader::reader_impl::Reader>::initialize	23621	23621	0
+<oxc_semantic::builder::SemanticBuilder as oxc_ast_visit::generated::visit::Visit>::enter_node	5617080	5617080	0
+<oxc_semantic::builder::SemanticBuilder as oxc_ast_visit::generated::visit::Visit>::enter_scope	366396	366396	0
+<oxc_semantic::builder::SemanticBuilder as oxc_ast_visit::generated::visit::Visit>::visit_block_statement	335498	335498	0
+<oxc_semantic::builder::SemanticBuilder as oxc_ast_visit::generated::visit::Visit>::visit_call_expression	365665	365665	0
+<oxc_semantic::builder::SemanticBuilder as oxc_ast_visit::generated::visit::Visit>::visit_computed_member_expression	46478	46478	0
+<oxc_semantic::builder::SemanticBuilder as oxc_ast_visit::generated::visit::Visit>::visit_function	370608	370608	0
+<oxc_semantic::builder::SemanticBuilder as oxc_ast_visit::generated::visit::Visit>::visit_identifier_reference	2150150	2150150	0
+<oxc_semantic::builder::SemanticBuilder as oxc_ast_visit::generated::visit::Visit>::visit_simple_assignment_target	202232	202232	0
+<oxc_semantic::builder::SemanticBuilder as oxc_ast_visit::generated::visit::Visit>::visit_variable_declaration	10446	10446	0
+<oxc_semantic::builder::SemanticBuilder as oxc_ast_visit::generated::visit::Visit>::visit_variable_declarator	522389	522389	0
+<oxc_semantic::builder::SemanticBuilder>::build	4772484	4772484	0
+<oxc_semantic::builder::SemanticBuilder>::check_redeclaration	680287	680287	0
+<oxc_semantic::builder::SemanticBuilder>::declare_symbol_on_scope	209882	209882	0
+<oxc_semantic::builder::SemanticBuilder>::new_compiler	147	147	0
+<oxc_semantic::builder::SemanticBuilder>::resolve_arguments_reference	345	345	0
+<oxc_semantic::builder::SemanticBuilder>::resolve_references_for_current_scope	33228	33228	0
+<oxc_semantic::builder::SemanticBuilder>::try_resolve_reference	76	76	0
+<oxc_semantic::scoping::ScopeTable>::grow_to	48	48	0
+<oxc_semantic::scoping::Scoping>::add_resolved_reference	88	88	0
+<oxc_semantic::scoping::Scoping>::add_root_unresolved_reference	25413	25413	0
+<oxc_semantic::scoping::Scoping>::add_symbol_redeclaration	9137	9137	0
+<oxc_semantic::scoping::Scoping>::create_symbol_with_binding	427056	427056	0
+<oxc_semantic::scoping::Scoping>::scope_has_binding	1387	1387	0
+<oxc_semantic::scoping::SymbolTable>::grow_to	53	53	0
+<oxc_semantic::stats::Counter as oxc_ast_visit::generated::visit::Visit>::visit_binding_pattern	93423	93423	0
+<oxc_semantic::stats::Counter as oxc_ast_visit::generated::visit::Visit>::visit_declaration	116850	116850	0
+<oxc_semantic::stats::Counter as oxc_ast_visit::generated::visit::Visit>::visit_expression	2377240	2377240	0
+<oxc_semantic::stats::Counter as oxc_ast_visit::generated::visit::Visit>::visit_for_statement_left	326	326	0
+<oxc_semantic::stats::Counter as oxc_ast_visit::generated::visit::Visit>::visit_formal_parameters	39	39	0
+<oxc_semantic::stats::Counter as oxc_ast_visit::generated::visit::Visit>::visit_function	206290	206290	0
+<oxc_semantic::stats::Counter as oxc_ast_visit::generated::visit::Visit>::visit_property_key	2349	2349	0
+<oxc_semantic::stats::Counter as oxc_ast_visit::generated::visit::Visit>::visit_simple_assignment_target	136110	136110	0
+<oxc_semantic::stats::Counter as oxc_ast_visit::generated::visit::Visit>::visit_statement	583348	583348	0
+<oxc_str::js_str_builder::JSStrBuilder>::push	85606	85606	0
+<oxc_str::js_str_builder::JSStrBuilder>::push_str	854968	854968	0
+<regress::classicalbacktrack::MatchAttempter<regress::indexing::Latin1Input>>::try_at_pos::<regress::cursor::Forward>	3262406	3262406	0
+<regress::classicalbacktrack::MatchAttempter<regress::indexing::Latin1Input>>::with_scm_loop_impl::<regress::cursor::Forward>	143360	143360	0
+<regress::classicalbacktrack::MatchAttempter<regress::indexing::Utf16Input>>::run_loop	32900	32900	0
+<regress::codepointset::CodePointSet>::add	27989	27989	0
+<regress::emit::Emitter>::emit_node	32036	32036	0
+<regress::ir::MutWalker<<regress::optimizer::Pass<regress::optimizer::decat>>::run_postorder::{closure#0}>>::process	24256	24256	0
+<regress::ir::MutWalker<<regress::optimizer::Pass<regress::optimizer::promote_1char_loops>>::run_postorder::{closure#0}>>::process	26943	26943	0
+<regress::ir::MutWalker<<regress::optimizer::Pass<regress::optimizer::propagate_early_fails>>::run_postorder::{closure#0}>>::process	13864	13864	0
+<regress::ir::MutWalker<<regress::optimizer::Pass<regress::optimizer::remove_empties>>::run_postorder::{closure#0}>>::process	13864	13864	0
+<regress::ir::MutWalker<<regress::optimizer::Pass<regress::optimizer::simplify_brackets>>::run_postorder::{closure#0}>>::process	13454	13454	0
+<regress::ir::MutWalker<<regress::optimizer::Pass<regress::optimizer::unroll_loops>>::run_postorder::{closure#0}>>::process	23821	23821	0
+<regress::ir::Node>::try_duplicate	1247	1247	0
+<regress::optimizer::Pass<regress::optimizer::decat>>::run_postorder::{closure#0}	15415	15415	0
+<regress::optimizer::Pass<regress::optimizer::promote_1char_loops>>::run_postorder::{closure#0}	9440	9440	0
+<regress::optimizer::Pass<regress::optimizer::propagate_early_fails>>::run_postorder::{closure#0}	12677	12677	0
+<regress::optimizer::Pass<regress::optimizer::remove_empties>>::run_postorder::{closure#0}	10966	10966	0
+<regress::optimizer::Pass<regress::optimizer::simplify_brackets>>::run_postorder::{closure#0}	10562	10562	0
+<regress::optimizer::Pass<regress::optimizer::unroll_loops>>::run_postorder::{closure#0}	13367	13367	0
+<regress::parse::Parser<alloc::vec::into_iter::IntoIter<u32>>>::consume::<char>	210	210	0
+<regress::parse::Parser<alloc::vec::into_iter::IntoIter<u32>>>::consume_character_escape	1283	1283	0
+<regress::parse::Parser<alloc::vec::into_iter::IntoIter<u32>>>::consume_disjunction	3419	3419	0
+<regress::parse::Parser<alloc::vec::into_iter::IntoIter<u32>>>::consume_term	36598	36598	0
+<regress::parse::Parser<alloc::vec::into_iter::IntoIter<u32>>>::try_consume_bracket_class_atom	847	847	0
+<regress::parse::Parser<alloc::vec::into_iter::IntoIter<u32>>>::try_consume_decimal_integer_literal	205	205	0
+<regress::parse::Parser<alloc::vec::into_iter::IntoIter<u32>>>::try_consume_str	13446	13446	0
+<regress::startpredicate::AbstractUnitPredicate>::resolve	6861	6861	0
+<smallvec::SmallVec<[oxc_syntax::scope::ScopeId; 8]>>::reserve_one_unchecked	216	216	0
+<std::env::Args as core::iter::traits::iterator::Iterator>::nth	67	67	0
+<std::hash::random::DefaultHasher as core::hash::Hasher>::write	44120045	44120045	0
+<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(ep9_bytecode::feedback::FeedbackSlotKind, u32)>	60690	60690	0
+<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&alloc::string::String>	540862	540862	0
+<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&ep9_bytecode::builder::Label>	8143044	8143044	0
+<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&ep9_bytecode::builder::PendingConst>	9575092	9575092	0
+<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&ep9_bytecode::string::UnitString>	2711968	2711968	0
+<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&ep9_vm::builtins::IntrinsicId>	77805	77805	0
+<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>	2882278	2882278	0
+<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&u8>	8190	8190	0
+<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&usize>	7371	7371	0
+<std::io::stdio::Stdout as core::io::write::Write>::flush	34	34	0
+<std::io::stdio::StdoutLock as core::io::write::Write>::write_all	58	58	0
+<std::path::Component as core::cmp::PartialEq>::eq	448	448	0
+<std::path::Components as core::iter::traits::double_ended::DoubleEndedIterator>::next_back	497	497	0
+<std::path::Components as core::iter::traits::iterator::Iterator>::next	2660	2660	0
+<std::path::Components>::as_path	420	420	0
+<std::path::Components>::parse_next_component_back	2011	2011	0
+<std::path::Path>::_starts_with	1211	1211	0
+<std::path::PathBuf>::pop	336	336	0
+<std::sync::mpmc::array::Channel<core::result::Result<core::result::Result<core::result::Result<ep9_bytecode::unit::VerifiedUnit, ep9_frontend::bytecodegen::CodegenError>, ep9_frontend::CompileError>, alloc::boxed::Box<dyn core::any::Any + core::marker::Send>>>>::recv::{closure#1}	78	78	0
+<std::sync::mpmc::context::Context>::new	29	29	0
+<std::sync::mpmc::waker::SyncWaker>::disconnect	53	53	0
+<std::sync::mpmc::waker::SyncWaker>::notify	122	122	0
+<std::sync::mpmc::waker::SyncWaker>::register	60	60	0
+<std::sync::once::Once>::call_once::<std::rt::cleanup::{closure#0}>::{closure#0}	60	60	0
+<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<(u64, u64)>>::initialize<<std::sync::once_lock::OnceLock<(u64, u64)>>::get_or_init<ep9_vm::string::sip_keys::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}	170	170	0
+<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<alloc::string::String>>::initialize<<std::sync::once_lock::OnceLock<alloc::string::String>>::get_or_init<ep9_intl::resolve::default_locale::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}	197	197	0
+<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<core::result::Result<(), alloc::string::String>>>::initialize<<std::sync::once_lock::OnceLock<core::result::Result<(), alloc::string::String>>>::get_or_init<ep9_vm::builtins::check::{closure#1}>::{closure#0}, !>::{closure#0}>::{closure#0}	22	22	0
+<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<ep9_vm::builtins::LazyGroups>>::initialize<<std::sync::once_lock::OnceLock<ep9_vm::builtins::LazyGroups>>::get_or_init<ep9_vm::builtins::lazy_groups::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}	755	755	0
+<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::stdout::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}	24	24	0
+<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<usize>>::initialize<<std::sync::once_lock::OnceLock<usize>>::get_or_init<ep9_heap::parallel::helpers::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}	1893	1893	0
+<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<usize>>::initialize<<std::sync::once_lock::OnceLock<usize>>::get_or_init<ep9_platform::sys::unix::page_size::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}	13	13	0
+<std::sync::once_lock::OnceLock<(u64, u64)>>::initialize::<<std::sync::once_lock::OnceLock<(u64, u64)>>::get_or_init<ep9_vm::string::sip_keys::{closure#0}>::{closure#0}, !>	19	19	0
+<std::sync::once_lock::OnceLock<alloc::string::String>>::initialize::<<std::sync::once_lock::OnceLock<alloc::string::String>>::get_or_init<ep9_intl::resolve::default_locale::{closure#0}>::{closure#0}, !>	20	20	0
+<std::sync::once_lock::OnceLock<core::result::Result<(), alloc::string::String>>>::initialize::<<std::sync::once_lock::OnceLock<core::result::Result<(), alloc::string::String>>>::get_or_init<ep9_vm::builtins::check::{closure#1}>::{closure#0}, !>	21	21	0
+<std::sync::once_lock::OnceLock<ep9_vm::builtins::LazyGroups>>::initialize::<<std::sync::once_lock::OnceLock<ep9_vm::builtins::LazyGroups>>::get_or_init<ep9_vm::builtins::lazy_groups::{closure#0}>::{closure#0}, !>	19	19	0
+<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize::<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::stdout::{closure#0}>::{closure#0}, !>	22	22	0
+<std::sync::once_lock::OnceLock<usize>>::initialize::<<std::sync::once_lock::OnceLock<usize>>::get_or_init<ep9_heap::parallel::helpers::{closure#0}>::{closure#0}, !>	19	19	0
+<std::sync::once_lock::OnceLock<usize>>::initialize::<<std::sync::once_lock::OnceLock<usize>>::get_or_init<ep9_platform::sys::unix::page_size::{closure#0}>::{closure#0}, !>	19	19	0
+<std::sys::fs::unix::File>::open_c	330	330	0
+<std::sys::pal::unix::stack_overflow::Handler as core::ops::drop::Drop>::drop	246	246	0
+<std::sys::pal::unix::time::Timespec>::now	912	912	0
+<std::sys::pal::unix::time::Timespec>::sub_timespec	2052	2052	0
+<std::sys::stdio::unix::Stdout as core::io::write::Write>::write_all	40	40	0
+<std::sys::sync::once::futex::Once>::call	390	390	0
+<std::sys::thread::unix::Thread>::new	111	111	0
+<std::sys::thread::unix::Thread>::new::thread_start	148	148	0
+<std::sys::thread_local::key::racy::LazyKey>::lazy_init	35	35	0
+<std::sys::thread_local::native::lazy::Storage<core::cell::Cell<core::option::Option<std::sync::mpmc::context::Context>>, ()>>::get_or_init_slow::<<std::sync::mpmc::context::Context>::with::CONTEXT::__rust_std_internal_init_fn>	23	23	0
+<std::thread::lifecycle::JoinInner<u8>>::join	39	39	0
+<std::thread::lifecycle::spawn_unchecked<<ep9_frontend::worker::Worker>::spawn::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}	31	31	0
+<std::thread::lifecycle::spawn_unchecked<ep9::run::main::{closure#0}, u8>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}	51	51	0
+<std::thread::spawnhook::ChildSpawnHooks>::inherit_and_run	114	114	0
+<std::thread::spawnhook::SpawnHooks as core::ops::drop::Drop>::drop	133	133	0
+<std::thread::thread::Thread>::new	199	199	0
+AddSmi	8198528	8198528	0
+BitwiseAnd	40703840	40703840	0
+BitwiseNot	1377660	1377660	0
+BitwiseOr	20323568	20323568	0
+BitwiseXor	107094690	107094690	0
+CallRuntime	8	8	0
+Construct	481445479	481445479	0
+ConstructReturn	30817984	30817984	0
+CreateArrayLiteral	231832	231832	0
+CreateClosure	215592	215592	0
+CreateEmptyArrayLiteral	75400383	75400383	0
+CreateEmptyObjectLiteral	849	849	0
+CreateFunctionContext	455597	455597	0
+CreateMappedArguments	30	30	0
+CreateObjectLiteral	13154273	13154273	0
+CreateRegExpLiteral	943	943	0
+Dec	715330	715330	0
+DefineNamedOwnProperty	7181289	7181289	0
+Div	143	143	0
+Exit	6	6	0
+ExtraWide	563628	563628	0
+ForInEnumerate	28372	28372	0
+ForInNext	360203	360203	0
+ForInStep	4323720	4323720	0
+GetNamedProperty	5429554736	5429554736	0
+GetNamedPropertyStar	12221460839	12221460839	0
+Inc	220091234	220091234	0
+Jump	23472052	23472052	0
+JumpIfFalse	316713825	316713825	0
+JumpIfForInDone	6218912	6218912	0
+JumpIfToBooleanFalse	350641693	350641693	0
+JumpIfToBooleanTrue	134723510	134723510	0
+JumpIfTrue	35980242	35980242	0
+JumpIfUndefined	1801550	1801550	0
+JumpIfUndefinedOrNull	198604	198604	0
+LdaConstant	17303770	17303770	0
+LdaContextSlot	624805	624805	0
+LdaContextSlotStar	604101909	604101909	0
+LdaCurrentContext	27860592	27860592	0
+LdaCurrentContextSlot	2125290	2125290	0
+LdaCurrentContextSlotStar	1082523980	1082523980	0
+LdaFalse	37324144	37324144	0
+LdaGlobal	332413395	332413395	0
+LdaGlobalInsideTypeof	61	61	0
+LdaNull	55725040	55725040	0
+LdaSmi	27470488	27470488	0
+LdaTrue	27781292	27781292	0
+LdaUndefined	91001248	91001248	0
+LdaZero	24601256	24601256	0
+Ldar	504457272	504457272	0
+LogicalNot	68382416	68382416	0
+Mov	337152049	337152049	0
+PushContext	4555970	4555970	0
+Return	377149262	377149262	0
+SetNamedProperty	4282602531	4282602531	0
+ShiftLeftSmi	72084480	72084480	0
+ShiftRightSmi	3060240	3060240	0
+StaContextSlot	765890	765890	0
+StaCurrentContextSlot	21827924	21827924	0
+StaGlobal	813	813	0
+StaInArrayLiteral	941	941	0
+Star	637982592	637982592	0
+SubSmi	7925255	7925255	0
+TestLessThanOrEqual	7840651	7840651	0
+TestNull	41520	41520	0
+TestTypeOf	6858858	6858858	0
+ToBooleanLogicalNot	3909870	3909870	0
+ToNumber	400	400	0
+ToNumeric	511736	511736	0
+ToObject	425580	425580	0
+Wide	311808568	311808568	0
+_Exit	6	6	0
+_IO_cleanup	184	184	0
+_IO_default_finish	20	20	0
+_IO_doallocbuf	29	29	0
+_IO_enable_locks	22	22	0
+_IO_file_close	3	3	0
+_IO_file_close_it@@GLIBC_2.2.5	56	56	0
+_IO_file_doallocate	52	52	0
+_IO_file_finish@@GLIBC_2.2.5	14	14	0
+_IO_file_fopen@@GLIBC_2.2.5	97	97	0
+_IO_file_open	39	39	0
+_IO_file_read	25	25	0
+_IO_file_stat	3	3	0
+_IO_file_underflow@@GLIBC_2.2.5	292	292	0
+_IO_flush_all	184	184	0
+_IO_link_in	88	88	0
+_IO_new_file_init_internal	13	13	0
+_IO_switch_to_get_mode	130	130	0
+_IO_un_link	8	8	0
+_IO_unsave_markers	14	14	0
+__GI__IO_un_link.part.0	64	64	0
+__GI___close_nocancel	30	30	0
+__GI___tunable_set_val	310	310	0
+__GI___tunables_init	83946	83946	0
+__GI_strstr	36	36	0
+__acos_finite@GLIBC_2.15	8	8	0
+__asin_finite@GLIBC_2.15	8	8	0
+__atan2_finite@GLIBC_2.15	9	9	0
+__call_tls_dtors	140	140	0
+__clone_internal	89	89	0
+__close_nocancel	6	6	0
+__cpu_indicator_init	367	367	0
+__ctype_init	51	51	0
+__cxa_atexit	39	39	0
+__cxa_finalize	232	232	0
+__cxa_thread_atexit_impl	336	336	0
+__divti3	2184	2184	0
+__errno_location	28	28	0
+__exp_finite@GLIBC_2.15	9	9	0
+__floattidf	2520	2520	0
+__futex_abstimed_wait_cancelable64	52	52	0
+__glibc_morecore	20	20	0
+__glibc_tls_internal_free	24	24	0
+__init_misc	26	26	0
+__libc_dlerror_result_free	24	24	0
+__libc_early_init	53	53	0
+__libc_scratch_buffer_set_array_size	100	100	0
+__libc_sigaction	340	340	0
+__libc_start_main@@GLIBC_2.34	81	81	0
+__libc_thread_freeres	18	18	0
+__lll_elision_init	39	39	0
+__log1p	9	9	0
+__log_finite@GLIBC_2.15	9	9	0
+__memcpy_chk	24	24	0
+__memmove_chk	24	24	0
+__mempcpy_chk	24	24	0
+__memset_chk	26	26	0
+__minimal_calloc	132	132	0
+__minimal_free	5	5	0
+__minimal_malloc	1078	1078	0
+__new_exitfn	33	33	0
+__nptl_deallocate_stack	92	92	0
+__nptl_deallocate_tsd	1360	1360	0
+__nptl_free_stacks	104	104	0
+__nptl_free_tcb	30	30	0
+__nptl_stack_list_add	28	28	0
+__open_nocancel	242	242	0
+__pow_finite@GLIBC_2.15	8	8	0
+__pread64_nocancel	14	14	0
+__printf_buffer	438	438	0
+__printf_buffer_done	38	38	0
+__printf_buffer_write	190	190	0
+__pthread_attr_extension	90	90	0
+__pthread_clockjoin_ex	81	81	0
+__pthread_disable_asynccancel	255	255	0
+__pthread_enable_asynccancel	306	306	0
+__pthread_get_minstack	26	26	0
+__pthread_tunables_init	27	27	0
+__read_nocancel	54	54	0
+__res_thread_freeres	38	38	0
+__resolv_context_freeres	44	44	0
+__rpc_thread_destroy	26	26	0
+__rtld_malloc_init_real	111	111	0
+__rtld_malloc_init_stubs	10	10	0
+__rtld_mutex_init	47	47	0
+__run_exit_handlers	79	79	0
+__rustc::__rust_alloc	3645	3645	0
+__rustc::__rust_alloc_zeroed	12	12	0
+__rustc::__rust_realloc	30	30	0
+__set_vma_name	569	569	0
+__sigjmp_save	39	39	0
+__sigsetjmp	306	306	0
+__strchr_avx2	21	21	0
+__strchrnul_avx2	76	76	0
+__tls_init_tp	55	55	0
+__tls_pre_init_tp	17	17	0
+__tunable_get_val	909	909	0
+__underflow	184	184	0
+__unregister_atfork	80	80	0
+__vsnprintf_internal	76	76	0
+__x86_cacheinfo	28	28	0
+__x86_cpu_features	6	6	0
+_dl_add_to_namespace_list	240	240	0
+_dl_add_to_slotinfo	84	84	0
+_dl_allocate_tls	428	428	0
+_dl_allocate_tls_init	209	209	0
+_dl_allocate_tls_storage	343	343	0
+_dl_assign_tls_modid	24	24	0
+_dl_audit_activity_map	17	17	0
+_dl_audit_activity_nsid	33	33	0
+_dl_audit_objclose	30	30	0
+_dl_audit_objopen	20	20	0
+_dl_audit_preinit	5	5	0
+_dl_cache_libcmp	2364	2364	0
+_dl_call_fini	207	207	0
+_dl_call_libc_early_init	25	25	0
+_dl_catch_error	52	52	0
+_dl_catch_exception	420	420	0
+_dl_cet_check	33	33	0
+_dl_cet_setup_features	4	4	0
+_dl_check_all_versions	98	98	0
+_dl_check_map_versions	10143	10143	0
+_dl_count_modids	6	6	0
+_dl_deallocate_tls	290	290	0
+_dl_debug_initialize	34	34	0
+_dl_debug_state	4	4	0
+_dl_debug_update	35	35	0
+_dl_determine_tlsoffset	147	147	0
+_dl_dst_count	184	184	0
+_dl_find_dso_for_object	248	248	0
+_dl_find_object_from_map	373	373	0
+_dl_find_object_init	40	40	0
+_dl_fini	272	272	0
+_dl_hwcaps_split	13	13	0
+_dl_hwcaps_split_masked	544	544	0
+_dl_hwcaps_subdirs_active	49	49	0
+_dl_important_hwcaps	268	268	0
+_dl_init	158	158	0
+_dl_init_paths	323	323	0
+_dl_load_cache_lookup	972	972	0
+_dl_lookup_direct	274	274	0
+_dl_lookup_symbol_x	37244	37244	0
+_dl_map_object	1592	1592	0
+_dl_map_object_deps	1953	1953	0
+_dl_map_object_from_fd	5255	5255	0
+_dl_name_match_p	2001	2001	0
+_dl_new_object	949	949	0
+_dl_next_ld_env_entry	804	804	0
+_dl_process_pt_gnu_property	308	308	0
+_dl_receive_error	22	22	0
+_dl_setup_hash	162	162	0
+_dl_sort_maps	348	348	0
+_dl_sort_maps_init	14	14	0
+_dl_start	642	642	0
+_dl_sym	69	69	0
+_dl_sysdep_parse_arguments	681	681	0
+_dl_sysdep_read_whole_file	45	45	0
+_dl_sysdep_start	37	37	0
+_dl_sysdep_start_cleanup	2	2	0
+_dl_tls_static_surplus_init	40	40	0
+_dl_unload_cache	13	13	0
+_dl_x86_init_cpu_features	5	5	0
+_dlerror_run	43	43	0
+_dlfo_process_initial	246	246	0
+_dlfo_sort_mappings	184	184	0
+_init_first	22	22	0
+_int_memalign	117	117	0
+_itoa_word	162	162	0
+_mid_memalign.isra.0	225	225	0
+_pthread_cleanup_pop@@GLIBC_2.34	6	6	0
+_pthread_cleanup_push@@GLIBC_2.34	7	7	0
+_setjmp	9	9	0
+access	9	9	0
+alloc::boxed::box_new_uninit	189	189	0
+alloc::fmt::format::format_inner	6330	6330	0
+alloc::io::read::default_read_to_end::<&std::fs::File>	331	331	0
+alloc::io::read::default_read_to_end::small_probe_read::<&std::fs::File>	198	198	0
+alloc::io::read::default_read_to_end::small_probe_read::<std::fs::File>	47	47	0
+alloc_new_heap	180	180	0
+arena_get2.part.0	1744	1744	0
+bcmp	100	100	0
+brk	26	26	0
+call_init.part.0	304	304	0
+check_match	12330	12330	0
+check_stdfiles_vtables	12	12	0
+clock_gettime@@GLIBC_2.17	627	627	0
+clone	52	52	0
+clone3	16	16	0
+close	68	68	0
+compiler_builtins::int::specialized_div_rem::u128_div_rem	1288	1288	0
+core::core_arch::x86::xsave::_xgetbv	5	5	0
+core::fmt::write	5430	5430	0
+core::ptr::drop_glue::<<ep9_vm::array_buffer::BufferTable>::new::{closure#0}>	10	10	0
+core::ptr::drop_glue::<<ep9_vm::fuse::Registry>::new::{closure#0}>	16	16	0
+core::ptr::drop_glue::<<ep9_vm::regexp::ProgramTable>::new::{closure#0}>	10	10	0
+core::ptr::drop_glue::<<ep9_vm::regexp::ProgramTable>::new::{closure#1}>	4	4	0
+core::ptr::drop_glue::<<ep9_vm::runtime::Runtime>::new::{closure#0}>	4	4	0
+core::ptr::drop_glue::<<ep9_vm::stub_cache::StubCache>::new::{closure#0}>	10	10	0
+core::ptr::drop_glue::<[alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output = ()> + core::marker::Send>]>	36	36	0
+core::ptr::drop_glue::<[ep9_frontend::bytecodegen::Job]>	6	6	0
+core::ptr::drop_glue::<alloc::collections::btree::set::BTreeSet<u32>>	64	64	0
+core::ptr::drop_glue::<alloc::vec::Vec<(usize, ep9_bytecode::string::UnitString)>>	252	252	0
+core::ptr::drop_glue::<alloc::vec::Vec<ep9_bytecode::string::UnitString>>	3960	3960	0
+core::ptr::drop_glue::<alloc::vec::Vec<ep9_vm::isolate::Exception>>	18	18	0
+core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<(usize, ep9_bytecode::string::UnitString)>>	1349	1349	0
+core::ptr::drop_glue::<core::option::Option<ep9_frontend::bytecodegen::func::Control>>	577	577	0
+core::ptr::drop_glue::<ep9_bytecode::builder::PendingConst>	948410	948410	0
+core::ptr::drop_glue::<ep9_bytecode::string::UnitString>	8	8	0
+core::ptr::drop_glue::<ep9_bytecode::unit::VerifiedUnit>	343510	343510	0
+core::ptr::drop_glue::<ep9_frontend::bytecodegen::UnitCtx>	25	25	0
+core::ptr::drop_glue::<ep9_frontend::scope::ScopeAnalysis>	92617	92617	0
+core::ptr::drop_glue::<ep9_vm::atoms::init::{closure#0}>	4	4	0
+core::ptr::drop_glue::<ep9_vm::function_info::FunctionInfo>	57056	57056	0
+core::ptr::drop_glue::<ep9_vm::symbol::install::{closure#0}>	4	4	0
+core::ptr::drop_glue::<oxc_semantic::Semantic>	118	118	0
+core::ptr::drop_glue::<regress::ir::Node>	14416	14416	0
+core::ptr::drop_glue::<std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<regress::parse::AlternativePath>>>	288	288	0
+core::ptr::drop_glue::<std::collections::hash::map::HashMap<ep9_bytecode::builder::PendingConst, u32>>	327835	327835	0
+core::ptr::drop_glue::<std::collections::hash::map::HashMap<ep9_bytecode::string::UnitString, ep9_bytecode::operand::StringId>>	53405	53405	0
+core::ptr::drop_glue::<std::sync::mpmc::waker::Waker>	50	50	0
+core::ptr::drop_glue::<std::sync::mpsc::Receiver<core::result::Result<core::result::Result<core::result::Result<ep9_bytecode::unit::VerifiedUnit, ep9_frontend::bytecodegen::CodegenError>, ep9_frontend::CompileError>, alloc::boxed::Box<dyn core::any::Any + core::marker::Send>>>>	64	64	0
+core::ptr::drop_glue::<std::sync::mpsc::SyncSender<core::result::Result<core::result::Result<core::result::Result<ep9_bytecode::unit::VerifiedUnit, ep9_frontend::bytecodegen::CodegenError>, ep9_frontend::CompileError>, alloc::boxed::Box<dyn core::any::Any + core::marker::Send>>>>	35	35	0
+core::slice::memchr::memrchr_aligned	2608	2608	0
+core::slice::sort::shared::smallsort::insertion_sort_shift_left::<(usize, u32), <(usize, u32) as core::cmp::PartialOrd>::lt>	294	294	0
+core::slice::sort::shared::smallsort::insertion_sort_shift_left::<ep9_bytecode::unit::Handler, <[ep9_bytecode::unit::Handler]>::sort_by<<ep9_bytecode::builder::FunctionBuilder>::finish::{closure#4}>::{closure#0}>	200	200	0
+core::slice::sort::stable::drift::sort::<(u32, bool), <[(u32, bool)]>::sort_by_key<u32, ep9_vm::property::for_in_keys::{closure#4}>::{closure#0}>	1980	1980	0
+core::slice::sort::stable::drift::sort::<(u32, ep9_frontend::scope::BindingId), <[(u32, ep9_frontend::scope::BindingId)]>::sort_by_key<u32, <ep9_frontend::scope::collect::Builder>::finish::{closure#0}>::{closure#0}>	42393	42393	0
+core::slice::sort::stable::drift::sort::<(u32, ep9_frontend::scope::FunctionId), <[(u32, ep9_frontend::scope::FunctionId)]>::sort_by_key<u32, <ep9_frontend::scope::collect::Builder>::finish::{closure#3}>::{closure#0}>	14622	14622	0
+core::slice::sort::stable::drift::sort::<(u32, ep9_frontend::scope::ImplicitRef, ep9_frontend::scope::RefId), <[(u32, ep9_frontend::scope::ImplicitRef, ep9_frontend::scope::RefId)]>::sort_by_key<(u32, ep9_frontend::scope::ImplicitRef), <ep9_frontend::scope::collect::Builder>::finish::{closure#2}>::{closure#0}>	172874	172874	0
+core::slice::sort::stable::driftsort_main::<(u32, bool), <[(u32, bool)]>::sort_by_key<u32, ep9_vm::property::for_in_keys::{closure#4}>::{closure#0}, alloc::vec::Vec<(u32, bool)>>	66	66	0
+core::slice::sort::stable::driftsort_main::<(u32, ep9_frontend::scope::BindingId), <[(u32, ep9_frontend::scope::BindingId)]>::sort_by_key<u32, <ep9_frontend::scope::collect::Builder>::finish::{closure#0}>::{closure#0}, alloc::vec::Vec<(u32, ep9_frontend::scope::BindingId)>>	51	51	0
+core::slice::sort::stable::driftsort_main::<(u32, ep9_frontend::scope::FunctionId), <[(u32, ep9_frontend::scope::FunctionId)]>::sort_by_key<u32, <ep9_frontend::scope::collect::Builder>::finish::{closure#3}>::{closure#0}, alloc::vec::Vec<(u32, ep9_frontend::scope::FunctionId)>>	51	51	0
+core::slice::sort::stable::driftsort_main::<(u32, ep9_frontend::scope::ImplicitRef, ep9_frontend::scope::RefId), <[(u32, ep9_frontend::scope::ImplicitRef, ep9_frontend::scope::RefId)]>::sort_by_key<(u32, ep9_frontend::scope::ImplicitRef), <ep9_frontend::scope::collect::Builder>::finish::{closure#2}>::{closure#0}, alloc::vec::Vec<(u32, ep9_frontend::scope::ImplicitRef, ep9_frontend::scope::RefId)>>	50	50	0
+cos	9	9	0
+cosf	9	9	0
+create_thread	116	116	0
+dfs_traversal.part.0	498	498	0
+dl_main	1752	1752	0
+dlsym@@GLIBC_2.34	36	36	0
+dlsym_doit	14	14	0
+do_lookup_x	67807	67807	0
+ep9::run::print	115	115	0
+ep9_builtins::array::array_create	795270	795270	0
+ep9_builtins::array::array_species_create	2594095	2594095	0
+ep9_builtins::array::concat	5419574	5419574	0
+ep9_builtins::array::index_key	320	320	0
+ep9_builtins::array::index_of	36	36	0
+ep9_builtins::array::length_of_array_like	8850380	8850380	0
+ep9_builtins::array::merge_sort	1541895	1541895	0
+ep9_builtins::array::pop	9771030	9771030	0
+ep9_builtins::array::shift	145400	145400	0
+ep9_builtins::array::sort	1003857	1003857	0
+ep9_builtins::array::sorted_order	1692734	1692734	0
+ep9_builtins::array::sorted_order::{closure#4}	3505325	3505325	0
+ep9_builtins::array::well_known	2953860	2953860	0
+ep9_builtins::date::date	6888	6888	0
+ep9_builtins::date::get_time	1560	1560	0
+ep9_builtins::date::this_time_value	2460	2460	0
+ep9_builtins::date::to_primitive	6300	6300	0
+ep9_builtins::function::apply	285	285	0
+ep9_builtins::function::call	79	79	0
+ep9_builtins::math::log	62	62	0
+ep9_builtins::math::pow	98	98	0
+ep9_builtins::number::exact_decimal	1534	1534	0
+ep9_builtins::number::number	192	192	0
+ep9_builtins::number::parse_float	4796820	4796820	0
+ep9_builtins::number::parse_int	851285	851285	0
+ep9_builtins::number::to_fixed	462	462	0
+ep9_builtins::number::to_string	1253100	1253100	0
+ep9_builtins::regexp::exec::builtin_match	109980	109980	0
+ep9_builtins::regexp::is_reg_exp	1360	1360	0
+ep9_builtins::regexp::proto::dot_all	425	425	0
+ep9_builtins::regexp::proto::exec	59220	59220	0
+ep9_builtins::regexp::proto::flags	30425	30425	0
+ep9_builtins::regexp::proto::global	425	425	0
+ep9_builtins::regexp::proto::has_flag	33320	33320	0
+ep9_builtins::regexp::proto::has_indices	425	425	0
+ep9_builtins::regexp::proto::ignore_case	425	425	0
+ep9_builtins::regexp::proto::multiline	425	425	0
+ep9_builtins::regexp::proto::source	55825	55825	0
+ep9_builtins::regexp::proto::sticky	425	425	0
+ep9_builtins::regexp::proto::this_object	5610	5610	0
+ep9_builtins::regexp::proto::to_string	14565	14565	0
+ep9_builtins::regexp::proto::unicode	425	425	0
+ep9_builtins::regexp::proto::unicode_sets	425	425	0
+ep9_builtins::regexp::regexp	11390	11390	0
+ep9_builtins::string::case::convert	3078	3078	0
+ep9_builtins::string::case::convert_locale	279363	279363	0
+ep9_builtins::string::case::map_case	198988	198988	0
+ep9_builtins::string::case::to_locale_upper_case	8640	8640	0
+ep9_builtins::string::case::to_lower_case	216	216	0
+ep9_builtins::string::char_code_at	897452646	897452646	0
+ep9_builtins::string::pattern::push	255	255	0
+ep9_builtins::string::pattern::split	1065	1065	0
+ep9_builtins::string::proto::char_at	47940	47940	0
+ep9_builtins::string::proto::index_of	38480460	38480460	0
+ep9_builtins::string::proto::substring	42513085	42513085	0
+ep9_builtins::string::string_index_of	1430	1430	0
+ep9_builtins::string::units	84492	84492	0
+ep9_bytecode::sha256::sha256	126	126	0
+ep9_bytecode::verify::const_matches	587010	587010	0
+ep9_bytecode::verify::required_scale	578544	578544	0
+ep9_bytecode::verify::verify	13963265	13963265	0
+ep9_bytecode::verify::verify_constants	453180	453180	0
+ep9_bytecode::verify::verify_handlers	46114	46114	0
+ep9_bytecode::verify::verify_mapped_parameters	94	94	0
+ep9_bytecode::verify::verify_module_records	21	21	0
+ep9_bytecode::verify::verify_positions	826165	826165	0
+ep9_frontend::bytecodegen::compile	314	314	0
+ep9_frontend::bytecodegen::function_meta	163731	163731	0
+ep9_frontend::bytecodegen::gen_job	256176	256176	0
+ep9_frontend::bytecodegen::generate_with	1670130	1670130	0
+ep9_frontend::bytecodegen::literal::property_name	4587	4587	0
+ep9_frontend::check_depth	748	748	0
+ep9_frontend::prescan::estimate	49	49	0
+ep9_frontend::regex_check::parse	1192449	1192449	0
+ep9_frontend::regex_check::unicode_mode_escape_error	638	638	0
+ep9_frontend::with_front_end_at::<core::result::Result<ep9_bytecode::unit::VerifiedUnit, ep9_frontend::bytecodegen::CodegenError>, ep9_frontend::bytecodegen::compile::{closure#0}>::{closure#0}	206	206	0
+ep9_heap::barrier::barrier_slow	1909082	1909082	0
+ep9_heap::barrier::barrier_slow_shape	29745	29745	0
+ep9_heap::parallel::drain	289	289	0
+ep9_heap::remembered::log_store	59942837	59942837	0
+ep9_heap::remembered::new_cards	96	96	0
+ep9_intl::tag::canonicalize_locale_list	31680	31680	0
+ep9_intl::tag::remove_unicode_extension	237600	237600	0
+ep9_keep_barrier_slow	20178613	20178613	0
+ep9_keep_barrier_slow_shape	156768	156768	0
+ep9_math::log::log	28	28	0
+ep9_math::log::log::hw	138	138	0
+ep9_math::pow::pow_cr	28	28	0
+ep9_math::pow::pow_cr::hw	336	336	0
+ep9_math::pow::pow_exact	88	88	0
+ep9_math::pow::pow_js	104	104	0
+ep9_math::pow::special	130	130	0
+ep9_platform::spill::thunk_sysv64::<<ep9_heap::heap::Heap>::collect_kind::{closure#0}, ()>	228	228	0
+ep9_regexp::duplicate_names_conflict::{closure#0}	1343	1343	0
+ep9_spill_sysv64	228	228	0
+ep9_vm::abi::realm::embedder_intrinsic	246155	246155	0
+ep9_vm::accessor::call_getter	257205	257205	0
+ep9_vm::accessor::new_pair	2199	2199	0
+ep9_vm::accessor::trace_pair	900	900	0
+ep9_vm::arguments::create_and_remember	232	232	0
+ep9_vm::arguments::create_kind::<true>	5451	5451	0
+ep9_vm::arguments::fill_array_values	12	12	0
+ep9_vm::array_buffer::trace_bytes	246504	246504	0
+ep9_vm::atoms::atomize	57132879	57132879	0
+ep9_vm::atoms::atomize::{closure#1}	65092	65092	0
+ep9_vm::atoms::forward	27193200	27193200	0
+ep9_vm::atoms::init::{closure#0}	3335898	3335898	0
+ep9_vm::atoms::intern_latin1	5768365	5768365	0
+ep9_vm::atoms::intern_slow	81056189	81056189	0
+ep9_vm::atoms::intern_str	15480083	15480083	0
+ep9_vm::builtins::function_infos	37029	37029	0
+ep9_vm::builtins::function_object	34842	34842	0
+ep9_vm::builtins::install_pass	93545	93545	0
+ep9_vm::builtins::intrinsic	1434	1434	0
+ep9_vm::builtins::key_bits	12804	12804	0
+ep9_vm::builtins::lookup	124066	124066	0
+ep9_vm::call::call_with::<ep9_vm::call::call_function::{closure#0}>	2640808	2640808	0
+ep9_vm::call::host_hole	257	257	0
+ep9_vm::call::ordinary_create_from_constructor	365727	365727	0
+ep9_vm::call::push_construct_stub	109022	109022	0
+ep9_vm::construct_ic::miss	166216	166216	0
+ep9_vm::conv::less_than	8701	8701	0
+ep9_vm::conv::numeric_op	275	275	0
+ep9_vm::conv::strict_equals	55989150	55989150	0
+ep9_vm::conv::to_number	16174484	16174484	0
+ep9_vm::conv::to_primitive	348816	348816	0
+ep9_vm::conv::to_rust_string	3050	3050	0
+ep9_vm::conv::to_string	18697135	18697135	0
+ep9_vm::elements::new_double_cell	706	706	0
+ep9_vm::elements::transition	11675322	11675322	0
+ep9_vm::exotic::function_prototype	18832	18832	0
+ep9_vm::exotic::is_lazy_prototype	2488794	2488794	0
+ep9_vm::exotic::is_proxy_constructor	2371	2371	0
+ep9_vm::exotic::own_attrs	50537182	50537182	0
+ep9_vm::feedback::count_call	44696	44696	0
+ep9_vm::feedback::make	2959593	2959593	0
+ep9_vm::feedback::set_slot	3411	3411	0
+ep9_vm::feedback::trace_vector	1925963	1925963	0
+ep9_vm::field_rep::generalize	658927	658927	0
+ep9_vm::ic::chain_cell_seen	2621532	2621532	0
+ep9_vm::ic::cold_load	1596330	1596330	0
+ep9_vm::ic::field_location	4000210	4000210	0
+ep9_vm::ic::find	3841235	3841235	0
+ep9_vm::ic::global_case	7613	7613	0
+ep9_vm::ic::grow_add::<false>	100	100	0
+ep9_vm::ic::grow_add::<true>	198936126	198936126	0
+ep9_vm::ic::load_case	5398214	5398214	0
+ep9_vm::ic::mega_load	1289346	1289346	0
+ep9_vm::ic::new_handler	7741190	7741190	0
+ep9_vm::ic::record	20604569	20604569	0
+ep9_vm::ic::skip_global_miss	4092	4092	0
+ep9_vm::ic::skip_miss	8156478	8156478	0
+ep9_vm::ic::store_global_miss	1678	1678	0
+ep9_vm::ic::trace_handler	307420	307420	0
+ep9_vm::ic::trace_poly	231340	231340	0
+ep9_vm::ic::walk	23202437	23202437	0
+ep9_vm::interp::dsl::skip_next::<42>	6	6	0
+ep9_vm::interp::dsl::skip_next::<44>	6	6	0
+ep9_vm::interp::ops::concat_strings	4638994	4638994	0
+ep9_vm::interp::run	31	31	0
+ep9_vm::interp::slow::call::call	138718009	138718009	0
+ep9_vm::interp::slow::call::call_property::<0>	17400945	17400945	0
+ep9_vm::interp::slow::call::call_property::<1>	1885084148	1885084148	0
+ep9_vm::interp::slow::call::call_property::<2>	64708222	64708222	0
+ep9_vm::interp::slow::count_entry	75	75	0
+ep9_vm::interp::slow::interrupt	141897	141897	0
+ep9_vm::interp::slow::interrupt_at	52536	52536	0
+ep9_vm::interp::slow::iter::for_in_enumerate	67438394	67438394	0
+ep9_vm::interp::slow::iter::for_in_next	39273790	39273790	0
+ep9_vm::interp::slow::literal::array_from_boilerplate	38181	38181	0
+ep9_vm::interp::slow::literal::boilerplate_value	68204	68204	0
+ep9_vm::interp::slow::literal::create_closure	14117817	14117817	0
+ep9_vm::interp::slow::literal::create_context	38725745	38725745	0
+ep9_vm::interp::slow::literal::literal	111247	111247	0
+ep9_vm::interp::slow::literal::object_from_boilerplate	63901	63901	0
+ep9_vm::interp::slow::ops_misc::binary	2780	2780	0
+ep9_vm::interp::slow::ops_misc::compare	235689393	235689393	0
+ep9_vm::interp::slow::ops_misc::to_boolean	239209011	239209011	0
+ep9_vm::interp::slow::ops_misc::unary	2650	2650	0
+ep9_vm::interp::slow::property::get_named	10151738	10151738	0
+ep9_vm::interp::slow::property::global_value	91402	91402	0
+ep9_vm::interp::slow::property::load_global	68000	68000	0
+ep9_vm::interp::slow::property::prop	170669476	170669476	0
+ep9_vm::interp::slow::property::set_global	786	786	0
+ep9_vm::interp::slow::property::set_named_miss	253537490	253537490	0
+ep9_vm::interp::slow::property::store_global	276	276	0
+ep9_vm::interp::slow::runtime::call_runtime	511	511	0
+ep9_vm::interp::slow::runtime::initialize_global	630	630	0
+ep9_vm::interp::tails::load_global	24641	24641	0
+ep9_vm::key::index_key	2149808	2149808	0
+ep9_vm::key::number_key	2891516	2891516	0
+ep9_vm::key::to_property_key	7208620	7208620	0
+ep9_vm::keyed_ic::note_receiver	100	100	0
+ep9_vm::literal_site::array_site	4855	4855	0
+ep9_vm::literal_site::literal_shape_ok	11700	11700	0
+ep9_vm::literal_site::nested_object	2400	2400	0
+ep9_vm::literal_site::shallow_boilerplate	3683	3683	0
+ep9_vm::literal_site::shared_slot	3099	3099	0
+ep9_vm::literal_site::slot_at	22872	22872	0
+ep9_vm::natives::array_constructor	23174588	23174588	0
+ep9_vm::natives::array_join	120	120	0
+ep9_vm::natives::array_push	17707572	17707572	0
+ep9_vm::natives::iterator_iterator	37870	37870	0
+ep9_vm::natives::join	505	505	0
+ep9_vm::numconv::ascii_to_number	6130	6130	0
+ep9_vm::numconv::number_to_ascii	598249	598249	0
+ep9_vm::object::alloc_with_shape	50265192	50265192	0
+ep9_vm::object::array_set	69152182	69152182	0
+ep9_vm::object::array_set_length	19313494	19313494	0
+ep9_vm::object::element_get	21244088	21244088	0
+ep9_vm::object::element_set	390	390	0
+ep9_vm::object::is_constructor	6138187	6138187	0
+ep9_vm::object::new_array	21019561	21019561	0
+ep9_vm::object::new_context	30492855	30492855	0
+ep9_vm::object::new_elements	23135729	23135729	0
+ep9_vm::object::new_function	26425610	26425610	0
+ep9_vm::object::new_list	525	525	0
+ep9_vm::object::new_record	77	77	0
+ep9_vm::object::new_slot_object	119450	119450	0
+ep9_vm::object::set_proto	1584	1584	0
+ep9_vm::object::slot_set	316941	316941	0
+ep9_vm::object::store_element_slow	33068095	33068095	0
+ep9_vm::object::trace_context	4480	4480	0
+ep9_vm::object::trace_function	184664	184664	0
+ep9_vm::object::trace_object::<0>	11372616	11372616	0
+ep9_vm::object::trace_object::<1>	96	96	0
+ep9_vm::object::trace_object::<2>	4033808	4033808	0
+ep9_vm::object::trace_realm	25	25	0
+ep9_vm::profile::budget_after_poll	189196	189196	0
+ep9_vm::property::add_own_property	15872090	15872090	0
+ep9_vm::property::array_define_length	21093795	21093795	0
+ep9_vm::property::array_store	5705259	5705259	0
+ep9_vm::property::define	158300	158300	0
+ep9_vm::property::define_index	1942160	1942160	0
+ep9_vm::property::define_keyed	64929	64929	0
+ep9_vm::property::define_on_receiver	27585970	27585970	0
+ep9_vm::property::delete_index	6199815	6199815	0
+ep9_vm::property::dict_index	5759477	5759477	0
+ep9_vm::property::find_index	33521448	33521448	0
+ep9_vm::property::get_index	33445497	33445497	0
+ep9_vm::property::get_keyed	129623950	129623950	0
+ep9_vm::property::get_own_property	707	707	0
+ep9_vm::property::get_primitive	702627	702627	0
+ep9_vm::property::get_with_receiver	242165056	242165056	0
+ep9_vm::property::has_own_with	19279249	19279249	0
+ep9_vm::property::index_digits	24345600	24345600	0
+ep9_vm::property::is_extensible	1484	1484	0
+ep9_vm::property::ordinary_define_own_property	2489	2489	0
+ep9_vm::property::own_index	56062571	56062571	0
+ep9_vm::property::own_property	26076902	26076902	0
+ep9_vm::property::plain_store	525555	525555	0
+ep9_vm::property::primitive_proto	363409	363409	0
+ep9_vm::property::set	99266642	99266642	0
+ep9_vm::property::set_index	512610	512610	0
+ep9_vm::property::set_prototype_of	330	330	0
+ep9_vm::property::set_with_receiver	13209391	13209391	0
+ep9_vm::property::try_has_index	1915730	1915730	0
+ep9_vm::property::validate	252	252	0
+ep9_vm::props::dict_find	51171765	51171765	0
+ep9_vm::props::new_props	1409607	1409607	0
+ep9_vm::props::own_add	44305226	44305226	0
+ep9_vm::props::own_define	26611065	26611065	0
+ep9_vm::props::own_entry	65862897	65862897	0
+ep9_vm::props::own_get	316438	316438	0
+ep9_vm::props::own_get_with	41910893	41910893	0
+ep9_vm::props::reserve_field_slots	149694545	149694545	0
+ep9_vm::props::to_dictionary	17532556	17532556	0
+ep9_vm::props::trace_props	2259	2259	0
+ep9_vm::props_index::add	13852416	13852416	0
+ep9_vm::props_index::alloc	2025717	2025717	0
+ep9_vm::props_index::new_index	1678992	1678992	0
+ep9_vm::props_index::reindex	11044659	11044659	0
+ep9_vm::props_index::trace_props_indexed	115497	115497	0
+ep9_vm::proxy::is_array	1192905	1192905	0
+ep9_vm::realm::declare_globals	7129	7129	0
+ep9_vm::realm::intrinsic_in	3873198	3873198	0
+ep9_vm::realm::record_intrinsic	2133	2133	0
+ep9_vm::realm::try_get_function_realm	302960	302960	0
+ep9_vm::regexp::compiled	57648	57648	0
+ep9_vm::regexp::compiled::{closure#2}::{closure#0}	490558	490558	0
+ep9_vm::regexp::create_literal	41492	41492	0
+ep9_vm::regexp::exec	1237351	1237351	0
+ep9_vm::regexp::new_regexp	83268	83268	0
+ep9_vm::regexp::parse_flags	4980	4980	0
+ep9_vm::regexp::units_of	2858	2858	0
+ep9_vm::shape::add_with	37436608	37436608	0
+ep9_vm::shape::append	725697	725697	0
+ep9_vm::shape::build_index	707646	707646	0
+ep9_vm::shape::cached_function_shape	5459356	5459356	0
+ep9_vm::shape::copy_descriptors	356806	356806	0
+ep9_vm::shape::descriptors_for_child	623717	623717	0
+ep9_vm::shape::details_at	3387136	3387136	0
+ep9_vm::shape::dictionary_shape_for_kind	1295533	1295533	0
+ep9_vm::shape::dictionary_shape_of	945140	945140	0
+ep9_vm::shape::info_push	12610	12610	0
+ep9_vm::shape::install	1500059	1500059	0
+ep9_vm::shape::is_transition_to	6872140	6872140	0
+ep9_vm::shape::lookup	13015	13015	0
+ep9_vm::shape::lookup_with	382048291	382048291	0
+ep9_vm::shape::lower_bound	11763550	11763550	0
+ep9_vm::shape::may_have_index_keys	25985	25985	0
+ep9_vm::shape::new_descriptors	123724	123724	0
+ep9_vm::shape::new_proto_info	5619	5619	0
+ep9_vm::shape::new_shape	1526960	1526960	0
+ep9_vm::shape::new_unique	2499	2499	0
+ep9_vm::shape::own_descriptors	3860	3860	0
+ep9_vm::shape::proto_info_for	23996402	23996402	0
+ep9_vm::shape::root_shape_for_kind	37437868	37437868	0
+ep9_vm::shape::trace_descriptors	21123	21123	0
+ep9_vm::shape::trace_proto_info	2350	2350	0
+ep9_vm::shape::trace_shape	1127422	1127422	0
+ep9_vm::shape::trace_slots	10909728	10909728	0
+ep9_vm::shape::trace_transitions	36927	36927	0
+ep9_vm::shape::with_elements_kind	11031850	11031850	0
+ep9_vm::slack::is_proto_field	13920	13920	0
+ep9_vm::string::alloc_string	34224518	34224518	0
+ep9_vm::string::concat	17299848	17299848	0
+ep9_vm::string::equals	77020755	77020755	0
+ep9_vm::string::equals_text	2932059	2932059	0
+ep9_vm::string::flatten_cons	40096143	40096143	0
+ep9_vm::string::hash	91103789	91103789	0
+ep9_vm::string::latin1_size	1822164	1822164	0
+ep9_vm::string::new_string	46881	46881	0
+ep9_vm::string::non_seq_units	14812384	14812384	0
+ep9_vm::string::search::x86::find_u8_avx2	22472980	22472980	0
+ep9_vm::string::sip13_word	783900	783900	0
+ep9_vm::string::substring	29006083	29006083	0
+ep9_vm::string::trace_rope	332290	332290	0
+ep9_vm::string::write_flat::<u8>	20266507	20266507	0
+ep9_vm::symbol::alloc_symbol	1260	1260	0
+ep9_vm::symbol::install::{closure#0}	3756	3756	0
+ep9_vm::symbol::trace_symbol	360	360	0
+ep9_vm::validity::ensure	17396	17396	0
+ep9_vm::validity::new_cell	5284	5284	0
+ep9_vm::validity::trace_cell	5396	5396	0
+ep9_vm::wrapper::string_key	31360	31360	0
+exit	7	7	0
+exp2f@@GLIBC_2.27	9	9	0
+expand_dynamic_string_token	48	48	0
+expf@@GLIBC_2.27	9	9	0
+expm1	9	9	0
+fclose@@GLIBC_2.2.5	64	64	0
+fillin_rpath.isra.0	143	143	0
+fma	6	6	0
+fopen@@GLIBC_2.2.5	43	43	0
+fstat	36	36	0
+fstatat	28	28	0
+get_common_cache_info.constprop.0	223	223	0
+get_common_indices.constprop.0	74	74	0
+get_free_list	36	36	0
+getauxval	730	730	0
+getenv	4660	4660	0
+getpagesize	78	78	0
+getrandom	48	48	0
+getrlimit	20	20	0
+gettid	12	12	0
+handle_intel.constprop.0	516	516	0
+handle_preload_list	71	71	0
+index	699	699	0
+init_cpu_features.constprop.0	410	410	0
+init_tls	95	95	0
+intel_check_word.constprop.0	5590	5590	0
+log2@@GLIBC_2.29	9	9	0
+log2f@@GLIBC_2.27	9	9	0
+logf@@GLIBC_2.27	9	9	0
+lookup_malloc_symbol	172	172	0
+lseek	18	18	0
+madvise	12	12	0
+main	203	203	0
+map_doit	19	19	0
+memchr	25	25	0
+memchr::arch::x86_64::memchr::memchr3_raw::detect	32	32	0
+memchr::arch::x86_64::memchr::memchr3_raw::find_avx2	1033248	1033248	0
+memchr::arch::x86_64::memchr::memchr_raw::detect	9	9	0
+memchr::arch::x86_64::memchr::memchr_raw::find_avx2	1026735	1026735	0
+memchr::memmem::searcher::searcher_kind_avx2	21	21	0
+memcpy	810	810	0
+memcpy@@GLIBC_2.14	48	48	0
+memmove	48	48	0
+mempcpy	140	140	0
+memrchr	28	28	0
+memset	764	764	0
+mmap	9434	9434	0
+mremap	42	42	0
+munmap	174	174	0
+munmap_chunk	570	570	0
+name_stack_maps	134	134	0
+open	221	221	0
+open_path	573	573	0
+open_verify.constprop.0	512	512	0
+openaux	176	176	0
+oxc_ast_visit::generated::visit::walk::walk_arguments::<ep9_frontend::scope::collect::Builder>	29151	29151	0
+oxc_ast_visit::generated::visit::walk::walk_assignment_target::<ep9_frontend::scope::collect::Builder>	112999	112999	0
+oxc_ast_visit::generated::visit::walk::walk_binding_pattern::<oxc_semantic::builder::SemanticBuilder>	47	47	0
+oxc_ast_visit::generated::visit::walk::walk_catch_clause::<oxc_semantic::builder::SemanticBuilder>	4224	4224	0
+oxc_ast_visit::generated::visit::walk::walk_declaration::<ep9_frontend::scope::collect::Builder>	185793	185793	0
+oxc_ast_visit::generated::visit::walk::walk_declaration::<oxc_semantic::builder::SemanticBuilder>	159599	159599	0
+oxc_ast_visit::generated::visit::walk::walk_directive::<oxc_semantic::builder::SemanticBuilder>	114	114	0
+oxc_ast_visit::generated::visit::walk::walk_expression::<ep9_frontend::scope::collect::Builder>	3197746	3197746	0
+oxc_ast_visit::generated::visit::walk::walk_expression::<oxc_semantic::builder::SemanticBuilder>	3137070	3137070	0
+oxc_ast_visit::generated::visit::walk::walk_formal_parameters::<oxc_semantic::builder::SemanticBuilder>	274502	274502	0
+oxc_ast_visit::generated::visit::walk::walk_property_key::<oxc_semantic::builder::SemanticBuilder>	7183	7183	0
+oxc_ast_visit::generated::visit::walk::walk_simple_assignment_target::<ep9_frontend::scope::collect::Builder>	237185	237185	0
+oxc_ast_visit::generated::visit::walk::walk_statement::<ep9_frontend::scope::collect::Builder>	1055425	1055425	0
+oxc_ast_visit::generated::visit::walk::walk_statement::<oxc_semantic::builder::SemanticBuilder>	889805	889805	0
+oxc_ast_visit::generated::visit::walk::walk_statements::<ep9_frontend::scope::collect::Builder>	93	93	0
+oxc_ast_visit::generated::visit::walk::walk_static_member_expression::<oxc_semantic::builder::SemanticBuilder>	1237026	1237026	0
+oxc_parser::lexer::byte_handlers::AMP::<oxc_parser::config::TokensLexerConfig>	22065	22065	0
+oxc_parser::lexer::byte_handlers::ATR::<oxc_parser::config::TokensLexerConfig>	78	78	0
+oxc_parser::lexer::byte_handlers::BEC::<oxc_parser::config::TokensLexerConfig>	18924	18924	0
+oxc_parser::lexer::byte_handlers::BEO::<oxc_parser::config::TokensLexerConfig>	18924	18924	0
+oxc_parser::lexer::byte_handlers::BTC::<oxc_parser::config::TokensLexerConfig>	4593	4593	0
+oxc_parser::lexer::byte_handlers::BTO::<oxc_parser::config::TokensLexerConfig>	4599	4599	0
+oxc_parser::lexer::byte_handlers::COL::<oxc_parser::config::TokensLexerConfig>	2433	2433	0
+oxc_parser::lexer::byte_handlers::COM::<oxc_parser::config::TokensLexerConfig>	22920	22920	0
+oxc_parser::lexer::byte_handlers::CRT::<oxc_parser::config::TokensLexerConfig>	144	144	0
+oxc_parser::lexer::byte_handlers::DIG::<oxc_parser::config::TokensLexerConfig>	106110	106110	0
+oxc_parser::lexer::byte_handlers::EQL::<oxc_parser::config::TokensLexerConfig>	143679	143679	0
+oxc_parser::lexer::byte_handlers::EXL::<oxc_parser::config::TokensLexerConfig>	12256	12256	0
+oxc_parser::lexer::byte_handlers::GTR::<oxc_parser::config::TokensLexerConfig>	681	681	0
+oxc_parser::lexer::byte_handlers::IDT::<oxc_parser::config::TokensLexerConfig>	87500	87500	0
+oxc_parser::lexer::byte_handlers::LIN::<oxc_parser::config::TokensLexerConfig>	1911033	1911033	0
+oxc_parser::lexer::byte_handlers::LSS::<oxc_parser::config::TokensLexerConfig>	10142	10142	0
+oxc_parser::lexer::byte_handlers::L_A::<oxc_parser::config::TokensLexerConfig>	35640	35640	0
+oxc_parser::lexer::byte_handlers::L_B::<oxc_parser::config::TokensLexerConfig>	18972	18972	0
+oxc_parser::lexer::byte_handlers::L_C::<oxc_parser::config::TokensLexerConfig>	67485	67485	0
+oxc_parser::lexer::byte_handlers::L_D::<oxc_parser::config::TokensLexerConfig>	11984	11984	0
+oxc_parser::lexer::byte_handlers::L_E::<oxc_parser::config::TokensLexerConfig>	53636	53636	0
+oxc_parser::lexer::byte_handlers::L_F::<oxc_parser::config::TokensLexerConfig>	131062	131062	0
+oxc_parser::lexer::byte_handlers::L_G::<oxc_parser::config::TokensLexerConfig>	8856	8856	0
+oxc_parser::lexer::byte_handlers::L_I::<oxc_parser::config::TokensLexerConfig>	102220	102220	0
+oxc_parser::lexer::byte_handlers::L_K::<oxc_parser::config::TokensLexerConfig>	2040	2040	0
+oxc_parser::lexer::byte_handlers::L_L::<oxc_parser::config::TokensLexerConfig>	17852	17852	0
+oxc_parser::lexer::byte_handlers::L_M::<oxc_parser::config::TokensLexerConfig>	22494	22494	0
+oxc_parser::lexer::byte_handlers::L_N::<oxc_parser::config::TokensLexerConfig>	59528	59528	0
+oxc_parser::lexer::byte_handlers::L_O::<oxc_parser::config::TokensLexerConfig>	10356	10356	0
+oxc_parser::lexer::byte_handlers::L_P::<oxc_parser::config::TokensLexerConfig>	54265	54265	0
+oxc_parser::lexer::byte_handlers::L_R::<oxc_parser::config::TokensLexerConfig>	65088	65088	0
+oxc_parser::lexer::byte_handlers::L_S::<oxc_parser::config::TokensLexerConfig>	74433	74433	0
+oxc_parser::lexer::byte_handlers::L_T::<oxc_parser::config::TokensLexerConfig>	311996	311996	0
+oxc_parser::lexer::byte_handlers::L_U::<oxc_parser::config::TokensLexerConfig>	7804	7804	0
+oxc_parser::lexer::byte_handlers::L_V::<oxc_parser::config::TokensLexerConfig>	58730	58730	0
+oxc_parser::lexer::byte_handlers::L_W::<oxc_parser::config::TokensLexerConfig>	11066	11066	0
+oxc_parser::lexer::byte_handlers::MIN::<oxc_parser::config::TokensLexerConfig>	5957	5957	0
+oxc_parser::lexer::byte_handlers::PIP::<oxc_parser::config::TokensLexerConfig>	15970	15970	0
+oxc_parser::lexer::byte_handlers::PLS::<oxc_parser::config::TokensLexerConfig>	15329	15329	0
+oxc_parser::lexer::byte_handlers::PRC::<oxc_parser::config::TokensLexerConfig>	45	45	0
+oxc_parser::lexer::byte_handlers::PRD::<oxc_parser::config::TokensLexerConfig>	596768	596768	0
+oxc_parser::lexer::byte_handlers::QOD::<oxc_parser::config::TokensLexerConfig>	121931	121931	0
+oxc_parser::lexer::byte_handlers::QOS::<oxc_parser::config::TokensLexerConfig>	12092	12092	0
+oxc_parser::lexer::byte_handlers::QST::<oxc_parser::config::TokensLexerConfig>	2899	2899	0
+oxc_parser::lexer::byte_handlers::SLH::<oxc_parser::config::TokensLexerConfig>	7411	7411	0
+oxc_parser::lexer::byte_handlers::SPS::<oxc_parser::config::TokensLexerConfig>	5241	5241	0
+oxc_parser::lexer::byte_handlers::TLD::<oxc_parser::config::TokensLexerConfig>	51	51	0
+oxc_parser::lexer::byte_handlers::ZER::<oxc_parser::config::TokensLexerConfig>	27472	27472	0
+oxc_parser::lexer::cold_branch::<<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::read_string_literal_double_quote::{closure#0}, oxc_parser::lexer::kind::Kind>	3314313	3314313	0
+oxc_parser::lexer::cold_branch::<<oxc_parser::lexer::Lexer<oxc_parser::config::TokensLexerConfig>>::read_string_literal_single_quote::{closure#0}, oxc_parser::lexer::kind::Kind>	3512	3512	0
+oxc_regular_expression::parser::pattern_parser::unicode_escape::decode	2028	2028	0
+oxc_regular_expression::parser::pattern_parser::unicode_escape::fixed_hex_digits	4030	4030	0
+oxc_semantic::builder::is_delete_member_target	24	24	0
+oxc_semantic::checker::javascript::check_binding_identifier	123316	123316	0
+oxc_semantic::checker::javascript::check_for_statement_left	171	171	0
+oxc_semantic::checker::javascript::check_function_declaration	477	477	0
+oxc_semantic::checker::javascript::check_function_declaration_in_labeled_statement	10	10	0
+oxc_semantic::checker::javascript::check_identifier	744500	744500	0
+oxc_semantic::checker::javascript::check_labeled_statement	96	96	0
+oxc_semantic::checker::javascript::check_number_literal	60496	60496	0
+oxc_semantic::checker::javascript::check_object_expression	11419	11419	0
+oxc_semantic::checker::javascript::check_string_literal	55342	55342	0
+oxc_semantic::checker::javascript::check_unary_expression	3777	3777	0
+oxc_semantic::checker::javascript::check_variable_declaration	25110	25110	0
+oxc_semantic::checker::javascript::is_function_decl_part_of_if_statement	9147	9147	0
+oxc_str::ident_hasher::ident_hash	1471292	1471292	0
+poll	8	8	0
+posix_memalign	111	111	0
+powf@@GLIBC_2.27	9	9	0
+prctl	58	58	0
+pthread_attr_destroy	97	97	0
+pthread_attr_getguardsize@@GLIBC_2.34	10	10	0
+pthread_attr_getstack@@GLIBC_2.34	45	45	0
+pthread_attr_init@@GLIBC_2.2.5	126	126	0
+pthread_attr_setaffinity_np@@GLIBC_2.32	200	200	0
+pthread_attr_setstacksize@@GLIBC_2.34	14	14	0
+pthread_create@@GLIBC_2.34	606	606	0
+pthread_detach@@GLIBC_2.34	13	13	0
+pthread_getaffinity_np@@GLIBC_2.32	110	110	0
+pthread_join@@GLIBC_2.34	5	5	0
+pthread_key_create@@GLIBC_2.34	45	45	0
+pthread_key_delete@@GLIBC_2.34	16	16	0
+pthread_mutex_lock@@GLIBC_2.2.5	484	484	0
+pthread_mutex_unlock@@GLIBC_2.2.5	401	401	0
+pthread_self	21	21	0
+pthread_setname_np@@GLIBC_2.34	76	76	0
+pthread_setspecific@@GLIBC_2.34	74	74	0
+ptmalloc_init.part.0	849	849	0
+read	160	160	0
+regress::optimizer::contains_capture_groups	18984	18984	0
+regress::optimizer::is_unrollable	544	544	0
+regress::parse::add_class_atom	367	367	0
+regress::parse::add_icase_code_points	3180956	3180956	0
+regress::parse::codepoints_from_class	78	78	0
+regress::parse::codepoints_from_class_positive	1156	1156	0
+regress::parse::make_alt	3496	3496	0
+regress::parse::make_bracket_class	787	787	0
+regress::startpredicate::compute_start_predicate	1694	1694	0
+regress::startpredicate::compute_unit_predicate	5445	5445	0
+regress::startpredicate::cps_to_first_byte_bitmap	3790	3790	0
+regress::startpredicate::is_start_anchored	1386	1386	0
+regress::unicode::canonicalize_legacy	6365686	6365686	0
+regress::unicode::expand_code_point	488909	488909	0
+rindex	28	28	0
+rtld_mutex_dummy	36	36	0
+sbrk	75	75	0
+sched_getaffinity@@GLIBC_2.3.4	22	22	0
+sigaction	40	40	0
+sigaltstack	48	48	0
+signal	36	36	0
+sin	9	9	0
+sincos	8	8	0
+sincosf	9	9	0
+sinf	9	9	0
+snprintf	52	52	0
+start_thread	261	261	0
+stat	18	18	0
+statx	55	55	0
+std::fs::buffer_capacity_required	111	111	0
+std::fs::read::inner	247	247	0
+std::panicking::set_hook	32	32	0
+std::sys::args::unix::imp::ARGV_INIT_ARRAY::init_wrapper	4	4	0
+std::sys::backtrace::__rust_begin_short_backtrace::<<ep9_frontend::worker::Worker>::spawn::{closure#0}, ()>	135	135	0
+std::sys::backtrace::__rust_begin_short_backtrace::<ep9::run::main::{closure#0}, u8>	392	392	0
+std::sys::backtrace::__rust_begin_short_backtrace::<fn() -> std::process::ExitCode, std::process::ExitCode>	4	4	0
+std::sys::backtrace::__rust_begin_short_backtrace::<std::thread::lifecycle::spawn_unchecked<<ep9_frontend::worker::Worker>::spawn::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>	8	8	0
+std::sys::env::unix::getenv	138	138	0
+std::sys::env::unix::getenv::{closure#0}	289	289	0
+std::sys::fs::exists	19	19	0
+std::sys::fs::metadata	172	172	0
+std::sys::fs::unix::try_statx	556	556	0
+std::sys::io::error::unix::is_interrupted	3	3	0
+std::sys::pal::unix::stack_overflow::imp::make_handler	254	254	0
+std::sys::pal::unix::stack_overflow::thread_info::set_current_info	366	366	0
+std::sys::random::linux::hashmap_random_keys	96	96	0
+std::sys::thread_local::destructors::linux_like::register	147	147	0
+std::sys::thread_local::guard::key::enable::run	47	47	0
+std::sys::thread_local::native::eager::destroy::<core::cell::Cell<std::thread::spawnhook::SpawnHooks>>	42	42	0
+std::sys::thread_local::native::eager::destroy::<core::cell::RefCell<alloc::vec::Vec<(core::ptr::non_null::NonNull<u8>, usize)>>>	10	10	0
+std::sys::thread_local::native::eager::destroy::<core::cell::RefCell<core::option::Option<ep9_frontend::worker::Worker>>>	26	26	0
+std::sys::thread_local::native::lazy::destroy::<core::cell::Cell<core::option::Option<std::sync::mpmc::context::Context>>>	11	11	0
+std::thread::functions::park	84	84	0
+std::thread::spawnhook::run_spawn_hooks	100	100	0
+std_detect::detect::cache::detect_and_initialize	296	296	0
+stpcpy	20	20	0
+stpncpy	22	22	0
+strcasecmp	24	24	0
+strcasecmp_l	24	24	0
+strcat	20	20	0
+strchrnul	28	28	0
+strcpy	20	20	0
+strcspn	261	261	0
+strdup	95	95	0
+strlen	739	739	0
+strncasecmp	24	24	0
+strncasecmp_l	24	24	0
+strncmp	56	56	0
+strncpy	22	22	0
+strnlen	56	56	0
+strpbrk	7	7	0
+strsep	248	248	0
+strspn	7	7	0
+syscall	48	48	0
+sysconf	104	104	0
+sysmalloc_mmap.isra.0	1187	1187	0
+tcache_init.part.0	358	358	0
+trunc	464805	464805	0
+update_active.constprop.0	224	224	0
+version_check_doit	15	15	0
+wcpncpy	21	21	0
+wcscat	21	21	0
+wcschr	56	56	0
+wcscmp	28	28	0
+wcscpy	19	19	0
+wcslen	22	22	0
+wcsncpy	21	21	0
+wcsnlen	22	22	0
+wmemchr	50	50	0
+wmemcmp	27	27	0
+wmemset	20	20	0
+write	24	24	0
+ep9::main	480	481	-1
+<ep9_heap::trace::Tracer>::edge	346644538	346644540	-2
+CallUndefinedReceiver0_cold	56	58	-2
+ep9_vm::conv::number_string	2082560	2082563	-3
+ep9_vm::interp::dsl::skip_next::<43>	72	75	-3
+ep9_vm::interp::dsl::skip_next::<68>	15927	15930	-3
+ep9_vm::interp::dsl::skip_next::<78>	20808	20811	-3
+<hashbrown::map::HashMap<ep9_vm::builtins::IntrinsicId, (), std::hash::random::RandomState>>::insert	10621	10625	-4
+getline	204	208	-4
+<ep9_vm::isolate::Isolate>::new_with	17352	17358	-6
+LdaGlobalInsideTypeof_cold	180	186	-6
+ep9_vm::interp::dsl::skip_next::<77>	41304	41310	-6
+strcmp	21859	21865	-6
+<hashbrown::raw::RawTable<(ep9_bytecode::builder::Label, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<ep9_bytecode::builder::Label, usize, std::hash::random::RandomState>::{closure#0}>	17249	17257	-8
+CallRuntime_cold	208	216	-8
+__libc_cleanup_pop_restore	495	504	-9
+ep9_vm::interp::dsl::skip_next::<45>	0	9	-9
+ep9_vm::interp::dsl::skip_next::<80>	244971	244980	-9
+__strtoul_internal	510	520	-10
+ep9_builtins::number::round_half_up	104	116	-12
+CreateArrayLiteral_cold	325	338	-13
+__libc_cleanup_push_defer	715	728	-13
+<hashbrown::raw::RawTable<(ep9_bytecode::builder::PendingConst, u32)>>::reserve_rehash::<hashbrown::map::make_hasher<ep9_bytecode::builder::PendingConst, u32, std::hash::random::RandomState>::{closure#0}>	1333822	1333842	-20
+StaGlobal_cold	714	735	-21
+<ep9_frontend::bytecodegen::func::FnGen>::global_slot	39462	39484	-22
+_IO_old_init	1198	1221	-23
+_IO_no_init	1255	1279	-24
+pthread_getattr_np@@GLIBC_2.32	1826	1850	-24
+<hashbrown::map::HashMap<usize, usize, std::hash::random::RandomState>>::insert	3106	3131	-25
+_IO_setb	1542	1571	-29
+CreateMappedArguments_cold	720	750	-30
+__strlen_avx2	1692	1730	-38
+_IO_str_init_static_internal	2040	2080	-40
+mprotect	9564	9606	-42
+__memchr_avx2	1985	2028	-43
+__isoc23_sscanf	2703	2756	-53
+CallWithSpread_cold	1660	1714	-54
+<alloc::raw_vec::RawVecInner>::finish_grow	8608105	8608163	-58
+<core::fmt::Formatter>::pad_integral	520	578	-58
+<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>	5072805	5072865	-60
+<alloc::raw_vec::RawVec<ep9_platform::waiters::Pending>>::grow_one	0	72	-72
+ep9_vm::interp::dsl::skip_next::<38>	1374237	1374309	-72
+<alloc::string::String as core::fmt::Write>::write_char	0	76	-76
+getdelim	4311	4392	-81
+_IO_sputbackc	4488	4576	-88
+__memset_avx2_unaligned_erms	15707097	15707223	-126
+<ep9_frontend::bytecodegen::regopt::Emitter>::finish	47680648	47680782	-134
+<hashbrown::map::HashMap<ep9_bytecode::builder::Label, u32, std::hash::random::RandomState>>::insert	450734	450896	-162
+<alloc::raw_vec::RawVec<ep9_platform::waiters::Waiter>>::grow_one	0	192	-192
+realloc	10893719	10893937	-218
+CreateObjectLiteral_cold	6225	6474	-249
+CreateEmptyArrayLiteral_cold	7825	8138	-313
+ToBooleanLogicalNot_cold	10260	10800	-540
+____strtoul_l_internal	26794	27364	-570
+???	198094	198696	-602
+ep9_vm::interp::dsl::skip_next::<75>	19869735	19870362	-627
+DefineNamedOwnProperty_cold	39304	39988	-684
+CreateEmptyObjectLiteral_cold	21225	22074	-849
+CreateRegExpLiteral_cold	23575	24518	-943
+LdaGlobal_cold	31470	32519	-1049
+__vfscanf_internal	57333	58548	-1215
+_int_realloc	7634149	7635394	-1245
+JumpLoop_cold	36693	38052	-1359
+alloc_perturb	115544	119000	-3456
+CallUndefinedReceiver1_cold	509300	524023	-14723
+_int_free	19704537	19721898	-17361
+GetNamedProperty_cold	931804	959210	-27406
+ForInEnumerate_cold	794416	822788	-28372
+ep9_vm::interp::dsl::skip_next::<140>	0	85113	-85113
+GetNamedPropertyStar_cold	4690870	4799960	-109090
+CallProperty0_cold	4100080	4249495	-149415
+__memcpy_avx_unaligned_erms	30385816	30585098	-199282
+CallProperty_cold	8551680	8760735	-209055
+CreateFunctionContext_cold	13212313	13667910	-455597
+Construct_cold	7586222	8128095	-541873
+JumpIfToBooleanTrue_cold	15684188	16287426	-603238
+SetNamedProperty_cold	160356176	162038748	-1682572
+CallProperty2_cold	77416002	79234476	-1818474
+TestEqualStrict	342551758	345079539	-2527781
+JumpIfToBooleanFalse_cold	179149776	186040152	-6890376
+ep9_vm::interp::dsl::skip_next::<76>	0	7583343	-7583343
+CallProperty1_cold	426632840	441344007	-14711167
+Wide_cold	1404211313	1442429542	-38218229

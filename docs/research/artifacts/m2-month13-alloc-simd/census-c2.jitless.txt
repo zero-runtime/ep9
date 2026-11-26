@@ -1,0 +1,291 @@
+ep9: gc collections=12 freed_cells=4018830 allocated_bytes=425818976
+ep9 census: kind object id=16 cells=2012062 bytes=152642184
+ep9 census: kind slots id=71 cells=1483021 bytes=99213520
+ep9 census: kind array id=18 cells=1125020 bytes=45000800
+ep9 census: kind elements id=65 cells=319842 bytes=32268640
+ep9 census: kind context id=66 cells=455597 bytes=21909632
+ep9 census: kind function id=17 cells=248149 bytes=17866728
+ep9 census: kind seq_latin1 id=1 cells=556020 bytes=15682848
+ep9 census: kind props_indexed id=84 cells=29357 bytes=14358688
+ep9 census: kind props id=64 cells=26937 bytes=10822008
+ep9 census: kind ic_handler id=70 cells=119568 bytes=4782720
+ep9 census: kind sliced id=4 cells=62300 bytes=1993600
+ep9 census: kind cons id=3 cells=34655 bytes=1108960
+ep9 census: kind shape id=128 cells=12121 bytes=775744
+ep9 census: kind descriptors id=72 cells=2505 bytes=764576
+ep9 census: kind desc_index id=73 cells=1596 bytes=629184
+ep9 census: kind feedback id=68 cells=643 bytes=401096
+ep9 census: kind poly_ic id=69 cells=1417 bytes=102024
+ep9 census: kind slot_object id=24 cells=1084 bytes=43360
+ep9 census: kind transitions id=74 cells=358 bytes=26816
+ep9 census: kind validity_cell id=79 cells=102 bytes=4896
+ep9 census: kind proto_info id=75 cells=120 bytes=4800
+ep9 census: kind arguments id=25 cells=30 bytes=1920
+ep9 census: kind accessor_pair id=67 cells=45 bytes=1080
+ep9 census: kind symbol id=8 cells=18 bytes=576
+ep9 census: kind elements_double id=81 cells=11 bytes=408
+ep9 census: kind wrapper id=21 cells=3 bytes=96
+ep9 census: kind kind78 id=78 cells=1 bytes=64
+ep9 census: kind fuse id=83 cells=1 bytes=56
+ep9 census: kind TOTAL cells=6492583 bytes=420407024
+ep9 census: slots grow cells=1482899 non_plain_object=1304
+ep9 census: slots new_cap=4 cells=922395
+ep9 census: slots new_cap=8 cells=475627
+ep9 census: slots new_cap=16 cells=66872
+ep9 census: slots new_cap=32 cells=9164
+ep9 census: slots new_cap=64 cells=8769
+ep9 census: slots new_cap=128 cells=40
+ep9 census: slots new_cap=256 cells=21
+ep9 census: slots new_cap=512 cells=11
+ep9 census: slots old_cap=0 cells=922395
+ep9 census: slots old_cap=4 cells=475627
+ep9 census: slots old_cap=8 cells=66872
+ep9 census: slots old_cap=16 cells=9164
+ep9 census: slots old_cap=32 cells=8769
+ep9 census: slots old_cap=64 cells=40
+ep9 census: slots old_cap=128 cells=21
+ep9 census: slots old_cap=256 cells=11
+ep9 census: slots plain_object cells=1481595 covered_k0=1369767 covered_k1=1395702 covered_k2=1425582
+ep9 census: adds plain_object=16070485 extra_e1=612060 e2=111226 e3=31037 e4=15443 e5plus=28764
+ep9 census: named_load plain_object no_class=0
+ep9 census: classf Identifier base=24 names=14 extra=0 escaped=true bytecode=true today_cap=[1:3 8:4084800] by_f=[272321 272321 272321 272320 272320 272320 272320 272320 272320 272320 272320 272320 272320 272320 272320] loads_by_f=[43268/0 79482/0 5281068/0 182658/0 147513/0 0/0 209742/0 209742/0 0/0 0/842319 0/384651 0/2399 0/209320 0/0 0/476807]
+ep9 census: classf BinaryExpression base=24 names=12 extra=0 escaped=true bytecode=true today_cap=[8:1926060] by_f=[160505 160505 160505 160505 160505 160505 160505 160505 160505 160505 160505 160505] loads_by_f=[51410/0 189046/0 5043831/0 356549/0 119197/0 0/0 159570/0 177130/0 0/0 0/649247 0/1305319 0/1230707]
+ep9 census: classf ASTList base=24 names=12 extra=0 escaped=true bytecode=true today_cap=[8:1159560] by_f=[96630 96630 96630 96630 96630 96630 96630 96630 96630 96630 96630 96630] loads_by_f=[33247/0 32917/0 1197822/0 0/0 3/0 0/0 50406/0 50409/0 0/0 0/201647 0/0 0/2524693]
+ep9 census: classf CallExpression base=24 names=13 extra=0 escaped=true bytecode=true today_cap=[8:402805] by_f=[30985 30985 30985 30985 30985 30985 30985 30985 30985 30985 30985 30985 30985] loads_by_f=[1464/0 90686/0 1131436/0 36992/0 83670/0 0/0 30980/0 43985/0 0/0 0/132636 0/443310 0/457897 0/60426]
+ep9 census: classf TypeSymbol base=24 names=19 extra=0 escaped=true bytecode=true today_cap=[1:2 8:361700] by_f=[18041 18041 18040 18040 18040 18040 18040 18040 18040 18040 18040 18040 18040 18040 18040 18040 18040 18040 18040 17370 1570] loads_by_f=[415648/0 0/0 0/0 47010/0 87874/0 374330/0 0/0 431625/0 0/27824 0/0 0/24003 0/301294 0/839 0/314 0/33214 0/16638 0/73346 0/0 0/18 0/259054 0/117929]
+ep9 census: classf FieldSymbol base=24 names=16 extra=0 escaped=true bytecode=true today_cap=[8:303230] by_f=[18025 18025 18025 18025 18025 18025 18025 18025 18025 18025 18025 18025 18025 18025 18025 18025 14830] loads_by_f=[31211/0 0/0 0/0 36473/0 19545/0 289234/0 0/0 477340/0 0/3191 0/0 0/118514 0/3386 0/124774 0/3386 0/3386 0/0 0/164624]
+ep9 census: classf ParameterSymbol base=24 names=15 extra=0 escaped=true bytecode=true today_cap=[8:403120] by_f=[25195 25195 25195 25195 25195 25195 25195 25195 25195 25195 25195 25195 25195 25195 25195 25195] loads_by_f=[76093/0 0/0 0/0 46184/0 10925/0 29715/0 0/0 167298/0 0/0 0/0 0/68506 0/254745 0/0 0/0 0/0 0/133982]
+ep9 census: classf AST base=24 names=10 extra=0 escaped=true bytecode=true today_cap=[1:69 8:478400] by_f=[47851 47848 47848 47846 47844 47844 47843 47843 47841 47841 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1] loads_by_f=[379/0 29750/0 1278689/0 101950/0 47268/0 0/0 47330/0 47330/0 0/0 0/194150]
+ep9 census: classf FuncDecl base=24 names=39 extra=0 escaped=true bytecode=true today_cap=[1:8 8:355060] by_f=[8661 8661 8661 8661 8661 8661 8661 8661 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660 8660] loads_by_f=[30030/0 18689/0 485415/0 408070/0 5184/0 0/0 7493/0 8376/0 0/0 0/32167 0/212441 0/104576 0/232819 0/106483 0/14982 0/632 0/7491 0/3569 0/970707 0/123433 0/53926 0/0 0/0 0/0 0/1235 0/64830 0/9038 0/7553 0/1232 0/45798 0/0 0/1312 0/1076 0/9987 0/0 0/0 0/34035 0/0 0/29964 0/35496 0/38]
+ep9 census: classf NumberLiteral base=24 names=13 extra=0 escaped=true bytecode=true today_cap=[8:252590] by_f=[19430 19430 19430 19430 19430 19430 19430 19430 19430 19430 19430 19430 19430] loads_by_f=[749/0 37252/0 613076/0 28804/0 17220/0 0/0 20880/0 20880/0 0/0 0/86958 0/23062 0/20877 0/20877]
+ep9 census: classf ArgDecl base=24 names=18 extra=0 escaped=true bytecode=true today_cap=[8:224820] by_f=[12490 12490 12490 12490 12490 12490 12490 12490 12490 12490 12490 12490 12490 12490 12490 12490 12490 12490] loads_by_f=[25174/0 0/0 366956/0 33661/0 0/0 0/0 10563/0 10564/0 0/0 0/42620 0/158062 0/0 0/75937 0/188876 0/33306 0/136909 0/24998 0/4351]
+ep9 census: classf VariableSymbol base=24 names=12 extra=0 escaped=true bytecode=true today_cap=[8:324365] by_f=[26105 26105 26105 26105 26105 26105 26105 26105 26105 26105 26105 26105 11105] loads_by_f=[7273/0 0/0 0/0 387/0 0/0 44097/0 0/0 226905/0 0/0 0/0 0/71313 0/72537 0/152596]
+ep9 census: classf VarDecl base=24 names=16 extra=0 escaped=true bytecode=true today_cap=[8:284400] by_f=[17775 17775 17775 17775 17775 17775 17775 17775 17775 17775 17775 17775 17775 17775 17775 17775] loads_by_f=[11418/0 21027/0 924849/0 111584/0 20810/0 0/0 16623/0 29380/0 0/0 0/66415 0/288437 0/0 0/256899 0/150259 0/271489 0/212158]
+ep9 census: classf Comment base=24 names=15 extra=0 escaped=true bytecode=true today_cap=[8:173145] by_f=[10185 10185 10185 10185 10185 10185 10185 10185 10185 10185 10185 10185 10185 10185 10185 10185 10185] loads_by_f=[10177/0 10177/0]
+ep9 census: classf IfStatement base=24 names=13 extra=0 escaped=true bytecode=true today_cap=[8:192290] by_f=[13735 13735 13735 13735 13735 13735 13735 13735 13735 13735 13735 13735 13735 13735] loads_by_f=[0/0 27455/0 506707/0 0/0 27442/0 0/0 13730/0 26046/0 0/0 0/54935 0/69758 0/91358 0/54922 0/111479]
+ep9 census: classf TypeReference base=24 names=12 extra=0 escaped=true bytecode=true today_cap=[8:295560] by_f=[24630 24630 24630 24630 24630 24630 24630 24630 24630 24630 24630 24630] loads_by_f=[227/0 227/0 589294/0 173972/0 0/0 0/0 0/0 0/0 0/0 0/0 0/132124 0/35037]
+ep9 census: classf Type base=24 names=7 extra=0 escaped=false bytecode=true today_cap=[1:8 7:199030] by_f=[19411 19411 19411 19411 19411 19411 19411 19406 12145 12075 11880 2670 1725 1585 740 475 390 70] loads_by_f=[94841/0 180661/0 296235/0 46710/0 0/0 72588/0 65557/0 0/550364 0/25627 0/177110 0/70295 0/7193 0/68368 0/33988 0/32551 0/19812 0/6292 0/137]
+ep9 census: classf Block base=24 names=12 extra=0 escaped=true bytecode=true today_cap=[8:219240] by_f=[18270 18270 18270 18270 18270 18270 18270 18270 18270 18270 18270 18270] loads_by_f=[0/0 36448/0 498238/0 0/0 36527/0 0/0 18265/0 18360/0 0/0 0/73075 0/220769 0/36624]
+ep9 census: classf UnaryExpression base=24 names=13 extra=0 escaped=true bytecode=true today_cap=[8:114010] by_f=[8770 8770 8770 8770 8770 8770 8770 8770 8770 8770 8770 8770 8770] loads_by_f=[1709/0 15495/0 246264/0 12132/0 9435/0 0/0 8705/0 9285/0 0/0 0/37507 0/61914 0/0 0/36048]
+ep9 census: classf Signature base=24 names=5 extra=0 escaped=false bytecode=true today_cap=[5:100200] by_f=[16700 16700 16700 16700 16700 16700] loads_by_f=[188331/0 372285/0 137104/0 35687/0 78368/0 0/160456]
+ep9 census: classf BlockIntrinsics base=24 names=7 extra=0 escaped=true bytecode=true today_cap=[8:969372] by_f=[116406 116406 116406 116406 116406 116406 116406 116406 9870 4496 3149 1837 1463 1138 970 786 707 656 616 599 564 481 457 437 422 390 385 382 356 346 231 136 131 126 111 111 106 96 95 75 75 70 69 64 64 64 61 61 61 61 61 61 61 61 58 58 58 58 56 56 56 55 55 55 55 55 55 55 55 35 35 35 35 35 35 35 35 35 35 35 35 30 30 30 30 30 30 25 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10] loads_by_f=[]
+ep9 census: classf ScopeChain base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:75015] by_f=[12510 12510 12510 12495 12495 12495] loads_by_f=[57666/0 33517/0 138184/0 0/26403 0/1307 0/100464]
+ep9 census: classf StringLiteral base=24 names=11 extra=0 escaped=true bytecode=true today_cap=[8:108185] by_f=[9835 9835 9835 9835 9835 9835 9835 9835 9835 9835 9835] loads_by_f=[936/0 15586/0 267692/0 16700/0 7417/0 0/0 9830/0 9830/0 0/0 0/41177 0/9827]
+ep9 census: classf EndCode base=24 names=10 extra=0 escaped=true bytecode=true today_cap=[8:74400] by_f=[7440 7440 7440 7440 7440 7440 7440 7440 7440 7440] loads_by_f=[7432/0 0/0 301488/0 0/0 0/0 0/0 7434/0 7434/0 0/0 0/29753]
+ep9 census: classf ReturnStatement base=24 names=11 extra=0 escaped=true bytecode=true today_cap=[8:78100] by_f=[7100 7100 7100 7100 7100 7100 7100 7100 7100 7100 7100] loads_by_f=[59/0 14121/0 273837/0 6706/0 21147/0 0/0 7095/0 13995/0 0/0 0/28395 0/70294]
+ep9 census: classf ClassDeclaration base=24 names=21 extra=0 escaped=true bytecode=true today_cap=[8:16380] by_f=[780 780 780 780 780 780 780 780 780 780 780 780 780 780 780 780 780 780 780 780 780] loads_by_f=[1552/0 1547/0 46828/0 99856/0 766/0 0/0 769/0 1542/0 0/0 0/3093 0/10097 0/46022 0/0 0/0 0/11060 0/7112 0/11888 0/8169 0/6679 0/0 0/4612]
+ep9 census: classf ForStatement base=24 names=11 extra=0 escaped=true bytecode=true today_cap=[8:16310] by_f=[1165 1165 1165 1165 1165 1165 1165 1165 1165 1165 1165 1165 1165 1165] loads_by_f=[0/0 2306/0 44643/0 0/0 2295/0 0/0 1072/0 2311/0 0/0 0/4655 0/9159 0/8145 0/6943 0/9449]
+ep9 census: classf ConditionalExpression base=24 names=13 extra=0 escaped=true bytecode=true today_cap=[8:12480] by_f=[960 960 960 960 960 960 960 960 960 960 960 960 960] loads_by_f=[15/0 1526/0 23955/0 1760/0 266/0 0/0 955/0 955/0 0/0 0/4299 0/5823 0/6780 0/6780]
+ep9 census: classf CaseStatement base=24 names=11 extra=0 escaped=true bytecode=true today_cap=[8:18120] by_f=[1510 1510 1510 1510 1510 1510 1510 1510 1510 1510 1510 1510] loads_by_f=[0/0 0/0 43783/0 0/0 1496/0 0/0 1505/0 1505/0 0/0 0/6035 0/10310 0/14034]
+ep9 census: classf ModuleType base=24 names=10 extra=0 escaped=true bytecode=true today_cap=[8:10430] by_f=[745 745 745 745 745 745 745 745 745 745 745 745 745 370 370 5] loads_by_f=[21772/0 26095/0 28365/0 5620/0 0/0 4728/0 27899/0 1816/0 0/1816 0/0 0/3269 0/1854 0/33904 0/17402 0/6841 0/76]
+ep9 census: classf Jump base=24 names=12 extra=0 escaped=true bytecode=true today_cap=[8:15540] by_f=[1295 1295 1295 1295 1295 1295 1295 1295 1295 1295 1295 1295] loads_by_f=[0/0 2577/0 52017/0 0/0 3003/0 0/0 1290/0 2568/0 0/0 0/5171 0/6200]
+ep9 census: classf ModuleDeclaration base=24 names=22 extra=0 escaped=true bytecode=true today_cap=[8:8510] by_f=[370 370 370 370 370 370 370 370 370 370 370 370 370 370 370 370 370 370 370 370 370 370 370] loads_by_f=[313/0 717/0 63010/0 1197/0 352/0 0/0 349/0 702/0 0/0 0/1413 0/5417 0/3650 0/0 0/0 0/682 0/38471 0/0 0/0 0/0 0/361 0/0 0/828 0/1805]
+ep9 census: classf InterfaceDeclaration base=24 names=17 extra=0 escaped=true bytecode=true today_cap=[8:3655] by_f=[215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215 215] loads_by_f=[158/0 395/0 11004/0 2202/0 153/0 0/0 0/0 129/0 0/0 0/0 0/1746 0/2074 0/0 0/0 0/2185 0/1031 0/459]
+ep9 census: classf (none) base=24 names=0 extra=0 escaped=false bytecode=false today_cap=[1:32 2:164 3:60 4:5264 6:12 7:7] by_f=[861 660 519 434 268 205 171 118 106 97 93 78 73 67 59 56 56 54 49 48 46 41 40 35 34 34 33 33 33 33 33 32 31 28 28 28 27 27 27 27 22 21 21 21 21 21 20 20 20 17 17 17 17 17 12 12 12 12 12 12 11 11 6 6 6 6 6 6 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 4 4 4 4 4 4 4 4 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 2 2 2 2 2 2 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1] loads_by_f=[2051669/0 9654245/0 3327583/0 1647765/0 0/2587856 1056184/618832 0/685746 0/1278098 0/1000296 0/1383774 0/276729 0/347701 0/901499 0/128207 0/63672 0/227829 0/54566 0/105376 0/356116 0/52805 0/20893248 0/347153 0/198561 0/112398 0/91564 0/23689 0/1388461 0/700167 0/135498 0/175000 0/118561 0/142808 0/273506 0/499342 0/219732 0/2063 0/118606 0/9658 0/148515 0/200941 0/19033 0/116672 0/204593 0/208817 0/82131 0/196061 0/60599 0/198526 0/99300 0/35003 0/113055 0/41789 0/91979 0/91905 0/18279 0/697405 0/502954 0/142641 0/355988 0/52125 0/374763 0/406628 0/154912 0/61158 0/14122 0/19557 0/24070 0/7847 0/8852 0/16347 0/9519 0/11407 0/2711388 0/12028 0/1128605 0/898638 0/91741 0/5309 0/16137 0/7327 0/1186 0/491 0/27954 0/1771 0/866 0/743177 0/8725 0/4040 0/6395 0/631 0/806 0/26 0/1755784 0/1047407 0/55142 0/1450604 0/1612780 0/2161627 0/62048 0/1824806 0/188573 0/183298 0/520919 0/20153 0/190400 0/239090 0/204656 0/565862 0/123705 0/4065 0/48310 0/0 0/10169 0/0 0/120571 0/1105019 0/765333 0/905342 0/905342 0/317598 0/316948 0/128267 0/123002 0/3558 0/3304 0/3527 0/411 0/63 0/248 0/164 0/108 0/199 0/89 0/406648 0/73710 0/3304 0/5108 0/1909739 0/0 0/31224 0/716652 0/719987 0/19044 0/10988 0/0 0/0 0/153480 0/145065 0/28309 0/678164 0/9689 0/0 0/415794 0/24428 0/147562 0/49426 0/0 0/0 0/0 0/0 0/0 0/0 0/12673 0/0 0/0 0/655301 0/67 0/68 0/3167206 0/0 0/2007133 0/376022 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/292 0/39890 0/0 0/20362 0/0 0/0 0/0 0/1038 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/2 0/0 0/0 0/0 0/2606 0/2627 0/0 0/0 0/16679 0/16597 0/432597 0/0 0/0 0/0 0/69232 0/0 0/17986 0/0 0/17978 0/25174 0/26080 0/56393 0/527553 0/0 0/6446 0/5734 0/38625 0/0 0/389 0/8349020 0/564863 0/46 0/159603 0/97 0/226986 0/78 0/0 0/421799 0/0 0/0 0/0 0/17958 0/8372 0/260612 0/0 0/10169 0/78 0/348621 0/0 0/0 0/61585 0/4 0/0 0/0 0/0 0/2 0/0 0/0 0/4 0/302228 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/2 0/2 0/12481 0/0 0/0 0/0 0/0 0/0 0/0 0/2 0/55476 0/4 0/0 0/2 0/19352 0/731 0/31680 0/66166 0/0 0/115881 0/0 0/0 0/0 0/0 0/0 0/0 0/347 0/347 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/469 0/469 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/881436 0/0 0/0 0/0 0/17]
+ep9 census: classf SwitchStatement base=24 names=13 extra=0 escaped=true bytecode=true today_cap=[8:2520] by_f=[180 180 180 180 180 180 180 180 180 180 180 180 180 180] loads_by_f=[0/0 184/0 8318/0 0/0 334/0 0/0 175/0 342/0 0/0 0/715 0/1048 0/172 0/702 0/7309]
+ep9 census: classf Catch base=24 names=14 extra=0 escaped=true bytecode=true today_cap=[8:2030] by_f=[145 145 145 145 145 145 145 145 145 145 145 145 145 145] loads_by_f=[0/0 137/0 3184/0 0/0 99/0 0/0 140/0 140/0 0/0 0/575 0/1941 0/838 0/548 0/137]
+ep9 census: classf WhileStatement base=24 names=12 extra=0 escaped=true bytecode=true today_cap=[8:2940] by_f=[245 245 245 245 245 245 245 245 245 245 245 245] loads_by_f=[0/0 469/0 9238/0 0/0 463/0 0/0 240/0 260/0 0/0 0/975 0/1213 0/1939]
+ep9 census: classf ArrayCache base=24 names=1 extra=0 escaped=false bytecode=true today_cap=[1:470] by_f=[235 235] loads_by_f=[0/0 0/2877]
+ep9 census: classf Try base=24 names=11 extra=0 escaped=true bytecode=true today_cap=[8:1650] by_f=[150 150 150 150 150 150 150 150 150 150 150] loads_by_f=[137/0 0/0 3444/0 0/0 138/0 0/0 145/0 145/0 0/0 0/595 0/1010]
+ep9 census: classf TryCatch base=24 names=12 extra=0 escaped=true bytecode=true today_cap=[8:1740] by_f=[145 145 145 145 145 145 145 145 145 145 145 145] loads_by_f=[0/0 268/0 5553/0 0/0 258/0 0/0 140/0 272/0 0/0 0/575 0/838 0/838]
+ep9 census: classf RegexLiteral base=24 names=11 extra=0 escaped=true bytecode=true today_cap=[8:935] by_f=[85 85 85 85 85 85 85 85 85 85 85] loads_by_f=[0/0 189/0 2343/0 35/0 54/0 0/0 25/0 80/0 0/0 0/315 0/77]
+ep9 census: classf ForInStatement base=24 names=13 extra=0 escaped=true bytecode=true today_cap=[8:490] by_f=[35 35 35 35 35 35 35 35 35 35 35 35 35 35] loads_by_f=[0/0 61/0 1342/0 0/0 52/0 0/0 30/0 36/0 0/0 0/135 0/251 0/116 0/122 0/205]
+ep9 census: classf TypeChecker base=24 names=40 extra=0 escaped=true bytecode=true today_cap=[8:400] by_f=[10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10] loads_by_f=[30/0 193717/0 7857/0 0/0 0/0 231264/0 106986/0 1401/0 0/179984 0/78564 0/0 0/0 0/19349 0/2094 0/114727 0/0 0/28863 0/0 0/234 0/98649 0/7396 0/11607 0/4616 0/3 0/15197 0/6136 0/61163 0/9791 0/138927 0/77705 0/95786 0/2 0/2 0/2 0/2 0/7992 0/284811 0/0 0/12 0/421210]
+ep9 census: classf TypeFlow base=24 names=31 extra=0 escaped=true bytecode=true today_cap=[8:315] by_f=[10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 5] loads_by_f=[0/0 4/0 0/0 1440717/0 621793/0 249525/0 54656/0 2770/0 0/1233 0/7762 0/33323 0/48 0/38 0/32162 0/720 0/0 0/299483 0/83 0/57214 0/67318 0/64307 0/186647 0/0 0/132368 0/128949 0/118870 0/215797 0/76 0/12251 0/62382 0/0 0/93014]
+ep9 census: classf DoWhileStatement base=24 names=13 extra=0 escaped=true bytecode=true today_cap=[8:195] by_f=[15 15 15 15 15 15 15 15 15 15 15 15 15] loads_by_f=[0/0 22/0 563/0 0/0 14/0 0/0 10/0 21/0 0/0 0/55 0/65 0/56 0/43]
+ep9 census: classf Script base=24 names=50 extra=0 escaped=true bytecode=true today_cap=[8:255] by_f=[5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5] loads_by_f=[0/0 0/0 144/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/22 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/2 0/0 0/0 0/0 0/4 0/0 0/0 0/0 0/0 0/0 0/0 0/2]
+ep9 census: classf PersistentGlobalTypeState base=24 names=28 extra=0 escaped=true bytecode=true today_cap=[8:140] by_f=[5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5] loads_by_f=[0/0 0/0 0/0 2/0 18/0 2/0 2/0 0/0 0/0 0/0 0/0 0/0 0/2 0/2 0/2 0/0 0/31 0/31 0/31 0/31 0/2 0/6 0/6 0/8 0/6 0/6 0/6 0/6]
+ep9 census: classf Statement base=24 names=10 extra=0 escaped=true bytecode=true today_cap=[1:80] by_f=[18 18 17 17 9 1] loads_by_f=[]
+ep9 census: classf InferenceSymbol base=24 names=11 extra=0 escaped=true bytecode=true today_cap=[1:44] by_f=[4 4 4 4 4 4 4 3 3 3 3 2 1 1] loads_by_f=[]
+ep9 census: classf TryFinally base=24 names=12 extra=0 escaped=true bytecode=true today_cap=[8:120] by_f=[10 10 10 10 10 10 10 10 10 10 10 10] loads_by_f=[0/0 15/0 376/0 0/0 10/0 0/0 0/0 5/0 0/0 0/0 0/26 0/26]
+ep9 census: classf LabeledStatement base=24 names=12 extra=0 escaped=true bytecode=true today_cap=[8:120] by_f=[10 10 10 10 10 10 10 10 10 10 10 10] loads_by_f=[0/0 15/0 372/0 0/0 10/0 0/0 5/0 13/0 0/0 0/35 0/19 0/15]
+ep9 census: classf Label base=24 names=11 extra=0 escaped=true bytecode=true today_cap=[8:110] by_f=[10 10 10 10 10 10 10 10 10 10 10] loads_by_f=[0/0 0/0 225/0 0/0 0/0 0/0 5/0 5/0 0/0 0/35 0/39]
+ep9 census: classf Finally base=24 names=11 extra=0 escaped=true bytecode=true today_cap=[8:110] by_f=[10 10 10 10 10 10 10 10 10 10 10] loads_by_f=[0/0 8/0 225/0 0/0 5/0 0/0 5/0 3/0 0/0 0/33 0/28]
+ep9 census: classf SymbolScope base=24 names=1 extra=0 escaped=false bytecode=true today_cap=[1:38] by_f=[4 4 4 4 3 3 3 3 3 3 3 1] loads_by_f=[]
+ep9 census: classf Expression base=24 names=10 extra=0 escaped=true bytecode=true today_cap=[1:26] by_f=[7 7 7 3 2] loads_by_f=[]
+ep9 census: classf Token base=24 names=1 extra=0 escaped=false bytecode=true today_cap=[1:124] by_f=[112 6 6] loads_by_f=[2581037/0]
+ep9 census: classf Scanner base=24 names=22 extra=0 escaped=false bytecode=true today_cap=[22:120] by_f=[5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5] loads_by_f=[261115/0 2802849/0 7744118/0 25753750/0 1884059/0 9263117/0 160449/0 17649023/0 112/0 670810/0 10169/0 1369683/0 198869/0 45929/0 45931/0 642673/0 890777/0 112/0 112/0 897263/0 112/0 192564/0 0/0 0/7770275]
+ep9 census: classf TypeScriptCompiler base=24 names=10 extra=0 escaped=true bytecode=true today_cap=[8:55] by_f=[5 5 5 5 5 5 5 5 5 5 5] loads_by_f=[1/0 19/0 6/0 3/0 3/0 8/0 2/0 3/0 0/6 0/32]
+ep9 census: classf ModuleElement base=24 names=10 extra=0 escaped=true bytecode=true today_cap=[1:14] by_f=[3 3 2 2 2 1 1] loads_by_f=[]
+ep9 census: classf ASTSpan base=24 names=2 extra=0 escaped=false bytecode=true today_cap=[1:14 2:45480] by_f=[22741 22741 1 1 1 1 1 1 1 1 1 1 1 1] loads_by_f=[]
+ep9 census: classf BoundDecl base=24 names=16 extra=0 escaped=true bytecode=true today_cap=[1:10] by_f=[2 2 2 2 1 1] loads_by_f=[]
+ep9 census: classf NamedDeclaration base=24 names=14 extra=0 escaped=true bytecode=true today_cap=[1:10] by_f=[2 2 2 1 1 1 1] loads_by_f=[]
+ep9 census: classf (none) base=24 names=0 extra=0 escaped=false bytecode=false today_cap=[8:16] by_f=[1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1] loads_by_f=[]
+ep9 census: classf MemberName base=24 names=2 extra=0 escaped=false bytecode=true today_cap=[1:6] by_f=[2 2 1 1] loads_by_f=[]
+ep9 census: classf TypeDeclaration base=24 names=17 extra=0 escaped=true bytecode=true today_cap=[1:6] by_f=[2 2 2] loads_by_f=[]
+ep9 census: classf SymbolScopeBuilder base=24 names=6 extra=0 escaped=true bytecode=true today_cap=[1:4 8:232080] by_f=[38681 38681 38681 38681 38680 38680] loads_by_f=[477/0 440142/0 305929/0 37307/0 33564/0 102182/0]
+ep9 census: classf Symbol base=24 names=10 extra=0 escaped=false bytecode=true today_cap=[1:3] by_f=[1 1 1] loads_by_f=[]
+ep9 census: classf IdentifierToken base=24 names=3 extra=0 escaped=true bytecode=true today_cap=[8:781845] by_f=[260615 260615 260615] loads_by_f=[702650/0 269854/0 260422/0]
+ep9 census: classf ContextualTypeContext base=24 names=6 extra=0 escaped=false bytecode=true today_cap=[6:262860] by_f=[43810 43810 43810 43810 43810 43810] loads_by_f=[7666/0 99195/0 5220/0 5599/0 0/0 245/0]
+ep9 census: classf StringHashTable base=24 names=2 extra=0 escaped=false bytecode=true today_cap=[2:232812] by_f=[116406 116406] loads_by_f=[140096/0 1925996/0]
+ep9 census: classf ScopedMembers base=24 names=4 extra=0 escaped=false bytecode=true today_cap=[4:226260] by_f=[56565 56565 56565 56565] loads_by_f=[171243/0 372260/0 115318/0 3015/0]
+ep9 census: classf TypeLink base=24 names=2 extra=0 escaped=false bytecode=true today_cap=[2:195940] by_f=[97970 97970] loads_by_f=[811252/0 144074/0]
+ep9 census: classf TypeComparisonInfo base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:184830] by_f=[61610 61610 61610] loads_by_f=[0/0 2/0]
+ep9 census: classf DualStringHashTable base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:168585] by_f=[56195 56195 56195] loads_by_f=[387098/0 279362/0 11387/0]
+ep9 census: classf ValueLocation base=24 names=0 extra=0 escaped=false bytecode=true today_cap=[8:123645] by_f=[69325 54320] loads_by_f=[163036/0 368302/0]
+ep9 census: classf SignatureGroup base=24 names=5 extra=0 escaped=false bytecode=true today_cap=[5:83100] by_f=[16620 16620 16620 16620 16620] loads_by_f=[244336/0 23988/0 26056/0 9816/0 59/0]
+ep9 census: classf CommentToken base=24 names=6 extra=0 escaped=true bytecode=true today_cap=[8:61110] by_f=[10185 10185 10185 10185 10185 10185] loads_by_f=[0/0 40291/0 20330/0 20330/0 3402/0 10165/0]
+ep9 census: classf NumberLiteralToken base=24 names=3 extra=0 escaped=true bytecode=true today_cap=[8:53925] by_f=[17975 17975 17975] loads_by_f=[110428/0 17966/0 17966/0]
+ep9 census: classf SymbolAggregateScope base=24 names=8 extra=0 escaped=true bytecode=true today_cap=[8:51960] by_f=[6495 6495 6495 6495 6495 6495 6495 6495] loads_by_f=[37201/0 183909/0 0/0 677/0 57532/0 0/0 0/0 180543/0]
+ep9 census: classf SymbolTableScope base=24 names=5 extra=0 escaped=true bytecode=true today_cap=[8:28800] by_f=[5760 5760 5760 5760 5760] loads_by_f=[0/0 84616/0 83234/0 16806/0 16806/0]
+ep9 census: classf AstWalker base=24 names=5 extra=0 escaped=false bytecode=true today_cap=[5:21250] by_f=[4250 4250 4250 4250 4250] loads_by_f=[1456515/0 1523463/0 2285827/0 8942411/0 1524686/0]
+ep9 census: classf StringLiteralToken base=24 names=2 extra=0 escaped=true bytecode=true today_cap=[8:16760] by_f=[8380 8380] loads_by_f=[45878/0 8360/0]
+ep9 census: classf AstWalkOptions base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:12750] by_f=[4250 4250 4250] loads_by_f=[1523463/0 2341114/0 594728/0]
+ep9 census: classf FilteredSymbolScopeBuilder base=24 names=7 extra=0 escaped=true bytecode=true today_cap=[8:2730] by_f=[390 390 390 390 390 390 390] loads_by_f=[]
+ep9 census: classf TokenInfo base=24 names=8 extra=0 escaped=false bytecode=true today_cap=[8:872] by_f=[109 109 109 109 109 109 109 109] loads_by_f=[0/0 14/0 215351/0 322205/0 3464/0 198514/0 142955/0]
+ep9 census: classf Parser base=24 names=36 extra=0 escaped=false bytecode=true today_cap=[36:180] by_f=[5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5] loads_by_f=[58498/0 52148/0 34508/0 4424334/0 3586157/0 0/0 14471/0 6810/0 0/0 10307/0 42/0 418/0 7802/0 0/0 971/0 0/0 1904/0 0/0 127109/0 6806/0 2395/0 0/0 0/0 6429/0 80865/0 0/0 78914/0 82293/0 0/0 36922/0 7802/0 40188/0 0/0 74672/0 332/0]
+ep9 census: classf RegularExpressionLiteralToken base=24 names=2 extra=0 escaped=true bytecode=true today_cap=[8:170] by_f=[85 85] loads_by_f=[445/0 75/0]
+ep9 census: classf MemberNameString base=24 names=3 extra=0 escaped=true bytecode=true today_cap=[8:150] by_f=[50 50 50] loads_by_f=[40/0 40/0 40/0]
+ep9 census: classf CompilationSettings base=24 names=23 extra=0 escaped=false bytecode=true today_cap=[23:138] by_f=[6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6] loads_by_f=[2/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 0/0 2/0 2/0 2/0 2/0 0/0 2/0]
+ep9 census: classf MemberNameArray base=24 names=4 extra=0 escaped=true bytecode=true today_cap=[8:120] by_f=[30 30 30 30] loads_by_f=[13/0 13/0 40/0 131/0]
+ep9 census: classf Emitter base=24 names=19 extra=0 escaped=false bytecode=true today_cap=[19:95] by_f=[5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5] loads_by_f=[29744/0 338/0 1056514/0 1682240/0 0/0 6933/0 18158/0 39344/0 46826/0 6618/0 1540383/0 292184/0 0/0 0/0 0/0 338/0 1327820/0 113/0 535888/0]
+ep9 census: classf StyleSettings base=24 names=15 extra=0 escaped=false bytecode=true today_cap=[15:90] by_f=[6 6 6 6 6 6 6 6 6 6 6 6 6 6 6] loads_by_f=[8550/0 29567/0 7359/0 27/0 18667/0 28277/0 0/0 15502/0 7359/0 28277/0 79546/0 0/0 0/0 6832/0 1301/0]
+ep9 census: classf ErrorReporter base=24 names=8 extra=0 escaped=false bytecode=true today_cap=[8:40] by_f=[5 5 5 5 5 5 5 5] loads_by_f=[0/0 2856/0 952/0 0/0 0/0 0/0 957/0 1832/0]
+ep9 census: classf EmitOptions base=24 names=7 extra=0 escaped=false bytecode=true today_cap=[7:35] by_f=[5 5 5 5 5 5 5] loads_by_f=[0/0 0/0 0/0 324761/0 106647/0 1250852/0]
+ep9 census: classf TypeCollectionContext base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:30] by_f=[10 10 10] loads_by_f=[274152/0 119836/0]
+ep9 census: classf ResolutionDataCache base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:30] by_f=[10 10 10] loads_by_f=[28657/0 28654/0 85821/0]
+ep9 census: classf ContextualTypingContextStack base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:30] by_f=[10 10 10] loads_by_f=[133245/0 691832/0 44114/0]
+ep9 census: classf EmitState base=24 names=5 extra=0 escaped=false bytecode=true today_cap=[5:25] by_f=[5 5 5 5 5] loads_by_f=[933406/0 123446/0 0/0 102781/0 135266/0]
+ep9 census: classf Error base=24 names=0 extra=0 escaped=false bytecode=false today_cap=[8:24] by_f=[8 8 8] loads_by_f=[]
+ep9 census: classf (none) base=24 names=0 extra=0 escaped=false bytecode=false today_cap=[8:20] by_f=[8 8 2 1 1] loads_by_f=[]
+ep9 census: classf LocationInfo base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:18] by_f=[6 6 6] loads_by_f=[0/0 0/0 134651/0]
+ep9 census: classf AssignScopeContext base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:15] by_f=[5 5 5] loads_by_f=[153277/0 47499/0 1823/0]
+ep9 census: classf Binder base=24 names=1 extra=0 escaped=false bytecode=true today_cap=[1:10] by_f=[10] loads_by_f=[206410/0]
+ep9 census: classf Benchmark base=24 names=9 extra=0 escaped=false bytecode=true today_cap=[9:9] by_f=[1 1 1 1 1 1 1 1 1] loads_by_f=[]
+ep9 census: classf (none) base=24 names=0 extra=0 escaped=false bytecode=false today_cap=[8:8] by_f=[2 2 2 1 1] loads_by_f=[]
+ep9 census: classf Function base=24 names=0 extra=0 escaped=false bytecode=false today_cap=[8:8] by_f=[3 3 2] loads_by_f=[]
+ep9 census: classf Indenter base=24 names=1 extra=0 escaped=false bytecode=true today_cap=[1:5] by_f=[5] loads_by_f=[292494/0]
+ep9 census: classf StringSourceText base=24 names=1 extra=0 escaped=false bytecode=true today_cap=[1:5] by_f=[5] loads_by_f=[]
+ep9 census: classf BenchmarkSuite base=24 names=3 extra=0 escaped=true bytecode=true today_cap=[8:5] by_f=[1 1 1 1 1] loads_by_f=[]
+ep9 census: classf SourceTextSegment base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:3] by_f=[1 1 1] loads_by_f=[]
+ep9 census: classf ScopeSearchFilter base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:3] by_f=[1 1 1] loads_by_f=[]
+ep9 census: classf BenchmarkResult base=24 names=3 extra=0 escaped=false bytecode=true today_cap=[3:3] by_f=[1 1 1] loads_by_f=[]
+ep9 census: classf AstWalkerFactory base=24 names=1 extra=0 escaped=true bytecode=true today_cap=[8:1] by_f=[1] loads_by_f=[4242/0]
+ep9 census: class Identifier bytecode=true levels=3 own_names=4 chain_names=14 proto_extra=0 escaped=true rule_cap_k0=14 instances~272321 adds=4084803 max_f=14 today_cap=[1:3 8:4084800] slots_cells=544641 slots_bytes=34857008 covered=[544641 544641 544641] extra=[272321 1 1 0 0] extra_names=[text:272320 isMissing:1 emit:1 constructor:1]
+ep9 census: class BinaryExpression bytecode=true levels=4 own_names=2 chain_names=12 proto_extra=0 escaped=true rule_cap_k0=12 instances~160505 adds=1926060 max_f=11 today_cap=[8:1926060] slots_cells=160505 slots_bytes=7704240 covered=[160505 160505 160505] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class ASTList bytecode=true levels=3 own_names=2 chain_names=12 proto_extra=0 escaped=true rule_cap_k0=12 instances~96630 adds=1159560 max_f=11 today_cap=[8:1159560] slots_cells=96630 slots_bytes=4638240 covered=[96630 96630 96630] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class CallExpression bytecode=true levels=4 own_names=4 chain_names=13 proto_extra=0 escaped=true rule_cap_k0=13 instances~30985 adds=402805 max_f=12 today_cap=[8:402805] slots_cells=61970 slots_bytes=3966080 covered=[61970 61970 61970] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class TypeSymbol bytecode=true levels=3 own_names=8 chain_names=19 proto_extra=0 escaped=true rule_cap_k0=19 instances~18041 adds=361702 max_f=20 today_cap=[1:2 8:361700] slots_cells=54121 slots_bytes=4906928 covered=[54121 54121 54121] extra=[17371 1571 0 0 0] extra_names=[container:17370 instanceType:1560 additionalLocations:10 isWith:1]
+ep9 census: class FieldSymbol bytecode=true levels=3 own_names=7 chain_names=16 proto_extra=0 escaped=true rule_cap_k0=16 instances~18025 adds=303230 max_f=16 today_cap=[8:303230] slots_cells=50880 slots_bytes=4442720 covered=[36050 50880 50880] extra=[14830 0 0 0 0] extra_names=[container:14830]
+ep9 census: class ParameterSymbol bytecode=true levels=3 own_names=6 chain_names=15 proto_extra=0 escaped=true rule_cap_k0=15 instances~25195 adds=403120 max_f=15 today_cap=[8:403120] slots_cells=50390 slots_bytes=3224960 covered=[50390 50390 50390] extra=[25195 0 0 0 0] extra_names=[container:25195]
+ep9 census: class AST bytecode=true levels=2 own_names=8 chain_names=10 proto_extra=0 escaped=true rule_cap_k0=10 instances~47851 adds=478469 max_f=29 today_cap=[1:69 8:478400] slots_cells=47854 slots_bytes=2297440 covered=[47853 47853 47853] extra=[11 8 8 6 36] extra_names=[constructor:11 typeCheck:6 emit:5 printLabel:3]
+ep9 census: class FuncDecl bytecode=true levels=3 own_names=29 chain_names=39 proto_extra=0 escaped=true rule_cap_k0=39 instances~8661 adds=355068 max_f=40 today_cap=[1:8 8:355060] slots_cells=43302 slots_bytes=9283648 covered=[34642 34642 43302] extra=[8661 8661 1 1 4] extra_names=[signature:8660 symbols:8660 isExternallyVisibleSymbol:1 emit:1]
+ep9 census: class NumberLiteral bytecode=true levels=4 own_names=3 chain_names=13 proto_extra=0 escaped=true rule_cap_k0=13 instances~19430 adds=252590 max_f=12 today_cap=[8:252590] slots_cells=38860 slots_bytes=2487040 covered=[38860 38860 38860] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class ArgDecl bytecode=true levels=4 own_names=2 chain_names=18 proto_extra=0 escaped=true rule_cap_k0=18 instances~12490 adds=224820 max_f=17 today_cap=[8:224820] slots_cells=37470 slots_bytes=3397280 covered=[37470 37470 37470] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class VariableSymbol bytecode=true levels=3 own_names=1 chain_names=12 proto_extra=0 escaped=true rule_cap_k0=12 instances~26105 adds=324365 max_f=12 today_cap=[8:324365] slots_cells=37210 slots_bytes=2141440 covered=[26105 37210 37210] extra=[11105 0 0 0 0] extra_names=[container:11105]
+ep9 census: class VarDecl bytecode=true levels=4 own_names=0 chain_names=16 proto_extra=0 escaped=true rule_cap_k0=16 instances~17775 adds=284400 max_f=15 today_cap=[8:284400] slots_cells=35550 slots_bytes=2275200 covered=[35550 35550 35550] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class Comment bytecode=true levels=3 own_names=5 chain_names=15 proto_extra=0 escaped=true rule_cap_k0=15 instances~10185 adds=173145 max_f=16 today_cap=[8:173145] slots_cells=30555 slots_bytes=2770320 covered=[20370 20370 30555] extra=[10185 10185 0 0 0] extra_names=[minLine:10185 limLine:10185]
+ep9 census: class IfStatement bytecode=true levels=5 own_names=3 chain_names=13 proto_extra=0 escaped=true rule_cap_k0=13 instances~13735 adds=192290 max_f=13 today_cap=[8:192290] slots_cells=27470 slots_bytes=1758080 covered=[27470 27470 27470] extra=[13735 0 0 0 0] extra_names=[thenBod:13735]
+ep9 census: class TypeReference bytecode=true levels=3 own_names=2 chain_names=12 proto_extra=0 escaped=true rule_cap_k0=12 instances~24630 adds=295560 max_f=11 today_cap=[8:295560] slots_cells=24630 slots_bytes=1182240 covered=[24630 24630 24630] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class Type bytecode=true levels=1 own_names=7 chain_names=7 proto_extra=0 escaped=false rule_cap_k0=8 instances~19411 adds=199038 max_f=17 today_cap=[1:8 7:199030] slots_cells=22552 slots_bytes=1213568 covered=[0 0 0] extra=[19406 12146 12076 11881 7659] extra_names=[symbol:19405 containedScope:10375 memberScope:10140 enclosingType:8395]
+ep9 census: class Block bytecode=true levels=5 own_names=2 chain_names=12 proto_extra=0 escaped=true rule_cap_k0=12 instances~18270 adds=219240 max_f=11 today_cap=[8:219240] slots_cells=18270 slots_bytes=876960 covered=[18270 18270 18270] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class UnaryExpression bytecode=true levels=4 own_names=3 chain_names=13 proto_extra=0 escaped=true rule_cap_k0=13 instances~8770 adds=114010 max_f=12 today_cap=[8:114010] slots_cells=17540 slots_bytes=1122560 covered=[17540 17540 17540] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class Signature bytecode=true levels=1 own_names=5 chain_names=5 proto_extra=0 escaped=false rule_cap_k0=8 instances~16700 adds=100200 max_f=5 today_cap=[5:100200] slots_cells=16700 slots_bytes=801600 covered=[0 0 0] extra=[16700 0 0 0 0] extra_names=[returnType:16700]
+ep9 census: class BlockIntrinsics bytecode=true levels=1 own_names=7 chain_names=7 proto_extra=0 escaped=true rule_cap_k0=8 instances~116406 adds=969372 max_f=362 today_cap=[8:969372] slots_cells=12602 slots_bytes=965792 covered=[0 0 9870] extra=[116406 9870 4496 3149 20609] extra_names=[constructor:116406 arguments:3891 ast:1208 name:702]
+ep9 census: class ScopeChain bytecode=true levels=1 own_names=3 chain_names=3 proto_extra=0 escaped=false rule_cap_k0=8 instances~12510 adds=75015 max_f=5 today_cap=[3:75015] slots_cells=12495 slots_bytes=599760 covered=[0 0 0] extra=[12495 12495 12495 0 0] extra_names=[thisType:12495 classType:12495 fnc:9865 moduleDecl:2630]
+ep9 census: class StringLiteral bytecode=true levels=4 own_names=1 chain_names=11 proto_extra=0 escaped=true rule_cap_k0=11 instances~9835 adds=108185 max_f=10 today_cap=[8:108185] slots_cells=9835 slots_bytes=472080 covered=[9835 9835 9835] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class EndCode bytecode=true levels=3 own_names=0 chain_names=10 proto_extra=0 escaped=true rule_cap_k0=10 instances~7440 adds=74400 max_f=9 today_cap=[8:74400] slots_cells=7440 slots_bytes=357120 covered=[7440 7440 7440] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class ReturnStatement bytecode=true levels=5 own_names=1 chain_names=11 proto_extra=0 escaped=true rule_cap_k0=11 instances~7100 adds=78100 max_f=10 today_cap=[8:78100] slots_cells=7100 slots_bytes=340800 covered=[7100 7100 7100] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class ClassDeclaration bytecode=true levels=6 own_names=4 chain_names=21 proto_extra=0 escaped=true rule_cap_k0=21 instances~780 adds=16380 max_f=20 today_cap=[8:16380] slots_cells=2340 slots_bytes=212160 covered=[2340 2340 2340] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class ForStatement bytecode=true levels=5 own_names=1 chain_names=11 proto_extra=0 escaped=true rule_cap_k0=11 instances~1165 adds=16310 max_f=13 today_cap=[8:16310] slots_cells=2330 slots_bytes=149120 covered=[1165 1165 2330] extra=[1165 1165 1165 0 0] extra_names=[cond:1165 body:1165 incr:1165]
+ep9 census: class ConditionalExpression bytecode=true levels=4 own_names=3 chain_names=13 proto_extra=0 escaped=true rule_cap_k0=13 instances~960 adds=12480 max_f=12 today_cap=[8:12480] slots_cells=1920 slots_bytes=122880 covered=[1920 1920 1920] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class CaseStatement bytecode=true levels=5 own_names=1 chain_names=11 proto_extra=0 escaped=true rule_cap_k0=11 instances~1510 adds=18120 max_f=11 today_cap=[8:18120] slots_cells=1510 slots_bytes=72480 covered=[1510 1510 1510] extra=[1510 0 0 0 0] extra_names=[body:1510]
+ep9 census: class ModuleType bytecode=true levels=2 own_names=3 chain_names=10 proto_extra=0 escaped=true rule_cap_k0=10 instances~745 adds=10430 max_f=15 today_cap=[8:10430] slots_cells=1490 slots_bytes=95360 covered=[745 745 745] extra=[745 745 745 370 375] extra_names=[members:745 ambientMembers:745 symbol:740 containedScope:375]
+ep9 census: class Jump bytecode=true levels=5 own_names=2 chain_names=12 proto_extra=0 escaped=true rule_cap_k0=12 instances~1295 adds=15540 max_f=11 today_cap=[8:15540] slots_cells=1295 slots_bytes=62160 covered=[1295 1295 1295] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class ModuleDeclaration bytecode=true levels=5 own_names=8 chain_names=22 proto_extra=0 escaped=true rule_cap_k0=22 instances~370 adds=8510 max_f=22 today_cap=[8:8510] slots_cells=1110 slots_bytes=100640 covered=[1110 1110 1110] extra=[370 0 0 0 0] extra_names=[mod:370]
+ep9 census: class InterfaceDeclaration bytecode=true levels=6 own_names=0 chain_names=17 proto_extra=0 escaped=true rule_cap_k0=17 instances~215 adds=3655 max_f=16 today_cap=[8:3655] slots_cells=645 slots_bytes=58480 covered=[645 645 645] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class (none) bytecode=false levels=0 own_names=0 chain_names=0 proto_extra=0 escaped=false rule_cap_k0=8 instances~861 adds=5539 max_f=354 today_cap=[1:32 2:164 3:60 4:5264 6:12 7:7] slots_cells=524 slots_bytes=69856 covered=[0 0 0] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class SwitchStatement bytecode=true levels=5 own_names=3 chain_names=13 proto_extra=0 escaped=true rule_cap_k0=13 instances~180 adds=2520 max_f=13 today_cap=[8:2520] slots_cells=360 slots_bytes=23040 covered=[360 360 360] extra=[180 0 0 0 0] extra_names=[caseList:180]
+ep9 census: class Catch bytecode=true levels=5 own_names=4 chain_names=14 proto_extra=0 escaped=true rule_cap_k0=14 instances~145 adds=2030 max_f=13 today_cap=[8:2030] slots_cells=290 slots_bytes=18560 covered=[290 290 290] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class WhileStatement bytecode=true levels=5 own_names=2 chain_names=12 proto_extra=0 escaped=true rule_cap_k0=12 instances~245 adds=2940 max_f=11 today_cap=[8:2940] slots_cells=245 slots_bytes=11760 covered=[245 245 245] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class ArrayCache bytecode=true levels=1 own_names=1 chain_names=1 proto_extra=0 escaped=false rule_cap_k0=8 instances~235 adds=470 max_f=1 today_cap=[1:470] slots_cells=235 slots_bytes=11280 covered=[0 0 0] extra=[235 0 0 0 0] extra_names=[arrayType:235]
+ep9 census: class Try bytecode=true levels=5 own_names=1 chain_names=11 proto_extra=0 escaped=true rule_cap_k0=11 instances~150 adds=1650 max_f=10 today_cap=[8:1650] slots_cells=150 slots_bytes=7200 covered=[150 150 150] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: class TryCatch bytecode=true levels=5 own_names=2 chain_names=12 proto_extra=0 escaped=true rule_cap_k0=12 instances~145 adds=1740 max_f=11 today_cap=[8:1740] slots_cells=145 slots_bytes=6960 covered=[145 145 145] extra=[0 0 0 0 0] extra_names=[]
+ep9 census: adds own_add=271834 ic_add_hit=15800221
+ep9 census: adds by_ctx other=14335272 named-get-miss=112 named-set-miss=1579506 keyed-set-cold=157165
+ep9 census: adds new_shape by_ctx other=729 named-get-miss=1 named-set-miss=3583 keyed-set-cold=7541
+ep9 census: keyed_set adds past_line(max(12,cap) out-of-object)=12447 of them new_shape=2949
+ep9 census: shapes made by_ctx other=992 named-get-miss=2 named-set-miss=3583 keyed-set-cold=7544
+ep9 census: to_dictionary by_ctx other=16 keyed-set-cold=26988
+ep9 census: named_load answered in_object=172356068 out_of_line=117328467 length=11261605 proto=56551365 missing=352446
+ep9 census: keyed_get cold=2380650 string_key=1873270 on_dict=500885 past_line=644586
+ep9 census: for_in_keys calls=28372 keys=360310 for_in_has calls=360310
+ep9 census: for_in_keys len<=8 calls=22175
+ep9 census: for_in_keys len<=16 calls=4605
+ep9 census: for_in_keys len<=32 calls=1085
+ep9 census: for_in_keys len<=64 calls=95
+ep9 census: for_in_keys len<=128 calls=82
+ep9 census: for_in_keys len<=256 calls=165
+ep9 census: for_in_keys len<=512 calls=165
+ep9 census: array_ctor argc0 call=0 construct=538940 argc1 call=0 construct=2 argc2+ call=0 construct=0
+ep9 census: elem_grow total=288455 copied_slots=665473
+ep9 census: elem_grow old_cap=0 count=226703
+ep9 census: elem_grow old_cap=1 count=10
+ep9 census: elem_grow old_cap=4 count=44154
+ep9 census: elem_grow old_cap=8 count=12072
+ep9 census: elem_grow old_cap=16 count=3139
+ep9 census: elem_grow old_cap=19 count=1
+ep9 census: elem_grow old_cap=32 count=1114
+ep9 census: elem_grow old_cap=38 count=1
+ep9 census: elem_grow old_cap=41 count=1
+ep9 census: elem_grow old_cap=64 count=633
+ep9 census: elem_grow old_cap=82 count=1
+ep9 census: elem_grow old_cap=107 count=1
+ep9 census: elem_grow old_cap=128 count=395
+ep9 census: elem_grow old_cap=256 count=190
+ep9 census: elem_grow old_cap=512 count=15
+ep9 census: elem_grow old_cap=1024 count=5
+ep9 census: elem_grow old_cap=2048 count=5
+ep9 census: elem_grow old_cap=4096 count=5
+ep9 census: elem_grow old_cap=8192 count=5
+ep9 census: elem_grow old_cap=16384 count=5
+ep9 census: lookup calls=6145451 found=1444451 work=16787155 linear=3115152 hashed=2851735 empty=178564
+ep9 census: lookup ctx other calls=241185 found=103336 work=477472
+ep9 census: lookup ctx named-get-miss calls=234065 found=182958 work=440003
+ep9 census: lookup ctx named-set-miss calls=1301134 found=158862 work=2957522
+ep9 census: lookup ctx keyed-get-cold calls=3110660 found=579683 work=7874974
+ep9 census: lookup ctx keyed-set-cold calls=956934 found=118359 work=4083136
+ep9 census: lookup ctx for-in-has calls=301473 found=301253 work=954048
+ep9 census: lookup n<=0 calls=178564
+ep9 census: lookup n<=1 calls=1420822
+ep9 census: lookup n<=2 calls=12794
+ep9 census: lookup n<=3 calls=115677
+ep9 census: lookup n<=4 calls=47994
+ep9 census: lookup n<=5 calls=91396
+ep9 census: lookup n<=6 calls=153819
+ep9 census: lookup n<=7 calls=374557
+ep9 census: lookup n<=8 calls=898093
+ep9 census: lookup n<=16 calls=1777505
+ep9 census: lookup n<=32 calls=221592
+ep9 census: lookup n<=64 calls=490527
+ep9 census: lookup n<=128 calls=31817
+ep9 census: lookup n<=256 calls=122063
+ep9 census: lookup n<=512 calls=208231
+ep9 census: lookup global256 hits=5042173 hit_work=14170731 by_ctx other=232644 named-get-miss=185994 named-set-miss=1032608 keyed-get-cold=2461137 keyed-set-cold=942130 for-in-has=187660
+ep9 census: lookup global1024 hits=5549886 hit_work=15405157 by_ctx other=236914 named-get-miss=203253 named-set-miss=1250939 keyed-get-cold=2665667 keyed-set-cold=949088 for-in-has=244025
+ep9 census: lookup per_site sites=40 hits_1=609064 hits_2=959701 hits_4=2317012 hit_work_1=2406998 hit_work_2=3388645 hit_work_4=7507817
+ep9 census: lookup site crates/ep9_vm/src/property.rs:109 calls=3512876 work=8668359 hits_1=140626 hits_2=287612 hits_4=1314841
+ep9 census: lookup site crates/ep9_vm/src/property.rs:437 calls=779057 work=1442309 hits_1=89358 hits_2=123591 hits_4=199112
+ep9 census: lookup site crates/ep9_vm/src/ic.rs:1008 calls=379457 work=924293 hits_1=2661 hits_2=6587 hits_4=64203
+ep9 census: lookup site crates/ep9_vm/src/property.rs:432 calls=355932 work=1498818 hits_1=94814 hits_2=162663 hits_4=214798
+ep9 census: lookup site crates/ep9_vm/src/property.rs:1130 calls=301487 work=954070 hits_1=0 hits_2=0 hits_4=0
+ep9 census: lookup site crates/ep9_vm/src/property.rs:1480 calls=295995 work=1435416 hits_1=111698 hits_2=148038 hits_4=195389
+ep9 census: lookup site crates/ep9_vm/src/property.rs:1828 calls=295964 work=1435380 hits_1=111691 hits_2=148031 hits_4=195382
+ep9 census: lookup site crates/ep9_vm/src/ic.rs:1147 calls=117432 work=284042 hits_1=18485 hits_2=29806 hits_4=64918
+ep9 census: lookup site crates/ep9_vm/src/ic.rs:1332 calls=49918 work=50643 hits_1=28864 hits_2=33751 hits_4=42341
+ep9 census: lookup site crates/ep9_vm/src/ic.rs:1090 calls=44058 work=67495 hits_1=2593 hits_2=10364 hits_4=15960
+ep9 census: lookup site crates/ep9_vm/src/call.rs:699 calls=2869 work=8572 hits_1=2563 hits_2=2777 hits_4=2823
+ep9 census: lookup site crates/ep9_vm/src/exotic.rs:86 calls=1600 work=4279 hits_1=1049 hits_2=1406 hits_4=1445
+ep9 census: lookup site crates/ep9_vm/src/property.rs:832 calls=1420 work=2393 hits_1=0 hits_2=52 hits_4=137
+ep9 census: lookup site crates/ep9_vm/src/interp/slow/property.rs:98 calls=1104 work=1217 hits_1=938 hits_2=1001 hits_4=1027
+ep9 census: lookup site crates/ep9_vm/src/interp/slow/property.rs:77 calls=1099 work=0 hits_1=939 hits_2=1000 hits_4=1027
+ep9 census: lookup site crates/ep9_vm/src/regexp.rs:559 calls=1028 work=0 hits_1=1027 hits_2=1027 hits_4=1027
+ep9 census: lookup site crates/ep9_vm/src/property.rs:840 calls=684 work=1516 hits_1=17 hits_2=59 hits_4=527
+ep9 census: lookup site crates/ep9_vm/src/construct_ic.rs:407 calls=675 work=2015 hits_1=540 hits_2=630 hits_4=666
+ep9 census: lookup site crates/ep9_vm/src/construct_ic.rs:402 calls=675 work=2015 hits_1=540 hits_2=630 hits_4=666
+ep9 census: lookup site crates/ep9_vm/src/builtins.rs:2234 calls=626 work=1539 hits_1=0 hits_2=2 hits_4=23
+ep9 census: lookup site crates/ep9_vm/src/builtins.rs:2289 calls=581 work=1390 hits_1=0 hits_2=2 hits_4=23
+ep9 census: lookup site crates/ep9_vm/src/exotic.rs:121 calls=214 work=428 hits_1=213 hits_2=213 hits_4=213
+ep9 census: lookup site crates/ep9_vm/src/exotic.rs:99 calls=214 work=428 hits_1=213 hits_2=213 hits_4=213
+ep9 census: lookup site crates/ep9_vm/src/exotic.rs:117 calls=214 work=0 hits_1=213 hits_2=213 hits_4=213
+ep9 census: lookup site crates/ep9_vm/src/ic.rs:1386 calls=62 work=87 hits_1=14 hits_2=25 hits_4=30

@@ -1,0 +1,12 @@
+jitless H0 1 rc=0 ep9: gc collections=10 freed_cells=3408487 allocated_bytes=420569136 out=00d1e06048c7 real=2.56 rss=322928640
+jitless H0 2 rc=0 ep9: gc collections=10 freed_cells=3406022 allocated_bytes=420599344 out=00d1e06048c7 real=2.54 rss=323534848
+jitless H0 3 rc=0 ep9: gc collections=10 freed_cells=3406021 allocated_bytes=420600112 out=00d1e06048c7 real=2.54 rss=323633152
+jitless HD 1 rc=0 ep9: gc collections=13 freed_cells=5741358 allocated_bytes=420861792 out=00d1e06048c7 real=2.49 rss=267304960
+jitless HD 2 rc=0 ep9: gc collections=10 freed_cells=5531927 allocated_bytes=421033520 out=00d1e06048c7 real=2.51 rss=327680000
+jitless HD 3 rc=0 ep9: gc collections=12 freed_cells=4018054 allocated_bytes=426109024 out=00d1e06048c7 real=2.58 rss=279379968
+jit H0 1 rc=0 ep9: gc collections=10 freed_cells=3406087 allocated_bytes=420580912 out=00d1e06048c7 real=2.59 rss=324042752
+jit H0 2 rc=0 ep9: gc collections=10 freed_cells=3408509 allocated_bytes=420583984 out=00d1e06048c7 real=2.54 rss=323682304
+jit H0 3 rc=0 ep9: gc collections=10 freed_cells=3406088 allocated_bytes=420579376 out=00d1e06048c7 real=2.65 rss=324567040
+jit HD 1 rc=0 ep9: gc collections=13 freed_cells=5651356 allocated_bytes=419098208 out=00d1e06048c7 real=2.61 rss=263471104
+jit HD 2 rc=0 ep9: gc collections=13 freed_cells=5777240 allocated_bytes=420587104 out=00d1e06048c7 real=2.56 rss=269778944
+jit HD 3 rc=0 ep9: gc collections=13 freed_cells=5694538 allocated_bytes=420182368 out=00d1e06048c7 real=2.60 rss=265682944

@@ -1,0 +1,139 @@
+# JIT-DELTA: what the jit build runs more (octane-typescript, cachegrind Ir)
+
+jit total Ir 52.1304 G; jitless total Ir 51.5179 G; jit - jitless 612.49 M (1.189%)
+C (jit cell cycles) = 25.1716 G at IPC 2.071; k low / center / high = 0.0500 / 0.2414 / 0.4829 cycles per removed Ir
+break-even dIr: x1.010 = 1032.28 M at center, 516.14 M at high; x1.015 = 1540.80 M at center, 770.40 M at high
+
+A/A: jit base 52129590719 head 52130369314 DIFFER; jitless base 51516972316 head 51517879304 DIFFER
+
+## 1. Ir per handler (jit minus jitless)
+
+| handler | jit Ir (M) | jitless Ir (M) | jit - jitless (M) | est. low | est. center | est. high | jit - jitless Bim (M) | est. center + Bim |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| TestEqual | 938.42 | 804.49 | 133.93 | x1.0003 | x1.0013 | x1.0026 | 0.01 | x1.0013 |
+| GetKeyedProperty_cold | 264.73 | 133.31 | 131.42 | x1.0003 | x1.0013 | x1.0025 | -1.53 | x1.0013 |
+| ep9_vm::interp::dsl::record_pair_next::<76> | 129.78 | 0.00 | 129.78 | x1.0003 | x1.0012 | x1.0025 | 0.00 | x1.0012 |
+| ep9_vm::string::array_index | 144.59 | 80.29 | 64.30 | x1.0001 | x1.0006 | x1.0012 | 0.00 | x1.0006 |
+| GetKeyedProperty | 489.93 | 439.33 | 50.60 | x1.0001 | x1.0005 | x1.0010 | -0.01 | x1.0005 |
+| CallProperty0 | 2190.10 | 2146.14 | 43.96 | x1.0001 | x1.0004 | x1.0008 | -0.43 | x1.0004 |
+| SetKeyedProperty_cold | 47.26 | 23.49 | 23.77 | x1.0000 | x1.0002 | x1.0005 | -0.34 | x1.0002 |
+| CallProperty1 | 2059.19 | 2037.98 | 21.21 | x1.0000 | x1.0002 | x1.0004 | 0.35 | x1.0004 |
+| TestEqual_cold | 172.13 | 151.32 | 20.81 | x1.0000 | x1.0002 | x1.0004 | -0.90 | x1.0002 |
+| ep9_vm::interp::dsl::record_call_next::<1> | 13.08 | 0.00 | 13.08 | x1.0000 | x1.0001 | x1.0003 | 0.48 | x1.0004 |
+| CallProperty | 1013.93 | 1001.04 | 12.89 | x1.0000 | x1.0001 | x1.0002 | -0.05 | x1.0001 |
+| SetKeyedProperty | 153.07 | 140.53 | 12.54 | x1.0000 | x1.0001 | x1.0002 | 0.00 | x1.0001 |
+| CallProperty2 | 914.92 | 902.60 | 12.32 | x1.0000 | x1.0001 | x1.0002 | -0.52 | x1.0001 |
+| ForInNext_cold | 25.93 | 22.69 | 3.24 | x1.0000 | x1.0000 | x1.0001 | -0.36 | x1.0000 |
+| ep9_vm::interp::ops::record_call_out | 10.12 | 7.36 | 2.76 | x1.0000 | x1.0000 | x1.0001 | 0.00 | x1.0000 |
+| Add_cold | 32.17 | 29.51 | 2.66 | x1.0000 | x1.0000 | x1.0001 | -0.00 | x1.0000 |
+| CreateClosure_cold | 9.05 | 7.11 | 1.93 | x1.0000 | x1.0000 | x1.0000 | -0.13 | x1.0000 |
+| ep9_vm::interp::scaled::step::<ep9_vm::interp::dsl::S2> | 657.76 | 656.50 | 1.27 | x1.0000 | x1.0000 | x1.0000 | -0.00 | x1.0000 |
+| CallUndefinedReceiver1 | 45.65 | 44.53 | 1.11 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| ep9_vm::interp::scaled::step_cold::<ep9_vm::interp::dsl::S2> | 375.50 | 374.53 | 0.97 | x1.0000 | x1.0000 | x1.0000 | 0.42 | x1.0002 |
+| TestGreaterThanOrEqual | 67.86 | 67.05 | 0.82 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| _int_malloc | 28.11 | 27.55 | 0.56 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| ep9_vm::interp::dsl::record_next::<770> | 0.46 | 0.00 | 0.46 | x1.0000 | x1.0000 | x1.0000 | 0.03 | x1.0000 |
+| ep9_vm::interp::ops::forward_or_call | 468.66 | 468.21 | 0.45 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| CallUndefinedReceiver | 28.32 | 27.92 | 0.40 | x1.0000 | x1.0000 | x1.0000 | -0.00 | x1.0000 |
+| __memcmp_avx2_movbe | 27.28 | 27.02 | 0.26 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| ep9_vm::interp::dsl::skip_next::<35> | 0.19 | 0.00 | 0.19 | x1.0000 | x1.0000 | x1.0000 | 0.01 | x1.0000 |
+| unlink_chunk.isra.0 | 3.00 | 2.84 | 0.16 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| TestLessThan | 350.14 | 350.00 | 0.14 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| CallUndefinedReceiver2 | 5.74 | 5.65 | 0.09 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+
+rows: 1690; sum of jit - jitless: 612.49 M; sum of the positive rows: 688.38 M (est. center for all positive rows: x1.0066)
+
+## 2. Ir of the record hooks per site (jit minus jitless)
+
+| site | hook | jit Ir (M) | jitless Ir (M) | jit - jitless (M) | est. low | est. center | est. high | jit - jitless Bim (M) | est. center + Bim |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| GetKeyedProperty | profile.rs:keyed_hit_kind | 49.59 | 0.00 | 49.59 | x1.0001 | x1.0005 | x1.0010 | 0.00 | x1.0005 |
+| ep9_vm::interp::dsl::record_pair_next::<76> | profile.rs:compare_operand | 48.65 | 0.00 | 48.65 | x1.0001 | x1.0005 | x1.0009 | 0.00 | x1.0005 |
+| CallProperty0 | profile.rs:call_window_after_unit | 22.26 | 0.00 | 22.26 | x1.0000 | x1.0002 | x1.0004 | 0.00 | x1.0002 |
+| TestEqual | profile.rs:nullish_pair_bits | 20.77 | 0.00 | 20.77 | x1.0000 | x1.0002 | x1.0004 | 0.00 | x1.0002 |
+| TestEqual | profile.rs:adds_bit | 19.87 | 0.00 | 19.87 | x1.0000 | x1.0002 | x1.0004 | 0.00 | x1.0002 |
+| ep9_vm::interp::dsl::record_pair_next::<76> | profile.rs:compare_pair | 15.66 | 0.00 | 15.66 | x1.0000 | x1.0002 | x1.0003 | 0.00 | x1.0002 |
+| GetKeyedProperty_cold | profile.rs:keyed_key | 15.65 | 0.00 | 15.65 | x1.0000 | x1.0002 | x1.0003 | 0.00 | x1.0002 |
+| GetKeyedProperty_cold | profile.rs:record_keyed_cold | 15.53 | 0.00 | 15.53 | x1.0000 | x1.0001 | x1.0003 | 0.00 | x1.0001 |
+| ep9_vm::interp::dsl::record_pair_next::<76> | profile.rs:compare_bits | 12.64 | 0.00 | 12.64 | x1.0000 | x1.0001 | x1.0002 | 0.00 | x1.0001 |
+| ep9_vm::interp::dsl::record_pair_next::<76> | profile.rs:(line 0) | 12.27 | 0.00 | 12.27 | x1.0000 | x1.0001 | x1.0002 | 0.00 | x1.0001 |
+| CallProperty1 | profile.rs:call_window_after_unit | 10.74 | 0.00 | 10.74 | x1.0000 | x1.0001 | x1.0002 | 0.00 | x1.0001 |
+| GetKeyedProperty_cold | profile.rs:(line 0) | 10.33 | 0.00 | 10.33 | x1.0000 | x1.0001 | x1.0002 | 0.00 | x1.0001 |
+| ep9_vm::interp::dsl::record_pair_next::<76> | profile.rs:add_bits | 10.11 | 0.00 | 10.11 | x1.0000 | x1.0001 | x1.0002 | 0.00 | x1.0001 |
+| GetKeyedProperty | profile.rs:(line 0) | 9.91 | 0.00 | 9.91 | x1.0000 | x1.0001 | x1.0002 | 0.00 | x1.0001 |
+| TestEqual_cold | profile.rs:add_bits | 8.20 | 0.00 | 8.20 | x1.0000 | x1.0001 | x1.0002 | 0.00 | x1.0001 |
+| TestEqual | profile.rs:value_off | 6.62 | 0.00 | 6.62 | x1.0000 | x1.0001 | x1.0001 | 0.00 | x1.0001 |
+| CallProperty | profile.rs:call_window_after_unit | 6.53 | 0.00 | 6.53 | x1.0000 | x1.0001 | x1.0001 | 0.00 | x1.0001 |
+| CallProperty2 | profile.rs:call_window_after_unit | 6.24 | 0.00 | 6.24 | x1.0000 | x1.0001 | x1.0001 | 0.00 | x1.0001 |
+| TestEqual | profile.rs:(line 0) | 6.11 | 0.00 | 6.11 | x1.0000 | x1.0001 | x1.0001 | 0.00 | x1.0001 |
+| ep9_vm::interp::dsl::record_pair_next::<76> | dsl.rs:record_pair_next | 5.06 | 0.00 | 5.06 | x1.0000 | x1.0000 | x1.0001 | 0.00 | x1.0000 |
+| SetKeyedProperty_cold | profile.rs:record_keyed_cold | 3.23 | 0.00 | 3.23 | x1.0000 | x1.0000 | x1.0001 | 0.00 | x1.0000 |
+| ep9_vm::interp::dsl::record_call_next::<1> | dsl.rs:record_call_next | 2.93 | 0.00 | 2.93 | x1.0000 | x1.0000 | x1.0001 | 0.48 | x1.0003 |
+| SetKeyedProperty_cold | profile.rs:keyed_key | 2.88 | 0.00 | 2.88 | x1.0000 | x1.0000 | x1.0001 | 0.00 | x1.0000 |
+| ep9_vm::interp::dsl::record_pair_next::<76> | profile.rs:value_off | 2.53 | 0.00 | 2.53 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| GetKeyedProperty_cold | profile.rs:keyed_receiver | 2.38 | 0.00 | 2.38 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| GetKeyedProperty_cold | profile.rs:value_off | 2.38 | 0.00 | 2.38 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| SetKeyedProperty_cold | profile.rs:(line 0) | 2.26 | 0.00 | 2.26 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| TestEqual_cold | profile.rs:(line 0) | 15.77 | 13.72 | 2.05 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| TestEqual_cold | profile.rs:value_off | 2.05 | 0.00 | 2.05 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| ep9_vm::interp::dsl::record_call_next::<1> | profile.rs:record_call_pushed | 1.47 | 0.00 | 1.47 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| SetKeyedProperty | profile.rs:adds_bit | 1.37 | 0.00 | 1.37 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| GetKeyedProperty_cold | profile.rs:element_case | 1.13 | 0.00 | 1.13 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| ep9_vm::interp::dsl::record_call_next::<1> | profile.rs:record_call_in | 1.10 | 0.00 | 1.10 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| Add_cold | profile.rs:add_bits | 1.06 | 0.00 | 1.06 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| ep9_vm::interp::dsl::record_call_next::<1> | profile.rs:count | 0.89 | 0.00 | 0.89 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| ForInNext_cold | profile.rs:record_for_in_next | 0.72 | 0.00 | 0.72 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| ForInNext_cold | profile.rs:key_off | 0.72 | 0.00 | 0.72 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| CallUndefinedReceiver1 | profile.rs:call_window_after_unit | 0.56 | 0.00 | 0.56 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| SetKeyedProperty_cold | profile.rs:keyed_receiver | 0.47 | 0.00 | 0.47 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| SetKeyedProperty_cold | profile.rs:value_off | 0.47 | 0.00 | 0.47 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+
+rows: 197; sum of jit - jitless: 349.53 M; sum of the positive rows: 351.29 M (est. center for all positive rows: x1.0034)
+
+## 3. Ir of the record hooks, all sites (jit minus jitless)
+
+| hook | jit Ir (M) | jitless Ir (M) | jit - jitless (M) | est. low | est. center | est. high | jit - jitless Bim (M) | est. center + Bim |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| profile.rs:keyed_hit_kind | 50.72 | 1.13 | 49.59 | x1.0001 | x1.0005 | x1.0010 | 0.00 | x1.0005 |
+| profile.rs:compare_operand | 90.99 | 42.07 | 48.92 | x1.0001 | x1.0005 | x1.0009 | 0.00 | x1.0005 |
+| profile.rs:call_window_after_unit | 47.97 | 1.39 | 46.58 | x1.0001 | x1.0004 | x1.0009 | 0.00 | x1.0004 |
+| profile.rs:(line 0) | 73.08 | 29.56 | 43.51 | x1.0001 | x1.0004 | x1.0008 | 0.00 | x1.0004 |
+| profile.rs:adds_bit | 21.58 | 0.00 | 21.58 | x1.0000 | x1.0002 | x1.0004 | 0.00 | x1.0002 |
+| profile.rs:nullish_pair_bits | 20.77 | 0.00 | 20.77 | x1.0000 | x1.0002 | x1.0004 | 0.00 | x1.0002 |
+| profile.rs:add_bits | 19.68 | 0.00 | 19.68 | x1.0000 | x1.0002 | x1.0004 | 0.00 | x1.0002 |
+| profile.rs:record_keyed_cold | 18.79 | 0.00 | 18.79 | x1.0000 | x1.0002 | x1.0004 | 0.00 | x1.0002 |
+| profile.rs:keyed_key | 18.55 | 0.00 | 18.55 | x1.0000 | x1.0002 | x1.0004 | 0.00 | x1.0002 |
+| profile.rs:value_off | 15.80 | 0.00 | 15.80 | x1.0000 | x1.0002 | x1.0003 | 0.00 | x1.0002 |
+| profile.rs:compare_pair | 21.70 | 5.94 | 15.76 | x1.0000 | x1.0002 | x1.0003 | 0.00 | x1.0002 |
+| profile.rs:compare_bits | 23.07 | 10.43 | 12.64 | x1.0000 | x1.0001 | x1.0002 | 0.00 | x1.0001 |
+| dsl.rs:record_pair_next | 5.06 | 0.00 | 5.06 | x1.0000 | x1.0000 | x1.0001 | 0.00 | x1.0000 |
+| dsl.rs:record_call_next | 2.93 | 0.00 | 2.93 | x1.0000 | x1.0000 | x1.0001 | 0.48 | x1.0003 |
+| profile.rs:keyed_receiver | 2.85 | 0.00 | 2.85 | x1.0000 | x1.0000 | x1.0001 | 0.00 | x1.0000 |
+| profile.rs:record_call_in | 1.61 | 0.00 | 1.61 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| profile.rs:element_case | 1.52 | 0.00 | 1.52 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| profile.rs:record_call_pushed | 1.49 | 0.00 | 1.49 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| profile.rs:count | 1.27 | 0.00 | 1.27 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| profile.rs:record_for_in_next | 0.72 | 0.00 | 0.72 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| profile.rs:key_off | 0.72 | 0.00 | 0.72 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| profile.rs:count_int32 | 0.50 | 0.00 | 0.50 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| profile.rs:target_key | 0.38 | 0.00 | 0.38 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| dsl.rs:record_next | 0.09 | 0.00 | 0.09 | x1.0000 | x1.0000 | x1.0000 | 0.03 | x1.0000 |
+| profile.rs:compare_record | 0.01 | 0.00 | 0.01 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| profile.rs:put_key | 0.00 | 0.00 | 0.00 | x1.0000 | x1.0000 | x1.0000 | 0.00 | x1.0000 |
+| ops.rs:record_call_out | 4.72 | 4.72 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:binary_operand | 0.55 | 0.55 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:binary_pair_bits | 70.14 | 70.14 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:budget_after_poll | 0.14 | 0.14 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:is_i32 | 0.00 | 0.00 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:is_nullish | 4.90 | 4.90 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:is_number | 1.34 | 1.34 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:new | 0.00 | 0.00 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:rec_vector | 3.57 | 3.57 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:record_binary_cold | 2.47 | 2.47 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:record_call | 8.19 | 8.19 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:record_closure | 0.71 | 0.71 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:record_compare | 3.58 | 3.58 | 0.00 | - | - | - | 0.00 | - |
+| profile.rs:record_jump_loop | 41.80 | 41.80 | 0.00 | - | - | - | 0.00 | - |
+
+rows: 42; sum of jit - jitless: 349.53 M; sum of the positive rows: 351.29 M (est. center for all positive rows: x1.0034)
+
