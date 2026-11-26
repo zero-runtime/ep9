@@ -1364,6 +1364,7 @@ ep9_vm::build_info :: fn build_info() -> BuildInfo
 ep9_vm::check_tables :: fn check_tables(&[&BuiltinTable]) -> core::result::Result<(), alloc::string::String>
 ep9_vm::internals :: #[doc(hidden)] mod internals
 ep9_vm::internals::COLD_OPCODES :: const COLD_OPCODES: usize
+ep9_vm::internals::STRING_CHAR_CODE_AT :: #[doc(hidden)] const STRING_CHAR_CODE_AT: HostFn
 ep9_vm::internals::THREADED_HANDLERS :: const THREADED_HANDLERS: usize
 ep9_vm::internals::VM_BUILTINS :: static VM_BUILTINS: &BuiltinTable
 ep9_vm::layout :: #[doc(hidden)] mod layout

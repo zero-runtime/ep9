@@ -819,3 +819,4 @@ embed (not core): impl JsonText :: pub fn len(&self) -> usize
 embed (not core): impl JsonText :: pub fn is_empty(&self) -> bool
 embed (not core): impl JsonText :: pub fn push_ascii(&mut self, &[u8])
 embed (not core): impl JsonText :: pub fn push_units(&mut self, &[u16])
+embed (not core): #[doc(hidden)] pub const STRING_CHAR_CODE_AT: HostFn
