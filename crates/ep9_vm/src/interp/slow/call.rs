@@ -1244,13 +1244,40 @@ fn construct_native_cold(
 // (`budget <= 0`), the forward of `apply` and `call` (a FUNCTION receiver), a `Wide` or
 // `ExtraWide` call and the fast paths off take `call`. On x86-64 (not spike-native) a
 // FUNCTION receiver does not get here: the cold body tests the receiver first.
+//
+// The `charCodeAt` arm (M15-P1 CHARCODE). For `N` = 1 the first block of `call_property`
+// answers `s.charCodeAt(i)` with no host call, as V8's `StringPrototypeCharCodeAt` and JSC's
+// `charCodeAtThunkGenerator` do:
+//
+// ```text
+// call_property::<1>   no stack frame on this path: each exit is a return or a tail call
+//   1 unprefixed CallProperty1, budget > 0
+//   2 the callee is a FUNCTION whose FunctionInfo holds the host function
+//     abi::strings::char_code_at (the builtin itself, under any name; not its name)
+//   3 the human fast paths of the isolate are on, and the seam char_code_arm_on
+//   4 the argument is an int32            5 the receiver is a SEQ string or a flattened CONS
+//   6 index < length (one unsigned compare: a negative index fails too)
+//     --> acc = int32(code unit), out_fp/out_pc   (no enter, no host frame, no realm switch)
+//   5 SLICED, THIN (or a flattened CONS whose first part is not SEQ)
+//     --> char_code_other (the same 5 arguments): string::flat_unit_at
+//   a test fails --> call_property_host1: the old body (above), with no state changed
+// ```
+//
+// The arm reads registers and string cells and writes the accumulator: no GC point, no
+// throw, no call out, no feedback, no budget unit (a host call takes none, H23). So it needs
+// none of the steps of the host call: `enter` (only a GC point or a throw reads the saved
+// offset), the native stack test and the host frame, and the realm switch (the arm makes no
+// object and throws nothing). A rope (a CONS that is not flattened), an index that is not an
+// int32 in range, and every other receiver take the builtin, which gives NaN, flattens the
+// rope, or runs the spec steps (ToString, ToIntegerOrInfinity). A changed
+// `String.prototype.charCodeAt` is another callee: test 2 fails.
 
 /// The call at `pc` of an unprefixed `CallProperty0`, `CallProperty1` or `CallProperty2`
-/// (`N` its argument count) from the cold body of its handler: a host callee runs as
-/// [`host_entry`] runs it; every other call takes [`call()`], with `acc` (the accumulator of the
-/// cold body, as before). `this` is the receiver, which the cold body read already (its
-/// register is operand 1). Gives the result and sets `cx.out_fp`/`cx.out_pc` as [`call()`]
-/// does.
+/// (`N` its argument count) from the cold body of its handler: for `N` = 1, the `charCodeAt`
+/// arm (the block comment above) first; then a host callee runs as [`host_entry`] runs it;
+/// every other call takes [`call()`], with `acc` (the accumulator of the cold body, as before).
+/// `this` is the receiver, which the cold body read already (its register is operand 1). Gives
+/// the result and sets `cx.out_fp`/`cx.out_pc` as [`call()`] does.
 ///
 /// # Safety
 /// `pc` is the `CallProperty<N>` instruction (or its `Wide`/`ExtraWide` prefix) of verified
@@ -1259,6 +1286,28 @@ fn construct_native_cold(
 /// spike-native), `this` is not a FUNCTION: the cold body tests it (a debug test here).
 #[inline(never)]
 pub(crate) unsafe fn call_property<const N: u32>(
+    cx: &mut Cx,
+    fp: *mut u64,
+    pc: *const u8,
+    this: u64,
+    acc: u64,
+) -> u64 {
+    if N == 1 {
+        // SAFETY: caller contract, with `N` = 1.
+        return unsafe { char_code_arm(cx, fp, pc, this, acc) };
+    }
+    // SAFETY: caller contract.
+    unsafe { host_call_property::<N>(cx, fp, pc, this, acc) }
+}
+
+/// The body of [`call_property`] before the `charCodeAt` arm (M9 OXC-W2-HOSTCALL; the block
+/// comment above), with no change of its steps: inline in `call_property::<0>` and
+/// `call_property::<2>`, and in `call_property_host1` for `N` = 1.
+///
+/// # Safety
+/// As [`call_property`].
+#[inline(always)]
+unsafe fn host_call_property<const N: u32>(
     cx: &mut Cx,
     fp: *mut u64,
     pc: *const u8,
@@ -1351,3 +1400,196 @@ const _: () = {
         n += 1;
     }
 };
+
+// ---- the charCodeAt arm of CallProperty1 (M15-P1 CHARCODE) ---------------------------------
+//
+// The block comment of the host call of `CallProperty0`-`2` above has the arm's tests. The
+// functions below are at the end of the file, so the cited lines keep their places.
+
+/// The `charCodeAt` arm: the first block of `call_property::<1>`, inline there. Every exit is
+/// a return or a tail call with the same 5 arguments, and the taken path calls nothing that
+/// returns into it, so the arm needs no stack frame (the old body has one: it calls the host
+/// function).
+///
+/// # Safety
+/// As `call_property` with `N` = 1.
+#[inline(always)]
+unsafe fn char_code_arm(cx: &mut Cx, fp: *mut u64, pc: *const u8, this: u64, acc: u64) -> u64 {
+    use crate::frame::int32_of;
+    use crate::interp::dsl::R;
+    use crate::string::{self, SeqRead};
+    use ep9_bytecode::Opcode as O;
+    use ep9_value::encoding::NUMBER_TAG;
+
+    // Test 1: an unprefixed `CallProperty1` with no poll due (the first test of the old body).
+    // SAFETY: caller contract: `pc` is a byte of verified code.
+    if unsafe { *pc } != O::CallProperty1 as u8 || cx.budget <= 0 {
+        #[cfg(feature = "ic-stats")]
+        // SAFETY: caller contract.
+        unsafe {
+            char_code_poll_count(fp, pc)
+        };
+        // SAFETY: caller contract.
+        return unsafe { call_property_host1(cx, fp, pc, this, acc) };
+    }
+    // SAFETY: operand `i` (< 4) of the unprefixed instruction; the verifier checked that the
+    // whole instruction lies in the code.
+    let reg = |i: usize| R::from_operand(i32::from(unsafe { *pc.add(1 + i) } as i8)).0;
+    // SAFETY: slots named by register operands of this verified instruction, which lie in the
+    // live frame `fp`.
+    let rd = move |s: isize| unsafe { *fp.offset(s) };
+    // Test 2: the callee runs the builtin itself: its host function pointer, not its name.
+    if !is_char_code_at(rd(reg(0))) {
+        // SAFETY: caller contract.
+        return unsafe { call_property_host1(cx, fp, pc, this, acc) };
+    }
+    // Test 3: the human fast paths of the isolate (FASTDIFF) and the seam.
+    if !call::human_fast_paths(cx.rt()) || !char_code_arm_on(cx.rt()) {
+        crate::abi::strings::char_code_count!(Off);
+        // SAFETY: caller contract.
+        return unsafe { call_property_host1(cx, fp, pc, this, acc) };
+    }
+    // Test 4: an int32 index. As a u32, a negative index is at or above 2^31, which is above
+    // every length (`MAX_STRING_LENGTH` < 2^29), so test 6 is one unsigned compare.
+    let a0 = rd(reg(2));
+    if a0 & NUMBER_TAG != NUMBER_TAG {
+        crate::abi::strings::char_code_count!(Index);
+        // SAFETY: caller contract.
+        return unsafe { call_property_host1(cx, fp, pc, this, acc) };
+    }
+    let i = int32_of(a0) as u32;
+    // Test 5: a flat string receiver (one kind read); test 6 inside the read: `i` < the
+    // length. SEQ and a flattened CONS of a SEQ part here; SLICED and THIN out of line; a rope,
+    // the reserved kinds 6-7 and every other value take the old body.
+    let unit = match string::seq_read(this, i) {
+        SeqRead::Unit(u) => u,
+        // SAFETY: caller contract, and tests 1-4 hold.
+        SeqRead::Other => return unsafe { char_code_other(cx, fp, pc, this, acc) },
+        SeqRead::Rope => {
+            crate::abi::strings::char_code_count!(Rope);
+            // SAFETY: caller contract.
+            return unsafe { call_property_host1(cx, fp, pc, this, acc) };
+        }
+        SeqRead::Range => {
+            crate::abi::strings::char_code_count!(Index);
+            // SAFETY: caller contract.
+            return unsafe { call_property_host1(cx, fp, pc, this, acc) };
+        }
+        SeqRead::NotString => {
+            crate::abi::strings::char_code_count!(NotString);
+            // SAFETY: caller contract.
+            return unsafe { call_property_host1(cx, fp, pc, this, acc) };
+        }
+    };
+    char_code_taken(cx, fp, pc, unit)
+}
+
+/// The end of a call that the arm took: the counters, then the result and the next pc.
+#[inline(always)]
+fn char_code_taken(cx: &mut Cx, fp: *mut u64, pc: *const u8, unit: u16) -> u64 {
+    use ep9_bytecode::{Opcode as O, OperandScale};
+    #[cfg(test)]
+    call::CHAR_CODE_ARM_HITS.with(|h| h.set(h.get() + 1));
+    call::fast_hit!(9);
+    crate::abi::strings::char_code_count!(Arm);
+    cx.out_fp = fp;
+    cx.out_pc = pc.wrapping_add(O::CallProperty0.info().size(OperandScale::Single) + 1);
+    crate::frame::int32_bits(i32::from(unit))
+}
+
+/// The SLICED and THIN receivers of the arm (and a flattened CONS whose first part is not
+/// SEQ): the code unit by `string::flat_unit_at`, or the old body. Out of line: these are rare
+/// (0.76% of the TS calls), so the arm keeps no frame for them.
+///
+/// # Safety
+/// As `call_property` with `N` = 1, and the arm's tests 1-4 hold: `pc` is an unprefixed
+/// `CallProperty1` and its argument register holds an int32.
+#[inline(never)]
+unsafe fn char_code_other(cx: &mut Cx, fp: *mut u64, pc: *const u8, this: u64, acc: u64) -> u64 {
+    use crate::frame::int32_of;
+    use crate::interp::dsl::R;
+    // SAFETY: operand 2 of the unprefixed instruction (caller contract).
+    let a0 = R::from_operand(i32::from(unsafe { *pc.add(3) } as i8)).0;
+    // SAFETY: the argument register of this verified instruction, in the live frame `fp`.
+    let i = int32_of(unsafe { *fp.offset(a0) }) as u32;
+    match crate::string::flat_unit_at(this, i as usize) {
+        Some(unit) => char_code_taken(cx, fp, pc, unit),
+        None => {
+            crate::abi::strings::char_code_count!(Index);
+            // SAFETY: caller contract.
+            unsafe { call_property_host1(cx, fp, pc, this, acc) }
+        }
+    }
+}
+
+/// The old body of `call_property::<1>` (`host_call_property`), out of line: the arm's way
+/// out when a test fails. Same 5 arguments as `call_property`, so the arm's call of it is a
+/// tail call (a jump).
+///
+/// # Safety
+/// As `call_property` with `N` = 1.
+#[inline(never)]
+unsafe fn call_property_host1(
+    cx: &mut Cx,
+    fp: *mut u64,
+    pc: *const u8,
+    this: u64,
+    acc: u64,
+) -> u64 {
+    // SAFETY: caller contract.
+    unsafe { host_call_property::<1>(cx, fp, pc, this, acc) }
+}
+
+/// Does the value `f` run the builtin `String.prototype.charCodeAt` (`BuiltinId` 6.2)? True
+/// for a FUNCTION whose FunctionInfo holds the host function `abi::strings::char_code_at`,
+/// under any name and in any realm (one FunctionInfo per isolate). False for every other
+/// value: a bytecode function, a bound function, another host function (also one named
+/// "charCodeAt"), undefined. The function is not generic and never inlined, so it has one
+/// address, and the compare reads equal only for it. Not a GC point.
+#[inline(always)]
+fn is_char_code_at(f: u64) -> bool {
+    object::is_function(f)
+        && object::function_info(f).host.is_some_and(|h| {
+            core::ptr::fn_addr_eq(h, crate::abi::strings::char_code_at as crate::host::HostFn)
+        })
+}
+
+/// The CHARCODE seam (design 5.2): true = the `charCodeAt` arm runs; false = every call takes
+/// the old body. This role head: always true, so the test is a constant and the compiler
+/// removes it. The SET-15 integrator changes only this body (its bit of the arm byte of `rt`,
+/// `ep9_platform::set_arm`); the merge head deletes the seam and keeps the arm. It reads no
+/// execution policy (no preset, no feedback mode, no unit: rule 40, M-R9). Tests turn it off
+/// per thread with `call::CHAR_CODE_ARM_OFF`.
+#[inline(always)]
+pub(crate) fn char_code_arm_on(rt: &crate::runtime::Runtime) -> bool {
+    let _ = rt;
+    #[cfg(test)]
+    if call::CHAR_CODE_ARM_OFF.get() {
+        return false;
+    }
+    true
+}
+
+/// The `poll=` count of the `ic-stats` line (`abi::strings` `char_code_stats`): a call of the
+/// builtin that the arm's test 1 sent to the old body because a poll is due. Only the count
+/// build has this code: it reads the callee register (test 2) after test 1 failed, and changes
+/// no state.
+///
+/// # Safety
+/// As `call_property` with `N` = 1.
+#[cfg(feature = "ic-stats")]
+#[cold]
+#[inline(never)]
+unsafe fn char_code_poll_count(fp: *mut u64, pc: *const u8) {
+    use crate::interp::dsl::R;
+    use ep9_bytecode::Opcode as O;
+    // SAFETY: caller contract: `pc` is a byte of verified code.
+    if unsafe { *pc } != O::CallProperty1 as u8 {
+        return;
+    }
+    // SAFETY: operand 0 of the unprefixed instruction, a register of the live frame `fp`.
+    let callee = unsafe { *fp.offset(R::from_operand(i32::from(*pc.add(1) as i8)).0) };
+    if is_char_code_at(callee) {
+        crate::abi::strings::char_code_count!(Poll);
+    }
+}

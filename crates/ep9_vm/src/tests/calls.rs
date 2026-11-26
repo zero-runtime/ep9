@@ -2961,3 +2961,185 @@ fn the_overflow_depth_steps_once_per_frame_size_of_stack() {
         }
     }
 }
+
+// ---- the charCodeAt arm of CallProperty1 (M15-P1 CHARCODE, test T2) -------------------------
+//
+// `slow::call_property::<1>` answers `s.charCodeAt(i)` with no host call when the callee runs
+// the host function `abi::strings::char_code_at` (the builtin's pointer, not its name), the
+// fast paths and the seam are on, the receiver is a flat string and `i` an int32 in range.
+// This module has no builtin table: the test registers the function itself under another
+// name.
+
+/// Runs `make` with `abi::strings::char_code_at` registered as `cc` and [`echo`] as
+/// `charCodeAt`, the budget `budget` at the start (`None`: below the call record window,
+/// [`start_below_the_call_window`]), the human fast paths `on` and the CHARCODE seam `seam`:
+/// (result, output, the calls the arm answered, the host calls of `call_property`'s old body,
+/// the budget at the end). Holds [`RUN_HOST`] until it returns.
+fn run_char_code(
+    make: fn() -> VerifiedUnit,
+    d: Dispatch,
+    stress: bool,
+    on: bool,
+    seam: bool,
+    budget: Option<i64>,
+) -> (Result<String, String>, Vec<String>, u64, u64, i64) {
+    use crate::call::{CHAR_CODE_ARM_HITS, CHAR_CODE_ARM_OFF, HOST_PROPERTY_HITS};
+    let _one = RUN_HOST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    super::on_big_stack(move || {
+        let mut iso = isolate(super::config(d, stress));
+        iso.register_host_function("cc", 1, crate::abi::strings::char_code_at);
+        iso.register_host_function("charCodeAt", 1, echo);
+        take_output();
+        CHAR_CODE_ARM_HITS.with(|h| h.set(0));
+        HOST_PROPERTY_HITS.with(|h| h.set(0));
+        CHAR_CODE_ARM_OFF.set(!seam);
+        match budget {
+            Some(b) => iso.cx.budget = b,
+            None => start_below_the_call_window(&mut iso),
+        }
+        let r = iso.with_cx_checkpoint(|cx| {
+            cx.set_human_fast_paths(on);
+            cx.run_script(make(), "charcode.js").map(|v| cx.display(v))
+        });
+        if budget.is_none() {
+            assert_below_the_call_window(&iso, &format!("{} stress={stress} on={on}", d.name()));
+        }
+        let end = iso.cx.budget;
+        CHAR_CODE_ARM_OFF.set(false);
+        let out = take_output();
+        iso.collect_garbage();
+        iso.verify_heap().unwrap();
+        let _ = iso.with_cx(|cx| {
+            cx.set_human_fast_paths(true);
+            Ok(())
+        });
+        (
+            r.map_err(|e| e.message),
+            out,
+            CHAR_CODE_ARM_HITS.with(|h| h.get()),
+            HOST_PROPERTY_HITS.with(|h| h.get()),
+            end,
+        )
+    })
+}
+
+/// The arm tests the callee by its host function, not by its name: the builtin under the name
+/// `cc` takes the arm for a SEQ string (Latin-1 and UTF-16) and a flattened rope with an int32
+/// index in range, and gives the builtin's result. A rope that is not flattened yet, an index
+/// out of range, a negative index, a double index, a receiver that is not a string, a `Wide`
+/// call and another host function named `charCodeAt` take the old body with the builtin's
+/// result. With the fast paths off or the seam off, no call takes the arm and the output is
+/// the same.
+#[test]
+fn the_char_code_arm_tests_the_builtin_not_its_name() {
+    fn make() -> VerifiedUnit {
+        let mut s = Asm::script(0);
+        let l = s.b.new_register_list(2);
+        let big = s.b.new_register_list(160);
+        let rope = s.b.new_register();
+        let (f, slot) = (s.f, s.call);
+        // recv.<callee>(arg) with recv and arg in l, then print.
+        let call = |s: &mut Asm, callee: &str, arg: Register| {
+            s.lda_global(callee);
+            s.b.star(f).call_property1(f, l.get(0), arg, slot);
+            s.print_acc();
+        };
+        // 1, 2: "R".cc(0), "\u{100}x".cc(1) (Latin-1, UTF-16): the arm.
+        s.lda_str("R");
+        s.b.star(l.get(0)).lda_smi(0).star(l.get(1));
+        call(&mut s, "cc", l.get(1));
+        s.lda_str("\u{100}x");
+        s.b.star(l.get(0)).lda_smi(1).star(l.get(1));
+        call(&mut s, "cc", l.get(1));
+        // 3, 4: "R".cc(1), "R".cc(-1): out of range, NaN.
+        s.lda_str("R");
+        s.b.star(l.get(0)).lda_smi(1).star(l.get(1));
+        call(&mut s, "cc", l.get(1));
+        s.b.lda_smi(-1).star(l.get(1));
+        call(&mut s, "cc", l.get(1));
+        // 5: "RS".cc(1.5): a double index (ToIntegerOrInfinity gives 1).
+        s.lda_str("RS");
+        s.b.star(l.get(0));
+        s.lda_num(1.5);
+        s.b.star(l.get(1));
+        call(&mut s, "cc", l.get(1));
+        // 6: 7 .cc(0): ToString(7) = "7".
+        s.b.lda_smi(7).star(l.get(0)).lda_smi(0).star(l.get(1));
+        call(&mut s, "cc", l.get(1));
+        // 7: "R".charCodeAt(1), the host function echo under the builtin's name.
+        s.lda_str("R");
+        s.b.star(l.get(0)).lda_smi(1).star(l.get(1));
+        call(&mut s, "charCodeAt", l.get(1));
+        // 8: "RS".cc(r150 = 1): a Wide call.
+        s.lda_str("RS");
+        s.b.star(l.get(0)).lda_smi(1).star(big.get(150));
+        call(&mut s, "cc", big.get(150));
+        // 9, 10: rope = "abcdefghij" + "klmnop" (a CONS); rope.cc(12) flattens it (the old
+        // body), then rope.cc(13) reads the flattened CONS (the arm).
+        s.lda_str("abcdefghij");
+        s.b.star(rope);
+        s.lda_str("klmnop");
+        s.b.add(rope, s.bin)
+            .star(l.get(0))
+            .lda_smi(12)
+            .star(l.get(1));
+        call(&mut s, "cc", l.get(1));
+        s.b.lda_smi(13).star(l.get(1));
+        call(&mut s, "cc", l.get(1));
+        s.b.lda_undefined().return_();
+        unit("", vec![s.finish()])
+    }
+    let want = [
+        "82", "120", "NaN", "NaN", "83", "55", "R:1", "83", "109", "110",
+    ];
+    for &d in Dispatch::ALL {
+        for stress in [false, true] {
+            let label = format!("{} stress={stress}", d.name());
+            let on = run_char_code(make, d, stress, true, true, None);
+            let off = run_char_code(make, d, stress, false, true, None);
+            let seam_off = run_char_code(make, d, stress, true, false, None);
+            assert!(on.0.is_ok(), "{label}: {:?}", on.0);
+            assert_eq!(on.1, want, "{label}");
+            assert_eq!((&on.0, &on.1), (&off.0, &off.1), "{label}");
+            assert_eq!((&on.0, &on.1), (&seam_off.0, &seam_off.1), "{label}");
+            // The arm: calls 1, 2 and 10. The old body's host calls: 3-7 and 9 (8, the Wide
+            // call, takes `slow::call`); with the seam off also 1, 2 and 10; with the fast paths
+            // off none.
+            assert_eq!((on.2, off.2, seam_off.2), (3, 0, 0), "{label}");
+            assert_eq!((on.3, off.3, seam_off.3), (6, 0, 9), "{label}");
+        }
+    }
+}
+
+/// A call of the builtin when a poll is due (budget 0 at the call: the script's entry took the
+/// last unit) does not take the arm: the old body sends it to `slow::call`, which polls, then
+/// runs the builtin, with the same result.
+#[test]
+fn the_char_code_arm_leaves_a_due_poll_to_the_old_body() {
+    fn make() -> VerifiedUnit {
+        let mut s = Asm::script(0);
+        let l = s.b.new_register_list(2);
+        let (f, slot) = (s.f, s.call);
+        s.lda_str("RS");
+        s.b.star(l.get(0)).lda_smi(1).star(l.get(1));
+        s.lda_global("cc");
+        s.b.star(f).call_property1(f, l.get(0), l.get(1), slot);
+        s.print_acc();
+        s.b.lda_undefined().return_();
+        unit("", vec![s.finish()])
+    }
+    for &d in Dispatch::ALL {
+        for stress in [false, true] {
+            let label = format!("{} stress={stress}", d.name());
+            let r = run_char_code(make, d, stress, true, true, Some(1));
+            assert!(r.0.is_ok(), "{label}: {:?}", r.0);
+            assert_eq!(r.1, ["83"], "{label}");
+            assert_eq!(r.2, 0, "{label}: the arm took a call with a poll due");
+            assert!(r.4 > 1, "{label}: no poll ran (budget {})", r.4);
+            let below = run_char_code(make, d, stress, true, true, None);
+            assert_eq!((&below.0, &below.1, below.2), (&r.0, &r.1, 1), "{label}");
+        }
+    }
+}

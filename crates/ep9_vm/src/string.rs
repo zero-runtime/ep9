@@ -1499,34 +1499,59 @@ pub(crate) enum SeqRead {
     Range,
     /// A CONS that is not flattened (a rope): its units are not in one cell yet.
     Rope,
-    /// Another kind: SLICED, THIN, a flattened CONS whose first part is not SEQ, or the
-    /// reserved kinds 6-7. [`flat_unit_at`] reads the flat ones.
+    /// A flat string of another form: SLICED, THIN, or a flattened CONS whose first part is
+    /// not SEQ. [`flat_unit_at`] reads them.
     Other,
+    /// Not a string of kinds 1-5: a value that is not a cell, a cell of another kind, or a
+    /// string of the reserved kinds 6-7.
+    NotString,
 }
 
-/// Code unit `i` of the string `b` when `b` is SEQ (Latin-1 or UTF-16) or a flattened CONS
-/// whose first part is SEQ: one kind test, one unsigned compare with the u32 length at +8 and
-/// one load from +16 (for a flattened CONS, first the loads of its parts). Inline and with no
-/// call, so the `charCodeAt` arm of `interp/slow/call.rs` keeps no stack frame. Not a GC point.
+/// The string cell of the Value bits `b`, or `None` for a value that is not a cell. Not a
+/// panic path (`object::cell` has one), so [`seq_read`] calls nothing.
+#[inline(always)]
+fn cell_of(b: u64) -> Option<CellPtr> {
+    if !is_cell_bits(b) {
+        return None;
+    }
+    CellPtr::from_value(crate::runtime::val(b))
+}
+
+/// Code unit `i` of the value `b` when `b` is a SEQ string (Latin-1 or UTF-16) or a flattened
+/// CONS whose first part is SEQ: one kind read, one unsigned compare with the u32 length at +8
+/// and one load from +16 (for a CONS, first the loads of its 2 parts). Every other value gives
+/// its class, with no read of its units. Inline and with no call (not even a panic path), so
+/// the `charCodeAt` arm of `interp/slow/call.rs` keeps no stack frame. Not a GC point.
 #[inline(always)]
 pub(crate) fn seq_read(b: u64, i: u32) -> SeqRead {
-    debug_assert!(is_string(b));
-    let mut c = cell(b);
-    // SAFETY: a string Value held by the VM is a live cell (crate invariant, object.rs).
+    let Some(mut c) = cell_of(b) else {
+        return SeqRead::NotString;
+    };
+    // SAFETY: a cell Value held by the VM is a live cell (crate invariant, object.rs).
     let mut k = unsafe { c.header().kind() };
     if k == kind::CONS.get() {
         // A flattened CONS reads as its first part (second = "", the `flatten_cons` form).
-        if len_of(cell(rd(c, strf::SECOND))) != 0 {
+        // Its parts are live string cells (it traces them).
+        let (Some(first), Some(second)) =
+            (cell_of(rd(c, strf::FIRST)), cell_of(rd(c, strf::SECOND)))
+        else {
+            return SeqRead::Other;
+        };
+        if len_of(second) != 0 {
             return SeqRead::Rope;
         }
-        c = cell(rd(c, strf::FIRST));
-        // SAFETY: the first part of a live CONS is a live string cell (it is traced).
+        c = first;
+        // SAFETY: as above, for the first part.
         k = unsafe { c.header().kind() };
+        if !matches!(k, 1 | 2) {
+            return SeqRead::Other;
+        }
     }
     let utf16 = match k {
         1 => false,
         2 => true,
-        _ => return SeqRead::Other,
+        4 | 5 => return SeqRead::Other,
+        _ => return SeqRead::NotString,
     };
     // SAFETY: `c` is a live SEQ cell, whose u32 length is at +8 (layout table).
     let len = unsafe { c.field::<u32>(strf::LENGTH).read() };
@@ -1554,9 +1579,10 @@ pub(crate) fn flat_unit_at(b: u64, i: usize) -> Option<u16> {
     let Ok(iu) = u32::try_from(i) else {
         return None;
     };
+    debug_assert!(is_string(b));
     match seq_read(b, iu) {
         SeqRead::Unit(u) => Some(u),
-        SeqRead::Range | SeqRead::Rope => None,
+        SeqRead::Range | SeqRead::Rope | SeqRead::NotString => None,
         SeqRead::Other => flat_unit_at_other(b, i),
     }
 }

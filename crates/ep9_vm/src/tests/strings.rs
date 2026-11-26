@@ -1956,9 +1956,17 @@ fn flat_unit_at_reads_each_flat_kind_as_the_view_does() {
     // The flatten of the ropes (a GC point: every cell is in a Rust local).
     let f = string::flatten(&mut iso.cx, rope);
     let f8 = string::flatten(&mut iso.cx, rope8);
-    assert_eq!(kinds::cell_kind(f), kinds::SEQ_UTF16.get(), "a two-byte CONS");
+    assert_eq!(
+        kinds::cell_kind(f),
+        kinds::SEQ_UTF16.get(),
+        "a two-byte CONS"
+    );
     assert_eq!(kinds::cell_kind(f8), kinds::SEQ_LATIN1.get());
-    assert_eq!(kinds::cell_kind(rope), kinds::CONS.get(), "still a CONS, flattened");
+    assert_eq!(
+        kinds::cell_kind(rope),
+        kinds::CONS.get(),
+        "still a CONS, flattened"
+    );
     for (s, label) in [
         (l1, "SEQ latin-1"),
         (u16s, "SEQ utf-16"),

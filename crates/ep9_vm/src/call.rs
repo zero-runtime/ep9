@@ -2035,7 +2035,7 @@ pub(crate) mod fast_hits {
     use core::cell::Cell;
 
     /// The Switch rows of the FASTDIFF inventory, in counter order.
-    pub const NAMES: [&str; 9] = [
+    pub const NAMES: [&str; 10] = [
         "host-entry",
         "forward-apply",
         "forward-call",
@@ -2045,6 +2045,7 @@ pub(crate) mod fast_hits {
         "host-call-property",
         "unit-search",
         "json-quote",
+        "charcode-arm",
     ];
 
     thread_local! {
@@ -2092,6 +2093,12 @@ thread_local! {
     /// The calls of [`HOST_ENTRY_HITS`] that `interp/slow/call.rs` `call_property` (the host call
     /// of `CallProperty0`-`2`) took on this thread.
     pub(crate) static HOST_PROPERTY_HITS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+    /// The calls that the `charCodeAt` arm of `interp/slow/call.rs` `call_property` answered on
+    /// this thread, with no host call (M15-P1 CHARCODE).
+    pub(crate) static CHAR_CODE_ARM_HITS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+    /// True turns the CHARCODE seam (`interp/slow/call.rs` `char_code_arm_on`) off on this
+    /// thread.
+    pub(crate) static CHAR_CODE_ARM_OFF: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
 
 /// The non-bytecode arm of [`call_bytecode`] (M7-P5 A2-RW, route MC-w30-2): a call from Rust
@@ -2201,6 +2208,8 @@ pub(crate) fn call_host_from_bytecode(
     let args = unsafe { Args::from_fp(fp) };
     // H20 R5: a host function runs in its own realm. Not a GC point.
     let saved_realm = realm::enter_realm_of(cx, f);
+    #[cfg(feature = "ic-stats")]
+    abi::strings::char_code_stats::host_run(h);
     let r = {
         let mut hcx = abi::Cx::new(cx);
         h(

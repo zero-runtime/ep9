@@ -180,3 +180,91 @@ pub(crate) fn char_code_at<'s>(
         .expect("position < size");
     Ok(Local::int32(i32::from(unit)))
 }
+
+/// The `ic-stats` counters of the `charCodeAt` arm (M15-P1 CHARCODE; feature `ic-stats`, never
+/// in `ep9`, dep-guards check 11; the report build form of `ic.rs` `stats`). Per thread (the
+/// isolate's thread); one line on stderr when that thread ends, if a count is not 0:
+///
+/// ```text
+/// ep9 ic-stats: charcode arm=A host=B (not-string=a rope=b index=c poll=d off=e)
+/// ```
+///
+/// A: the calls that the arm answered (`interp/slow/call.rs` `call_property::<1>`). B: the runs
+/// of [`char_code_at`] entered from `call::call_host_from_bytecode`. a to e: the calls whose
+/// callee is this builtin that the arm sent to the old body, by the test that failed: the
+/// receiver is not a string (a); a rope (b); the index is not an int32 in range (c); a poll
+/// due (d, counted where the budget test fails); the fast paths or the seam off (e). So
+/// a + b + c + d + e <= B; the rest of B are the runs from another call path (on x86-64 the
+/// calls in the call record window, which take `slow::call`; a `Wide` call).
+#[cfg(feature = "ic-stats")]
+pub(crate) mod char_code_stats {
+    use core::cell::Cell;
+
+    /// The columns of the line, in order.
+    #[derive(Clone, Copy)]
+    pub(crate) enum Col {
+        /// The arm answered the call.
+        Arm = 0,
+        /// A run of the builtin from `call_host_from_bytecode`.
+        Host = 1,
+        /// Declined: the receiver is not a string.
+        NotString = 2,
+        /// Declined: a rope.
+        Rope = 3,
+        /// Declined: the index is not an int32 below the length.
+        Index = 4,
+        /// Declined: a poll is due.
+        Poll = 5,
+        /// Declined: the human fast paths or the seam are off.
+        Off = 6,
+    }
+
+    struct Counters([Cell<u64>; 7]);
+
+    impl Drop for Counters {
+        fn drop(&mut self) {
+            let n: Vec<u64> = self.0.iter().map(Cell::get).collect();
+            if n.iter().all(|&x| x == 0) {
+                return;
+            }
+            eprintln!(
+                "ep9 ic-stats: charcode arm={} host={} (not-string={} rope={} index={} poll={} off={})",
+                n[0], n[1], n[2], n[3], n[4], n[5], n[6]
+            );
+        }
+    }
+
+    std::thread_local! {
+        static C: Counters = const { Counters([const { Cell::new(0) }; 7]) };
+    }
+
+    /// Counts one event of column `col`.
+    #[inline(never)]
+    pub(crate) fn bump(col: Col) {
+        C.with(|c| {
+            let x = &c.0[col as usize];
+            x.set(x.get() + 1);
+        });
+    }
+
+    /// Counts a run of the host function `h` from `call_host_from_bytecode` if `h` is
+    /// [`super::char_code_at`].
+    #[inline(always)]
+    pub(crate) fn host_run(h: crate::host::HostFn) {
+        if core::ptr::fn_addr_eq(h, super::char_code_at as crate::host::HostFn) {
+            bump(Col::Host);
+        }
+    }
+}
+
+/// Counts an event of the `charCodeAt` arm (a column of `char_code_stats::Col`) with feature
+/// `ic-stats`; nothing without it.
+macro_rules! char_code_count {
+    ($col:ident) => {
+        #[cfg(feature = "ic-stats")]
+        $crate::abi::strings::char_code_stats::bump(
+            $crate::abi::strings::char_code_stats::Col::$col,
+        );
+    };
+}
+pub(crate) use char_code_count;
