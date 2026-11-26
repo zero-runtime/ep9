@@ -14,10 +14,12 @@
 //!  layer 2 and the budget check of layer 1, oxc_semantic --> JoinError::Compile    (counted)
 //!    v
 //!  the join walk (oxc Visit; l1::backstop at its depth step) --> node keys (start, end, kind)
+//!    v                                      and one (start, end, ANY_NODE) key per AST node
 //!    v                                              a stop --> Compile(Range(StackLimit))
 //!  each record: its key is a node key -------------> joined
 //!               its span is a node of another kind -> JoinError::KindMismatch (S3, counted)
-//!               no node has its span --------------> the record is dropped     (no-node, counted)
+//!               (any AST node: also one that has no NodeKind, as a BooleanLiteral)
+//!               no AST node has its span ----------> the record is dropped     (no-node, counted)
 //! ```
 //!
 //! Rules:
@@ -69,8 +71,14 @@ use ep9_hints::{DropCounts, DropReason, Hints, NodeKind, Record, TextHash};
 
 use crate::{CompileError, RangeError, SourceOpts};
 
-/// One slot per `NodeKind` code (codes 1 to `NodeKind::ALL.len()`; slot 0 is unused).
+/// One slot per `NodeKind` code (codes 1 to `NodeKind::ALL.len()`). Slot 0 counts the
+/// [`ANY_NODE`] keys; no accessor reads it.
 const KIND_SLOTS: usize = NodeKind::ALL.len() + 1;
+
+/// The code of the node key that every AST node with a non-empty span has, of a `NodeKind` or
+/// not. A record on its span with no key of the record's kind is a kind mismatch (S3). No
+/// record has code 0 (H37-Q2: code 0 is no kind), so no record key is an `ANY_NODE` key.
+const ANY_NODE: u16 = 0;
 
 // The codes are 1..=ALL.len() in order (H37-Q2), so a code is a slot index.
 const _: () = {
@@ -108,8 +116,8 @@ pub enum JoinError {
     /// front end parses the JS goals only, and the JS parse of a TS text can put other nodes
     /// on the record spans (module doc). Every hint of the file is dropped; no parse runs.
     TsSource,
-    /// S3: the span of this record is a node of another kind, so the two parses do not agree:
-    /// every hint of the file is dropped.
+    /// S3: the span of this record is a node of another kind (any AST node, also one with no
+    /// `NodeKind`), so the two parses do not agree: every hint of the file is dropped.
     KindMismatch {
         /// The record key start.
         start: u32,
@@ -157,7 +165,7 @@ impl HintJoin {
         &self.records
     }
 
-    /// The records that no node has the span of (each dropped alone).
+    /// The records that no AST node has the span of (each dropped alone).
     #[must_use]
     pub fn no_node(&self) -> u32 {
         self.no_node
@@ -215,7 +223,8 @@ fn is_js_path(path: &str) -> bool {
         .any(|ext| path.ends_with(ext))
 }
 
-/// The node keys of a walk and its deepest level.
+/// The node keys of a walk (a `NodeKind` key and an [`ANY_NODE`] key per node) and its
+/// deepest level.
 pub(crate) struct Walked {
     pub(crate) nodes: Vec<Key>,
     pub(crate) depth: u32,
@@ -261,6 +270,8 @@ fn join_records(records: &[Record], walked: Walked) -> Result<HintJoin, JoinErro
             out.records.push(*record);
             continue;
         }
+        // The first key on or after the record span: on its span it is a key of another kind,
+        // a `NodeKind` key or the `ANY_NODE` key of a node with no `NodeKind`.
         let at = nodes.partition_point(|n| (n.0, n.1) < (key.0, key.1));
         if nodes.get(at).is_some_and(|n| (n.0, n.1) == (key.0, key.1)) {
             return Err(JoinError::KindMismatch {
@@ -336,7 +347,8 @@ impl JoinCounts {
     }
 }
 
-/// The join walk: the key of every node of a `NodeKind`, the depth, and the layer-1 backstop.
+/// The join walk: the key of every node of a `NodeKind`, the [`ANY_NODE`] key of every AST
+/// node, the depth, and the layer-1 backstop.
 struct JoinWalk {
     depth: u32,
     max: u32,
@@ -379,9 +391,14 @@ impl<'a> Visit<'a> for JoinWalk {
         if self.depth > self.max {
             self.max = self.depth;
         }
+        let span = kind.span();
+        // S3: a record on the span of a node with no `NodeKind` is a kind mismatch too.
+        if !span.is_empty() {
+            self.nodes.push((span.start, span.end, ANY_NODE));
+        }
         // Layer 1 backstop (l1.rs): on a thread smaller than the budget.
         if self.stopped.is_none() && crate::l1::backstop(self.depth) {
-            self.stopped = Some(kind.span().start);
+            self.stopped = Some(span.start);
         }
     }
 
@@ -721,6 +738,47 @@ mod tests {
         assert_eq!(got, Err(JoinError::TsSource));
     }
 
+    /// Codex A1H-JOIN r1 F2 (S3): a kind mismatch is a record on the span of any AST node of
+    /// another kind, also one with no `NodeKind`. `true` is a BooleanLiteral (no `NodeKind`):
+    /// a NumericLiteral record on its span drops every hint of the file, also its valid
+    /// sibling record. A span that no AST node has stays a `no-node` drop of the record alone.
+    #[test]
+    fn a_record_on_a_node_with_no_node_kind_drops_the_file() {
+        let src = "let a = true;";
+        // Keys by hand: `a` is 4..5, `true` 8..12.
+        assert_eq!((&src[4..5], &src[8..12]), ("a", "true"));
+        let records = [
+            rec(4, 5, NodeKind::BindingIdentifier),
+            rec(8, 12, NodeKind::NumericLiteral),
+        ];
+        let got = join_hints(src, script(), PATH, &table(src, &records));
+        assert_eq!(
+            got,
+            Err(JoinError::KindMismatch {
+                start: 8,
+                end: 12,
+                kind: NodeKind::NumericLiteral
+            })
+        );
+        let mut counts = JoinCounts::default();
+        counts.add(&got);
+        assert_eq!(nonzero(&counts), [("kind-mismatch", 1)]);
+        // The valid record alone joins.
+        let join = join_hints(src, script(), PATH, &table(src, &records[..1])).unwrap();
+        assert_eq!((join.records(), join.no_node()), (&records[..1], 0));
+        // 9..12 (`rue`) is no AST node: that record is dropped alone.
+        let part = [records[0], rec(9, 12, NodeKind::NumericLiteral)];
+        let join = join_hints(src, script(), PATH, &table(src, &part)).unwrap();
+        assert_eq!((join.records(), join.no_node()), (&part[..1], 1));
+        // The statement `let a = true;` (0..13) and the Program have no `NodeKind` either.
+        let whole = [rec(0, 13, NodeKind::VariableDeclarator)];
+        let got = join_hints(src, script(), PATH, &table(src, &whole));
+        assert!(
+            matches!(got, Err(JoinError::KindMismatch { .. })),
+            "{got:?}"
+        );
+    }
+
     /// S3 in `ep9_hints`: another path, type errors, another text: no parse, one reason each.
     #[test]
     fn the_file_drops_of_ep9_hints_are_kept() {
@@ -908,8 +966,9 @@ mod tests {
     /// The key forms (the DEPS-BUMP-3 PropertyKey list: "a", 1, 1.5, 1e21, 0x10, 1_000, .5,
     /// 1n, 0x1n) in an object literal, a getter, a class field, a class method and an object
     /// pattern, at oxc 0.158.0: a string or number key is a literal node; a BigInt key and a
-    /// name key give no node; a computed key gives its expression's nodes. An oxc change of the
-    /// key forms changes this list (or fails to compile in `visit_property_key`).
+    /// name key give no `NodeKind` key, only an `ANY_NODE` key (a record there is a kind
+    /// mismatch, S3); a computed key gives its expression's nodes. An oxc change of the key
+    /// forms changes this list (or fails to compile in `visit_property_key`).
     #[test]
     fn the_key_forms_at_the_pinned_oxc() {
         let src = "({\"a\": v, 1: v, 1.5: v, 1e21: v, 0x10: v, 1_000: v, .5: v, 1n: v, 0x1n: v, \
@@ -939,7 +998,7 @@ mod tests {
             .filter(|t| *t != "v")
             .collect();
         assert_eq!(refs, ["c", "c", "u", "w", "y", "z", "o"]);
-        // No node covers a BigInt or name key.
+        // No `NodeKind` key covers a BigInt or name key; its node has the `ANY_NODE` key.
         for key in ["1n", "0x1n", "b", "d", "#e"] {
             let at = u32::try_from(
                 src.find(&format!("{key}:"))
@@ -948,8 +1007,14 @@ mod tests {
             )
             .unwrap();
             assert!(
-                !nodes.iter().any(|k| k.0 == at && text(k) == key),
-                "a node on the key {key}"
+                !nodes
+                    .iter()
+                    .any(|k| k.0 == at && text(k) == key && k.2 != ANY_NODE),
+                "a NodeKind key on the key {key}"
+            );
+            assert!(
+                nodes.contains(&(at, at + u32::try_from(key.len()).unwrap(), ANY_NODE)),
+                "no ANY_NODE key on the key {key}"
             );
         }
     }
