@@ -408,9 +408,9 @@ fn print(report: &mut Report) {
 #[test]
 #[ignore = "corpus check; needs third_party checkouts; run on demand"]
 fn corpus_verifier_clean_and_deterministic() {
-    // The SHA-256 body slot of ep9_bytecode from the SHA256 pick (`EP9_SIMD=sha256=<body>`;
-    // SRC-HASH line 2): unset for the scalar body. The SIMD-CORPUS line names the body used.
-    let body = match ep9_platform::simd::sha256_slot_body() {
+    // SRC-HASH line 2: the slot gets the EP9_SIMD=sha256 pick, but a bless runs the scalar body.
+    let bless = std::env::var_os("EP9_BLESS_CORPUS").is_some();
+    let body = match ep9_platform::simd::sha256_slot_body().filter(|_| !bless) {
         Some(f) => {
             assert!(ep9_bytecode::sha256::set_body(f).is_ok(), "slot set before");
             ep9_platform::simd::sha256().name()
