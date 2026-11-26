@@ -136,8 +136,8 @@ impl ShapeCache {
 }
 
 /// The seam of the member (ALLOC-SET design 1.3): true if lookups go through the cache. The
-/// set branch: the SHAPE-CACHE bit of the arm byte of `rt` (arms A and S; tests: unless
-/// [`without`] runs); the set integrator changed only this body.
+/// set branch: the SHAPE-CACHE bit of the arm byte of `rt` (arms P, S and A; tests: unless
+/// `without` runs); the set integrator changed only this body.
 #[inline(always)]
 pub(crate) fn on(rt: &Runtime) -> bool {
     #[cfg(test)]

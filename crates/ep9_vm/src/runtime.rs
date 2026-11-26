@@ -299,7 +299,7 @@ pub(crate) struct Runtime {
     /// The shape lookup cache (`shape_cache.rs`, M14-P1 SHAPE-CACHE): (shape, key) -> the
     /// descriptor index or absent, flushed at every GC. Rust memory, no root slot.
     pub shape_cache: crate::shape_cache::ShapeCache,
-    /// The ALLOC-SET arm bits (`ep9_platform::set_arm`; the set branch only): copied once at
+    /// The SET-15 arm bits (`ep9_platform::set_arm`; the set branch only): copied once at
     /// the start; a member seam tests one bit. No exported offset; not in `ExecOptions`.
     pub(crate) set: Cell<u8>,
     /// The xorshift128+ state of `Math.random` (`Cx::math_random`; M4-P1 MATH1, V9-D16),
@@ -420,7 +420,7 @@ impl Runtime {
         rt
     }
 
-    /// Tests only: the ALLOC-SET arm bits of this runtime (`ep9_platform::set_arm`), in place
+    /// Tests only: the SET-15 arm bits of this runtime (`ep9_platform::set_arm`), in place
     /// of the process value. Set it before the first construct and the first lookup.
     #[cfg(test)]
     pub(crate) fn set_arm_for_test(&self, bits: u8) {

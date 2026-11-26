@@ -1,16 +1,21 @@
-//! The process init of the ALLOC-SET arm switch (M14-P1; ALLOC-SET design 1.2, 6.2). The set
-//! branch only.
+//! The process init of the SET-15 arm switch (M15-P1; plan v20 4.2; ALLOC-SET design 1.2,
+//! 6.2). The set branch only.
 //!
 //! ```text
 //!  Isolate::new_with ── set_arm_init() ── ep9_platform::set_arm::init(sha_slot)   once per process
+//!                    │                       sha_slot: the SHA-256 slot, SRC_HASH on only
 //!                    ── Heap::new
 //!                    ── Runtime::new ── Runtime::set = runtime_bits()               once per isolate
 //!  a seam (slack::ctor_fit, shape_cache::on) ── on(rt, its bit) = Runtime::set & the bit
 //! ```
 //!
-//! SRC-HASH is not in this S (the cut: S = {CTOR-FIT, SHAPE-CACHE}) and `ep9_bytecode::sha256`
-//! has no body slot at this base, so [`sha_slot`] sets nothing: every arm hashes with the scalar
-//! body of today.
+//! SRC-HASH (design 6.2; plan v20 4.2: the set switch sets the body slot in arm S): in an arm
+//! with its bit (P, S, A) [`sha_slot`] sets the SHA-256 body slot of `ep9_bytecode` from the
+//! SHA256 pick of `ep9_platform::simd`; in arm 0 the slot stays unset and every hash runs the
+//! scalar loop of today, whatever `EP9_SIMD` forces (the arm bit first, then the force: design
+//! 6.4). The slot is process state, so no test sets it: the tests read [`sha_body`], and each
+//! body is tested by its name in `ep9_platform` and `ep9_bytecode`. A compile before the first
+//! isolate (`ep9_cli` compiles the script first) hashes with the scalar body in every arm.
 
 /// The first `ep9_platform::set_arm` call of the process (`Isolate::new_with`, before
 /// `Heap::new`): reads `EP9_SET_ARM` once and runs [`sha_slot`] once.
@@ -18,9 +23,24 @@ pub(crate) fn set_arm_init() {
     ep9_platform::set_arm::init(sha_slot);
 }
 
-/// The process work of the arm (design 6.2: the SHA-256 body slot when the SRC-HASH bit is on).
-/// This S has no SRC-HASH bit and no slot, so it does nothing.
-fn sha_slot(_bits: u8) {}
+/// The process work of the arm (design 6.2): the SHA-256 body slot of `ep9_bytecode` gets
+/// [`sha_body`], once. Nothing in `ep9_vm` sets the slot but this call.
+fn sha_slot(bits: u8) {
+    if let Some(body) = sha_body(bits) {
+        let _ = ep9_bytecode::sha256::set_body(body);
+    }
+}
+
+/// The SHA-256 body of the slot for the arm bits `bits`: the SHA256 pick of this process
+/// (`ep9_platform::simd::sha256_slot_body`) when the SRC-HASH bit is on, else `None` (the slot
+/// stays unset: the scalar loop). The pick is also `None` when it is the scalar body.
+fn sha_body(bits: u8) -> Option<ep9_bytecode::sha256::BlockBody> {
+    if bits & ep9_platform::set_arm::SRC_HASH != 0 {
+        ep9_platform::simd::sha256_slot_body()
+    } else {
+        None
+    }
+}
 
 /// The arm bits that `Runtime::new` copies into `Runtime::set`: the process value. In a test
 /// build the S bits, the value the member tests were written for (each member always on at its
@@ -44,17 +64,34 @@ pub(crate) fn on(rt: &crate::runtime::Runtime, bit: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use ep9_platform::set_arm::{ARM_0, ARM_A, ARM_C, ARM_S, CTOR_FIT, SHAPE_CACHE};
+    use ep9_platform::set_arm::{
+        ARM_0, ARM_A, ARM_P, ARM_S, CHARCODE, CTOR_FIT, MEMBERS, SHAPE_CACHE, SRC_HASH, SWEEP_LEAN,
+        TO_BOOL,
+    };
 
     use crate::tests::{config, isolate, on_big_stack};
     use crate::{Dispatch, atoms, kinds, object::attr, runtime::val, shape, shape_cache, slack};
 
-    /// Each arm and the members it turns on: (bits, CTOR-FIT, SHAPE-CACHE).
-    const ARMS: [(u8, bool, bool); 4] = [
+    /// Each arm and the `Runtime` members it turns on: (bits, CTOR-FIT, SHAPE-CACHE). The last
+    /// 4 rows are not arms: each member reads its own bit and no other.
+    const ARMS: [(u8, bool, bool); 8] = [
         (ARM_0, false, false),
-        (ARM_C, true, false),
+        (ARM_P, true, true),
         (ARM_A, true, true),
         (ARM_S, true, true),
+        (CTOR_FIT, true, false),
+        (SHAPE_CACHE, false, true),
+        (MEMBERS & !(CTOR_FIT | SHAPE_CACHE), false, false),
+        (!MEMBERS, false, false),
+    ];
+
+    /// The process members and the reserved bits of each arm: (bits, SWEEP-LEAN, SRC-HASH,
+    /// CHARCODE, TO-BOOL). P: the month-14 members; S (= A): every member.
+    const PROCESS_ARMS: [(u8, bool, bool, bool, bool); 4] = [
+        (ARM_0, false, false, false, false),
+        (ARM_P, true, true, false, false),
+        (ARM_A, true, true, true, true),
+        (ARM_S, true, true, true, true),
     ];
 
     #[test]
@@ -62,7 +99,7 @@ mod tests {
         on_big_stack(|| {
             let iso = isolate(config(Dispatch::DEFAULT, false));
             assert_eq!(iso.rt.set.get(), ARM_S);
-            assert_eq!(ARM_S, CTOR_FIT | SHAPE_CACHE);
+            assert_eq!(ARM_S, MEMBERS);
             assert!(slack::ctor_fit(&iso.rt));
             assert!(shape_cache::on(&iso.rt));
         });
@@ -74,8 +111,8 @@ mod tests {
             for (bits, ctor, cache) in ARMS {
                 let iso = isolate(config(Dispatch::DEFAULT, false));
                 iso.rt.set_arm_for_test(bits);
-                assert_eq!(slack::ctor_fit(&iso.rt), ctor, "arm bits {bits}");
-                assert_eq!(shape_cache::on(&iso.rt), cache, "arm bits {bits}");
+                assert_eq!(slack::ctor_fit(&iso.rt), ctor, "arm bits {bits:#x}");
+                assert_eq!(shape_cache::on(&iso.rt), cache, "arm bits {bits:#x}");
             }
         });
     }
@@ -91,7 +128,7 @@ mod tests {
         });
     }
 
-    /// Arm 0 and arm C run today's lookup: the scan, and no entry in the cache. Arm S caches.
+    /// Arm 0 runs today's lookup: the scan, and no entry in the cache. P and S cache.
     #[test]
     fn only_an_arm_with_shape_cache_fills_the_cache() {
         on_big_stack(|| {
@@ -108,14 +145,71 @@ mod tests {
                 };
                 // A collection empties the table (the weak source).
                 rt.heap.collect();
-                assert_eq!(rt.shape_cache.len(), 0, "arm bits {bits}");
+                assert_eq!(rt.shape_cache.len(), 0, "arm bits {bits:#x}");
                 let s = roots.get(i).to_bits();
                 for _ in 0..2 {
                     assert_eq!(shape::lookup(rt, s, key).map(|f| f.index), Some(0));
                     assert_eq!(shape::lookup(rt, s, atoms::intern_str(rt, "absent")), None);
                 }
-                assert_eq!(rt.shape_cache.len() != 0, cache, "arm bits {bits}");
+                assert_eq!(rt.shape_cache.len() != 0, cache, "arm bits {bits:#x}");
             }
         });
+    }
+
+    /// SRC-HASH reads the process value, not `Runtime::set`, and the 3 members with no seam body
+    /// here have their bit only: each arm has a bit only where the member is on. The SHA body of
+    /// the slot: the pick in an arm with SRC-HASH (P, S, A), none (the scalar loop) in arm 0. No
+    /// test sets the slot or the process variable.
+    #[test]
+    fn each_arm_has_its_process_members_only() {
+        let pick = ep9_platform::simd::sha256_slot_body().map(|f| f as usize);
+        for (bits, sweep, sha, charcode, to_bool) in PROCESS_ARMS {
+            assert_eq!(bits & SWEEP_LEAN != 0, sweep, "arm bits {bits:#x}");
+            assert_eq!(bits & SRC_HASH != 0, sha, "arm bits {bits:#x}");
+            assert_eq!(bits & CHARCODE != 0, charcode, "arm bits {bits:#x}");
+            assert_eq!(bits & TO_BOOL != 0, to_bool, "arm bits {bits:#x}");
+            let body = super::sha_body(bits).map(|f| f as usize);
+            assert_eq!(body, if sha { pick } else { None }, "arm bits {bits:#x}");
+        }
+        // The SRC-HASH bit alone decides: every other member bit gives no body.
+        assert!(super::sha_body(MEMBERS & !SRC_HASH).is_none());
+        assert_eq!(super::sha_body(SRC_HASH).map(|f| f as usize), pick);
+    }
+
+    /// The body of each arm gives the scalar digest (the corpus line in short: the corpus
+    /// digest test runs the scalar body and the pick). Arm 0 hashes with the scalar loop.
+    #[test]
+    fn the_sha_body_of_each_arm_gives_the_scalar_digest() {
+        use ep9_bytecode::sha256::{scalar_blocks, sha256_with, to_hex};
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let data: Vec<u8> = (0..4099u32).map(|i| (i * 31 + 7) as u8).collect();
+        let want = sha256_with(scalar_blocks, &data);
+        for (bits, ..) in PROCESS_ARMS {
+            let body = super::sha_body(bits).unwrap_or(scalar_blocks);
+            assert_eq!(
+                to_hex(&sha256_with(body, b"abc")),
+                abc,
+                "arm bits {bits:#x}"
+            );
+            assert_eq!(sha256_with(body, &data), want, "arm bits {bits:#x}");
+        }
+        assert!(super::sha_body(ARM_0).is_none());
+    }
+
+    /// The slot of this process after its first isolate: set exactly when the process arm has
+    /// SRC-HASH and the pick is a SIMD body (`EP9_SET_ARM` unset or 0: unset). Only
+    /// `set_arm_init` sets the slot in this test binary; the test reads it and sets nothing.
+    #[test]
+    fn the_slot_is_set_only_by_an_arm_with_src_hash() {
+        on_big_stack(|| drop(isolate(config(Dispatch::DEFAULT, false))));
+        let bits = ep9_platform::set_arm::bits();
+        assert_eq!(
+            ep9_bytecode::sha256::body_is_set(),
+            super::sha_body(bits).is_some(),
+            "process arm bits {bits:#x}"
+        );
+        if bits & SRC_HASH == 0 {
+            assert!(!ep9_bytecode::sha256::body_is_set());
+        }
     }
 }
