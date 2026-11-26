@@ -109,6 +109,7 @@ struct Sample {
     depth_pass: usize,
     semantic: usize,
     scope: usize,
+    join: usize,
 }
 
 /// The parse call of the worker (`crate::parse`, lib.rs): `regex_check::parse` with the
@@ -182,6 +183,13 @@ fn sample(form: &Form, n: usize, paint: usize) -> Sample {
     };
     let (scope_bytes, scopes) = measure(paint, || crate::scope::analyze(&fe));
     assert!(scopes.is_ok(), "form {} n {n}: {scopes:?}", form.name);
+    // The join walk of `hints::join_hints` (H37 A1h item 3), on the same program.
+    let (join_bytes, walked) = measure(paint, || crate::hints::walk(&program));
+    assert!(
+        walked.is_ok(),
+        "form {} n {n}: the join walk stopped",
+        form.name
+    );
     Sample {
         estimate: est.depth,
         ast_depth,
@@ -190,6 +198,7 @@ fn sample(form: &Form, n: usize, paint: usize) -> Sample {
         depth_pass: depth_bytes,
         semantic: semantic_bytes,
         scope: scope_bytes,
+        join: join_bytes,
     }
 }
 
@@ -277,7 +286,8 @@ const T_A_ASSERT: bool = true;
 /// its unit: parse per pre-scan unit (the whole worker parse call, [`worker_parse`]); a regex
 /// row per group, against the unit of the regex budget check (`stack::REGEX_PER_GROUP`); the
 /// depth pass, oxc_semantic, the scope pass and the 4 walks of the eval path per AST level,
-/// against the unit of the run-time budget check (`stack::PASS_PER_LEVEL`).
+/// against the unit of the run-time budget check (`stack::PASS_PER_LEVEL`); the join walk
+/// (`hints::walk`, the join column and its T-PASS row) per AST level, against the same unit.
 #[test]
 #[ignore = "measurement; run on demand with --ignored --nocapture"]
 fn measure_forms() {
@@ -287,7 +297,7 @@ fn measure_forms() {
     } else {
         "release"
     };
-    let (out, over, worst, regex_worst, eval_out, eval_over, eval_worst, cover_out) =
+    let (out, over, worst, regex_worst, eval_out, eval_over, eval_worst, join_worst, cover_out) =
         std::thread::Builder::new()
         .stack_size(2 << 30)
         .spawn(move || {
@@ -307,15 +317,17 @@ fn measure_forms() {
             .unwrap();
             writeln!(
                 out,
-                "| form | dE/dn | dAST/dn | parse B/E | parse B/n | depth B/AST | semantic B/AST | scope B/AST | E@n2 | AST@n2 | parse base | semantic base | scope base | prescan B@n2 |"
+                "| form | dE/dn | dAST/dn | parse B/E | parse B/n | depth B/AST | semantic B/AST | scope B/AST | E@n2 | AST@n2 | parse base | semantic base | scope base | prescan B@n2 | join B/AST |"
             )
             .unwrap();
-            writeln!(out, "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|").unwrap();
+            writeln!(out, "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|").unwrap();
             let mut eval_out = String::new();
             writeln!(eval_out, "| form | {} B/AST |\n|---|---|---|---|---|", WALKS.join(" B/AST | "))
                 .unwrap();
             let mut eval_over = Vec::new();
             let mut eval_worst: [Option<(usize, &'static str)>; 4] = [None; 4];
+            // The worst join walk slope per AST level (T-PASS).
+            let mut join_worst: Option<(usize, &'static str)> = None;
             for form in FORMS {
                 let paint = 384 << 20;
                 let a = sample(form, n1, paint);
@@ -356,7 +368,7 @@ fn measure_forms() {
                 };
                 writeln!(
                     out,
-                    "| {} | {:.2} | {:.2} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                    "| {} | {:.2} | {:.2} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                     form.name,
                     f64::from(de) / f64::from(dn),
                     f64::from(dast) / f64::from(dn),
@@ -372,8 +384,15 @@ fn measure_forms() {
                     base(b.scope, a.scope, b.ast_depth, a.ast_depth),
                     // The pre-scan is a loop: its stack does not grow with the input.
                     b.prescan,
+                    per(b.join.saturating_sub(a.join), dast),
                 )
                 .unwrap();
+                if dast > 0 {
+                    let slope = b.join.saturating_sub(a.join) / dast as usize;
+                    if join_worst.is_none_or(|(w, _)| slope > w) {
+                        join_worst = Some((slope, form.name));
+                    }
+                }
                 let pass = |at_b: usize, at_a: usize| {
                     over_budget(at_b.saturating_sub(at_a), dast, PASS_UNIT)
                 };
@@ -385,6 +404,7 @@ fn measure_forms() {
                     ("depth pass", pass(b.depth_pass, a.depth_pass)),
                     ("semantic", pass(b.semantic, a.semantic)),
                     ("scope pass", pass(b.scope, a.scope)),
+                    ("join walk", pass(b.join, a.join)),
                     ("pre-scan", over_budget(b.prescan.saturating_sub(a.prescan), 0, 0)),
                 ] {
                     if let Some(problem) = problem {
@@ -445,6 +465,7 @@ fn measure_forms() {
                 eval_out,
                 eval_over,
                 eval_worst,
+                join_worst,
                 cover_out,
             )
         })
@@ -484,6 +505,12 @@ fn measure_forms() {
     for line in &eval_over {
         println!("T-PASS over: {line}");
     }
+    let (w, name) = join_worst.expect("a form with a growing AST");
+    println!(
+        "T-PASS worst {}-{} {profile}: join walk {w} B per AST level (form {name}); unit {PASS_UNIT} B",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
     print!("{cover_out}");
     if T_A_ASSERT {
         assert!(

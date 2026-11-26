@@ -20,6 +20,7 @@ oxc_span = { workspace = true }
 oxc_ast_visit = { workspace = true }
 # BytecodeGen emits units with the ep9_bytecode builder and verifier (zero-dep crate).
 ep9_bytecode = { path = "../ep9_bytecode" }
+ep9_hints = { path = "../ep9_hints" } # the hint join (hints.rs, H37 A1h item 3); zero-dep crate
 
 [dev-dependencies]
 # T-RED (l1.rs tests): the stack bounds of the test thread. Test code only: the crate keeps its

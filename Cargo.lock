@@ -189,6 +189,7 @@ name = "ep9_frontend"
 version = "0.0.0"
 dependencies = [
  "ep9_bytecode",
+ "ep9_hints",
  "ep9_platform",
  "oxc_allocator",
  "oxc_ast",

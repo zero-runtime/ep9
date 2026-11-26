@@ -576,6 +576,7 @@ fn early_errors<'d>(
 mod depth_tests;
 #[cfg(test)]
 mod forms;
+pub mod hints;
 #[cfg(test)]
 mod probe;
 #[cfg(test)]
