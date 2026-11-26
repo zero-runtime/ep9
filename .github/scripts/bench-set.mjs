@@ -358,7 +358,12 @@ function cgRun(o, side, bin, w, keep) {
   const stem = path.join(keep, `${side}.${w.name}`);
   const args = [
     "--tool=cachegrind",
-    "--cache-sim=no",
+    // NAMED-COUNT tools ref (never merged): the D1 / LL cache model of plan v19 section 4.5 (2),
+    // fixed so that the x64 and arm64 runners count one model (32 KiB 8-way L1, 1 MiB 8-way LL).
+    "--cache-sim=yes",
+    "--I1=32768,8,64",
+    "--D1=32768,8,64",
+    "--LL=1048576,8,64",
     `--branch-sim=${o.branchSim ? "yes" : "no"}`,
     `--cachegrind-out-file=${stem}.out`,
     `--log-file=${stem}.log`,
@@ -507,7 +512,7 @@ export function renderMarkdown(res) {
     `### bench set (${res.target}${res.build ? `, ${res.build} build` : ""}): cachegrind Ir, head vs base`,
     "",
     `base ${sha(res.base.commit)}, head ${sha(res.head.commit)}; EP9_HASH_SEED=${res.hash_seed}, EP9_GC_HELPERS=${res.gc_helpers}; ` +
-      `${res.valgrind ?? "valgrind"} --tool=cachegrind --cache-sim=no --branch-sim=${res.branch_sim ? "yes" : "no"}; ` +
+      `${res.valgrind ?? "valgrind"} --tool=cachegrind --cache-sim=yes --I1=32768,8,64 --D1=32768,8,64 --LL=1048576,8,64 --branch-sim=${res.branch_sim ? "yes" : "no"}; ` +
       `one run per side; CPU ${res.host.cpu}. Rule 13: no row worse than +${res.limit_pct}%.`,
     "",
   ];

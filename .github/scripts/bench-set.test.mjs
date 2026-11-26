@@ -496,7 +496,7 @@ test("markdown: notes, the worst row per group and the function table", () => {
   };
   const md = renderMarkdown(res);
   assert.match(md, /^### bench set \(linux-x64\): cachegrind Ir, head vs base\n/);
-  assert.match(md, /base `111111111111`, head `222222222222`; EP9_HASH_SEED=1, EP9_GC_HELPERS=0; valgrind-3\.22\.0 --tool=cachegrind --cache-sim=no --branch-sim=no/);
+  assert.match(md, /base `111111111111`, head `222222222222`; EP9_HASH_SEED=1, EP9_GC_HELPERS=0; valgrind-3\.22\.0 --tool=cachegrind --cache-sim=yes --I1=32768,8,64 --D1=32768,8,64 --LL=1048576,8,64 --branch-sim=no/);
   assert.match(md, /\*\*Verdict: PASS\*\* \(1 of 1 rows counted; worst v8v7: splay \+0\.123%; worst octane: octane-splay -0\.200%\)/);
   assert.match(md, /Note: the base binary names no commit\./);
   assert.match(md, /\| `a\\\|b'c` \| 10 \| 11 \| \+1 \|/);
