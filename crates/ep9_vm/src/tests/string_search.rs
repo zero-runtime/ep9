@@ -79,7 +79,15 @@ fn detect_picks_the_best_body_or_the_named_one() {
             break;
         }
     }
-    if std::env::var_os("EP9_SIMD_SEARCH").is_none() {
+    // Off a forced thread, detect gives the `EP9_SIMD` / `EP9_SIMD_SEARCH` pick; with both
+    // unset, that is the best body.
+    let all = std::env::var("EP9_SIMD").ok();
+    let env = std::env::var("EP9_SIMD_SEARCH").ok();
+    assert_eq!(
+        Kernel::detect().path(),
+        ep9_platform::simd::pick::<Path>(all.as_deref(), env.as_deref())
+    );
+    if all.is_none() && env.is_none() {
         assert_eq!(Kernel::detect().path(), best);
     }
     assert_eq!(search::pick(Some("scalar")), Path::Scalar);
@@ -639,4 +647,50 @@ fn a_cx_search_of_a_rope_flattens_it_under_gc_stress() {
         .unwrap();
     assert_eq!(r, (Some(19), Some(19), None, None, Some(15)));
     std::hint::black_box((a, b, h, c, d, n, n2));
+}
+
+/// The process body follows the force of this run (rule 116; the x86 box runs these tests once
+/// per `EP9_SIMD` value, and the Mac with each body forced): [`Kernel::detect`] is the SEARCH
+/// pick of `ep9_platform::simd` for `EP9_SIMD` and `EP9_SIMD_SEARCH`, a forced body that this
+/// CPU has is that body, and the process body gives the scalar result on random input.
+#[test]
+fn the_process_body_is_the_forced_one_and_matches_the_scalar_body() {
+    let var = |n: &str| std::env::var(n).ok();
+    let (all, old) = (var("EP9_SIMD"), var("EP9_SIMD_SEARCH"));
+    let want: Path = ep9_platform::simd::pick(all.as_deref(), old.as_deref());
+    let k = Kernel::detect();
+    assert_eq!(k.path(), want);
+    assert_eq!(ep9_platform::simd::search(), want);
+    let forced = all
+        .iter()
+        .flat_map(|v| v.split(','))
+        .filter_map(|i| i.trim().strip_prefix("search="))
+        .chain(old.as_deref())
+        .next();
+    if let Some(name) = forced
+        && let Some(p) = Path::ALL.into_iter().find(|p| p.name() == name.trim())
+        && p.available()
+    {
+        assert_eq!(k.path(), p, "the forced body {name}");
+    }
+    println!(
+        "string_search: the process body is {} (EP9_SIMD={all:?}, EP9_SIMD_SEARCH={old:?})",
+        k.path().name()
+    );
+    let ks = [Kernel::scalar(), k];
+    let mut r = Rng(0x5eed_5ea2_c400_0001);
+    for len in lengths() {
+        for _ in 0..4 {
+            let hay8: Vec<u8> = (0..len).map(|_| b"ab\x00\xff"[r.below(4)]).collect();
+            check_u8(&ks, &hay8, b'b');
+            check_u8(&ks, &hay8, 0xff);
+            let hay16: Vec<u16> = (0..len)
+                .map(|_| [0x61, 0x62, 0x100, 0xD800][r.below(4)])
+                .collect();
+            check_u16(&ks, &hay16, 0x100);
+            check_u16(&ks, &hay16, 0x62);
+        }
+    }
+    let hay: Vec<u16> = (0..300).map(|_| [0x61, 0x62, 0x63][r.below(3)]).collect();
+    check_search(&ks, &hay, &[0x62, 0x63]);
 }

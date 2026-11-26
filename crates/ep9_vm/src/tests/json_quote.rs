@@ -166,11 +166,15 @@ fn detect_picks_the_best_body_or_the_named_one() {
         json_quote::with_path(Path::Swar, || Kernel::detect().path()),
         Some(Path::Swar)
     );
-    // Off the forced thread, detect gives the `EP9_SIMD_JSON` pick (a test run can force any
-    // path, `scalar` too); with the variable unset, that is the best body, not the reference.
+    // Off the forced thread, detect gives the `EP9_SIMD` / `EP9_SIMD_JSON` pick (a test run can
+    // force any path, `scalar` too); with both unset, that is the best body, not the reference.
+    let all = std::env::var("EP9_SIMD").ok();
     let env = std::env::var("EP9_SIMD_JSON").ok();
-    assert_eq!(Kernel::detect().path(), json_quote::pick(env.as_deref()));
-    if env.is_none() {
+    assert_eq!(
+        Kernel::detect().path(),
+        ep9_platform::simd::pick::<Path>(all.as_deref(), env.as_deref())
+    );
+    if all.is_none() && env.is_none() {
         assert_ne!(Kernel::detect().path(), Path::Scalar);
     }
     // Every path that this CPU has is a kernel, and the required ones are there.
@@ -529,5 +533,61 @@ fn cx_quotes_every_string_kind_on_every_path_and_finishes_one_byte() {
                 assert_eq!(cell, if two { 2 } else { 1 }, "{} {kind}", p.name());
             }
         }
+    }
+}
+
+/// The process body follows the force of this run (rule 116; the x86 box runs these tests once
+/// per `EP9_SIMD` value, and the Mac with each body forced): [`Kernel::detect`] is the JSON pick
+/// of `ep9_platform::simd` for `EP9_SIMD` and `EP9_SIMD_JSON`, a forced body that this CPU has
+/// is that body, and the process body gives the reference result on random inputs.
+#[test]
+fn the_process_body_is_the_forced_one_and_matches_the_reference() {
+    let var = |n: &str| std::env::var(n).ok();
+    let (all, old) = (var("EP9_SIMD"), var("EP9_SIMD_JSON"));
+    let want: Path = ep9_platform::simd::pick(all.as_deref(), old.as_deref());
+    let k = Kernel::detect();
+    assert_eq!(k.path(), want);
+    assert_eq!(ep9_platform::simd::json(), want);
+    let forced = all
+        .iter()
+        .flat_map(|v| v.split(','))
+        .filter_map(|i| i.trim().strip_prefix("json="))
+        .chain(old.as_deref())
+        .next();
+    if let Some(name) = forced
+        && let Some(p) = Path::ALL.into_iter().find(|p| p.name() == name.trim())
+        && p.available()
+    {
+        assert_eq!(k.path(), p, "the forced body {name}");
+    }
+    println!(
+        "json_quote: the process body is {} (EP9_SIMD={all:?}, EP9_SIMD_JSON={old:?})",
+        k.path().name()
+    );
+    let mut r = Lcg(0x00E9_150B);
+    let alpha16: &[u16] = &[
+        0x61, 0x22, 0x5C, 0x0A, 0x00, 0x1F, 0x7F, 0xE9, 0xFF, 0x100, 0xD83D, 0xDE00, 0xD800,
+    ];
+    for t in 0..2_000 {
+        let n = if t % 8 == 0 {
+            65 + r.below(5_000)
+        } else {
+            r.below(65)
+        };
+        let rate = 1 + r.below(16);
+        let s: Vec<u16> = (0..n)
+            .map(|_| {
+                if r.below(rate) == 0 {
+                    alpha16[r.below(alpha16.len())]
+                } else {
+                    0x6B
+                }
+            })
+            .collect();
+        if s.iter().all(|&u| u <= 0xFF) {
+            let b: Vec<u8> = s.iter().map(|&u| u as u8).collect();
+            check_latin1(&[k], &b, "process body");
+        }
+        check_utf16(&[k], &s, "process body");
     }
 }
