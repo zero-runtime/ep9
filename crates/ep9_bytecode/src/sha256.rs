@@ -3,9 +3,42 @@
 //! Used for the decoded-source hash and the content hash of a [`crate::CompiledUnit`]. ADR H02
 //! records why: SHA-256 is collision resistant (a later unit signature can sign it), every tool
 //! can check it (`shasum -a 256`, Node `crypto`), and it needs no dependency.
+//!
+//! The block loop has one body slot (ALLOC-SET design 6.2): a process-wide [`BlockBody`] that
+//! [`set_body`] sets once (`ep9_vm` sets it from the SHA256 table of `ep9_platform::simd`: the
+//! SHA-NI or ARMv8 SHA2 body). Unset, [`Sha256::update`] runs the scalar loop of this file. The
+//! slot is read once per `update`, not per block. This crate stays free of `unsafe` and of
+//! dependencies; build scripts and tools that never set the slot keep the scalar body.
+
+use std::sync::OnceLock;
 
 /// A SHA-256 digest.
 pub type Digest = [u8; 32];
+
+/// A block body: the compression function over each 64-byte block, in order. Every body gives
+/// the state of [`scalar_blocks`].
+pub type BlockBody = fn(&mut [u32; 8], &[[u8; 64]]);
+
+/// The body slot: unset = the scalar loop.
+static BODY: OnceLock<BlockBody> = OnceLock::new();
+
+/// Sets the block body of the process, once. `Err(body)` if a body was set before (the first
+/// one stays).
+pub fn set_body(body: BlockBody) -> Result<(), BlockBody> {
+    BODY.set(body)
+}
+
+/// Whether [`set_body`] set a body in this process.
+pub fn body_is_set() -> bool {
+    BODY.get().is_some()
+}
+
+/// The scalar body: [`compress`] once per block.
+pub fn scalar_blocks(state: &mut [u32; 8], blocks: &[[u8; 64]]) {
+    for block in blocks {
+        compress(state, block);
+    }
+}
 
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -29,6 +62,8 @@ pub struct Sha256 {
     buf: [u8; 64],
     buf_len: usize,
     total_len: u64,
+    /// The body of [`Sha256::with_body`]; `None` = the slot.
+    body: Option<BlockBody>,
 }
 
 impl Default for Sha256 {
@@ -45,11 +80,21 @@ impl Sha256 {
             buf: [0; 64],
             buf_len: 0,
             total_len: 0,
+            body: None,
         }
     }
 
-    /// Adds `data` to the message.
+    /// A hasher that runs `body`, whatever the slot holds (the tests of a body).
+    pub const fn with_body(body: BlockBody) -> Self {
+        let mut h = Self::new();
+        h.body = Some(body);
+        h
+    }
+
+    /// Adds `data` to the message, by the body of [`Sha256::with_body`], else of the slot, else
+    /// the scalar loop.
     pub fn update(&mut self, mut data: &[u8]) {
+        let body = self.body.or_else(|| BODY.get().copied());
         self.total_len = self.total_len.wrapping_add(data.len() as u64);
         if self.buf_len > 0 {
             let take = (64 - self.buf_len).min(data.len());
@@ -60,12 +105,20 @@ impl Sha256 {
                 return;
             }
             let block = self.buf;
-            compress(&mut self.state, &block);
+            match body {
+                Some(f) => f(&mut self.state, core::slice::from_ref(&block)),
+                None => compress(&mut self.state, &block),
+            }
             self.buf_len = 0;
         }
         let (blocks, rest) = data.as_chunks::<64>();
-        for block in blocks {
-            compress(&mut self.state, block);
+        match body {
+            Some(f) => f(&mut self.state, blocks),
+            None => {
+                for block in blocks {
+                    compress(&mut self.state, block);
+                }
+            }
         }
         self.buf[..rest.len()].copy_from_slice(rest);
         self.buf_len = rest.len();
@@ -98,6 +151,13 @@ impl Sha256 {
 /// SHA-256 of `data` in one call.
 pub fn sha256(data: &[u8]) -> Digest {
     let mut h = Sha256::new();
+    h.update(data);
+    h.finish()
+}
+
+/// SHA-256 of `data` in one call, by `body` (the tests of a body).
+pub fn sha256_with(body: BlockBody, data: &[u8]) -> Digest {
+    let mut h = Sha256::with_body(body);
     h.update(data);
     h.finish()
 }
@@ -180,6 +240,48 @@ mod tests {
             hex(b"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"),
             "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1"
         );
+    }
+
+    #[test]
+    fn the_slot_is_the_scalar_loop_when_unset() {
+        // No test of this crate sets the slot, so `update` runs the scalar loop.
+        assert!(!body_is_set());
+        let data: Vec<u8> = (0..1000u32).map(|i| (i * 13 + 5) as u8).collect();
+        for n in [0usize, 1, 55, 56, 63, 64, 65, 127, 128, 129, 1000] {
+            assert_eq!(
+                sha256_with(scalar_blocks, &data[..n]),
+                sha256(&data[..n]),
+                "len {n}"
+            );
+        }
+        assert_eq!(
+            to_hex(&sha256_with(scalar_blocks, b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn a_body_runs_on_whole_blocks_in_order() {
+        // A body that records the blocks it gets, then runs the scalar loop: every byte of
+        // the message reaches it once, in order, in whole blocks, and the digest is the
+        // scalar one at every split.
+        use std::sync::Mutex;
+        static SEEN: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+        fn recording(state: &mut [u32; 8], blocks: &[[u8; 64]]) {
+            SEEN.lock().unwrap().extend(blocks.iter().flatten());
+            scalar_blocks(state, blocks);
+        }
+        let data: Vec<u8> = (0..300u32).map(|i| (i * 7 + 3) as u8).collect();
+        for split in 0..data.len() {
+            SEEN.lock().unwrap().clear();
+            let mut h = Sha256::with_body(recording);
+            h.update(&data[..split]);
+            h.update(&data[split..]);
+            assert_eq!(h.finish(), sha256(&data), "split at {split}");
+            let seen = SEEN.lock().unwrap();
+            assert_eq!(seen.len() % 64, 0);
+            assert_eq!(&seen[..data.len()], &data[..], "split at {split}");
+        }
     }
 
     #[test]
