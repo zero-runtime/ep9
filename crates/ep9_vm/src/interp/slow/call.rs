@@ -1609,6 +1609,10 @@ unsafe fn call_property_host1_from(
     acc: u64,
     callee: u64,
 ) -> u64 {
+    // SAFETY: caller contract: `fp` is the live top frame, and `callee` is a FUNCTION cell. The
+    // old body gets these 2 facts from its reads; here they remove the null test of `enter` and
+    // the cell test of `object::cell` from the path.
+    unsafe { core::hint::assert_unchecked(!fp.is_null() && crate::kinds::is_cell_bits(callee)) };
     let fi = object::function_info(callee);
     // SAFETY: caller contract: `fi` holds a host function.
     let h = unsafe { fi.host.unwrap_unchecked() };
