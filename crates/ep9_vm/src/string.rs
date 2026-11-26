@@ -1487,3 +1487,87 @@ pub(crate) fn sip13_bigint(v: ep9_bigint::View<'_>) -> u32 {
     }
     s.finish(((8 * (v.digits.len() + 1)) as u64 & 0xff) << 56) as u32
 }
+
+// ---- one code unit of a flat string (M15-P1 CHARCODE) --------------------------------------
+
+/// What [`seq_read`] gives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SeqRead {
+    /// The code unit at the index.
+    Unit(u16),
+    /// The index is at or above the length.
+    Range,
+    /// A CONS that is not flattened (a rope): its units are not in one cell yet.
+    Rope,
+    /// Another kind: SLICED, THIN, a flattened CONS whose first part is not SEQ, or the
+    /// reserved kinds 6-7. [`flat_unit_at`] reads the flat ones.
+    Other,
+}
+
+/// Code unit `i` of the string `b` when `b` is SEQ (Latin-1 or UTF-16) or a flattened CONS
+/// whose first part is SEQ: one kind test, one unsigned compare with the u32 length at +8 and
+/// one load from +16 (for a flattened CONS, first the loads of its parts). Inline and with no
+/// call, so the `charCodeAt` arm of `interp/slow/call.rs` keeps no stack frame. Not a GC point.
+#[inline(always)]
+pub(crate) fn seq_read(b: u64, i: u32) -> SeqRead {
+    debug_assert!(is_string(b));
+    let mut c = cell(b);
+    // SAFETY: a string Value held by the VM is a live cell (crate invariant, object.rs).
+    let mut k = unsafe { c.header().kind() };
+    if k == kind::CONS.get() {
+        // A flattened CONS reads as its first part (second = "", the `flatten_cons` form).
+        if len_of(cell(rd(c, strf::SECOND))) != 0 {
+            return SeqRead::Rope;
+        }
+        c = cell(rd(c, strf::FIRST));
+        // SAFETY: the first part of a live CONS is a live string cell (it is traced).
+        k = unsafe { c.header().kind() };
+    }
+    let utf16 = match k {
+        1 => false,
+        2 => true,
+        _ => return SeqRead::Other,
+    };
+    // SAFETY: `c` is a live SEQ cell, whose u32 length is at +8 (layout table).
+    let len = unsafe { c.field::<u32>(strf::LENGTH).read() };
+    if i >= len {
+        return SeqRead::Range;
+    }
+    // SAFETY: `i` < the length, and a live SEQ cell holds its `len` code units from +16 (one
+    // byte each for Latin-1, two for UTF-16; +16 is 8-aligned).
+    SeqRead::Unit(unsafe {
+        if utf16 {
+            c.field::<u16>(strf::DATA).add(i as usize).read()
+        } else {
+            u16::from(c.field::<u8>(strf::DATA).add(i as usize).read())
+        }
+    })
+}
+
+/// Code unit `i` of the flat string `b` (SEQ, SLICED, THIN or a flattened CONS: the forms of
+/// [`is_flat`]), or `None` when `i` is at or above the length, when `b` is a CONS that is not
+/// flattened (a rope), or for the reserved kinds 6-7. The same unit as `view(..).at(i)`. Not a
+/// GC point, and no panic for kinds 1-5. The reader of the `charCodeAt` arm
+/// (`interp/slow/call.rs`) for the kinds that [`seq_read`] does not take inline.
+#[inline]
+pub(crate) fn flat_unit_at(b: u64, i: usize) -> Option<u16> {
+    let Ok(iu) = u32::try_from(i) else {
+        return None;
+    };
+    match seq_read(b, iu) {
+        SeqRead::Unit(u) => Some(u),
+        SeqRead::Range | SeqRead::Rope => None,
+        SeqRead::Other => flat_unit_at_other(b, i),
+    }
+}
+
+/// [`flat_unit_at`] for SLICED, THIN and a flattened CONS whose first part is not SEQ, by the
+/// reader of the flat forms (`non_seq_units`); `None` for kinds 6-7. Out of line.
+#[inline(never)]
+fn flat_unit_at_other(b: u64, i: usize) -> Option<u16> {
+    if !matches!(cell_kind(b), 3..=5) {
+        return None;
+    }
+    let v = non_seq_units(b)?;
+    (i < v.len()).then(|| v.at(i))
+}

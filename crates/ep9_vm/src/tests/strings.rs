@@ -1900,3 +1900,86 @@ fn intern_str_before_init_static_takes_the_table_path() {
     }
     atoms::verify(rt).unwrap();
 }
+
+// ---- one code unit of a flat string (M15-P1 CHARCODE, test T3) -----------------------------
+
+/// `string::flat_unit_at` (the reader of the `charCodeAt` arm) of `s` equals the unit of the
+/// flat view at each index below the length, and is `None` at and above it.
+fn assert_flat_units(iso: &mut crate::Isolate, s: u64, label: &str) {
+    assert!(string::is_flat(s), "{label}");
+    let len = string::str_len(s);
+    let want: Vec<u16> = {
+        let v = string::view(&iso.cx, s);
+        (0..len).map(|i| v.at(i)).collect()
+    };
+    for (i, &u) in want.iter().enumerate() {
+        assert_eq!(string::flat_unit_at(s, i), Some(u), "{label} at {i}");
+    }
+    for i in [len, len + 1, len + 100, u32::MAX as usize, usize::MAX] {
+        assert_eq!(string::flat_unit_at(s, i), None, "{label} at {i}");
+    }
+}
+
+#[test]
+fn flat_unit_at_reads_each_flat_kind_as_the_view_does() {
+    use string::SeqRead;
+    let mut iso = stressed();
+    let rt: &Runtime = &iso.rt;
+    // Kinds 1 and 2: SEQ Latin-1 and SEQ UTF-16 (and the empty string).
+    let l1 = string::new_string(rt, "seq latin-1 \u{e9}");
+    let u16s = string::new_string_utf16(rt, &[0x41, 0x20ac, 0xd800, 0xffff, 0x7a]);
+    let empty = rt.atom(Atom::Empty);
+    assert_eq!(kinds::cell_kind(l1), kinds::SEQ_LATIN1.get());
+    assert_eq!(kinds::cell_kind(u16s), kinds::SEQ_UTF16.get());
+    // Kind 3: a rope reads `None` (and `Rope` inline) before its flatten, its units after.
+    let a = string::new_string(rt, "a rope of two ");
+    let b = string::new_string_utf16(rt, &[0x3b1, 0x3b2, 0x3b3]);
+    let rope = cat(rt, a, b);
+    let rope8 = cat(rt, a, a);
+    assert_eq!(kinds::cell_kind(rope), kinds::CONS.get());
+    for r in [rope, rope8] {
+        assert!(!string::is_flat(r));
+        assert_eq!(string::flat_unit_at(r, 0), None);
+        assert_eq!(string::seq_read(r, 0), SeqRead::Rope);
+    }
+    // Kind 4: a slice over a SEQ parent; kind 5: a THIN forwarder (an atomized rope).
+    let parent = string::new_string(rt, "0123456789abcdefghijklmnopqrstuvwxyz");
+    let slice = string::substring(rt, parent, 3, 29);
+    assert_eq!(kinds::cell_kind(slice), kinds::SLICED.get());
+    let tp = string::new_string(rt, "flat-unit-at-thin-");
+    let tq = string::new_string_utf16(rt, &[0x3c9, 0x2e, 0x5a]);
+    let thin = cat(rt, tp, tq);
+    let atom = atoms::atomize(rt, thin);
+    assert_eq!(kinds::cell_kind(thin), kinds::THIN.get());
+    assert_eq!(string::seq_read(slice, 0), SeqRead::Other);
+    assert_eq!(string::seq_read(thin, 0), SeqRead::Other);
+    // The flatten of the ropes (a GC point: every cell is in a Rust local).
+    let f = string::flatten(&mut iso.cx, rope);
+    let f8 = string::flatten(&mut iso.cx, rope8);
+    assert_eq!(kinds::cell_kind(f), kinds::SEQ_UTF16.get(), "a two-byte CONS");
+    assert_eq!(kinds::cell_kind(f8), kinds::SEQ_LATIN1.get());
+    assert_eq!(kinds::cell_kind(rope), kinds::CONS.get(), "still a CONS, flattened");
+    for (s, label) in [
+        (l1, "SEQ latin-1"),
+        (u16s, "SEQ utf-16"),
+        (empty, "the empty string"),
+        (rope, "a flattened two-byte CONS"),
+        (rope8, "a flattened latin-1 CONS"),
+        (slice, "SLICED"),
+        (thin, "THIN"),
+        (atom, "the atom of THIN"),
+    ] {
+        assert_flat_units(&mut iso, s, label);
+    }
+    // The inline read of a flattened CONS gives the units of its SEQ first part.
+    assert_eq!(string::seq_read(rope, 14), SeqRead::Unit(0x3b1));
+    assert_eq!(string::seq_read(rope, 17), SeqRead::Range);
+    assert_eq!(string::seq_read(l1, 0), SeqRead::Unit(u16::from(b's')));
+    assert_eq!(string::seq_read(u16s, 4), SeqRead::Unit(0x7a));
+    assert_eq!(string::seq_read(u16s, 5), SeqRead::Range);
+    assert_eq!(string::seq_read(u16s, u32::MAX), SeqRead::Range);
+    assert_eq!(string::seq_read(empty, 0), SeqRead::Range);
+    iso.collect_garbage();
+    assert_flat_units(&mut iso, slice, "SLICED after a GC");
+    assert_flat_units(&mut iso, rope, "a flattened CONS after a GC");
+}
