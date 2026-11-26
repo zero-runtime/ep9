@@ -42,10 +42,11 @@
 //!   constant indices (an M5-P2 cache keyed by a hash of the code bytes could, on a
 //!   collision). It holds no Value (rule 8).
 //! - Not a GC point; it allocates nothing (fixed arrays).
-//! - CTOR-FIT probe (f-design L1; probe branch only): the switch `EP9_SLACK_ARM`
-//!   ([`slack_arm`]) adds the names of the constructor chain (`_super.call(this, x)` in ES5
-//!   class code) and keeps going past a leave of `this` ([`chain_capacity`]). Arm 0 (not set)
-//!   is today's count, bit for bit; the scan is a run-time read, so no bytecode changes.
+//! - CTOR-FIT (f-design L1, ESCAPE_SLACK 1; always on): the first construct also counts the
+//!   names of the constructor chain (`_super.call(this, x)` in ES5 class code) and keeps going
+//!   past a leave of `this` ([`chain_capacity`]); that count is used only when it is above
+//!   [`GENEROUS`]. The seam [`ctor_fit`] picks it; the old count ([`own_capacity`]) stays
+//!   beside it. The scan is a run-time read, so no bytecode, unit or layout changes.
 
 use ep9_bytecode::{Instructions, Opcode, OperandKind, Register, RuntimeId};
 
@@ -131,7 +132,7 @@ pub(crate) fn this_store_names(code: &[u8], names: &mut [u32; MAX_NAMES]) -> Opt
 }
 
 /// The scan of [`this_store_names`] in two modes. `ESCAPE = false`: today's scan; a leave of
-/// `this` gives [`None`]. `ESCAPE = true` (CTOR-FIT probe, f-design L1 (1)): a leave of
+/// `this` gives [`None`]. `ESCAPE = true` (CTOR-FIT, f-design L1 (1)): a leave of
 /// `this` sets `escaped` (the second value) and the scan goes on. In both modes more than
 /// [`MAX_NAMES`] names or a decode fault give [`None`]. Not a GC point.
 pub(crate) fn scan_this_stores<const ESCAPE: bool>(
@@ -306,8 +307,8 @@ pub(crate) fn instance_capacity(rt: &Runtime, f: u64, proto: u64) -> Option<usiz
         c => return Some(usize::from(c - 1)),
     }
     let r = first_capacity(rt, fi, proto);
-    // The capacity is at most MAX_NAMES + GENEROUS (72), or CHAIN_CAP_MAX (253) in a CTOR-FIT
-    // arm, so capacity + 1 fits below NO_COUNT.
+    // The capacity is at most MAX_NAMES + GENEROUS (72), or CHAIN_CAP_MAX (253) for a CTOR-FIT
+    // chain count, so capacity + 1 fits below NO_COUNT.
     fi.slack_capacity.set(match r {
         Some(c) => u8::try_from(c + 1)
             .ok()
@@ -319,8 +320,9 @@ pub(crate) fn instance_capacity(rt: &Runtime, f: u64, proto: u64) -> Option<usiz
 }
 
 /// [`instance_capacity`] at the first construct of `fi`: the scan and the prototype count.
-/// In a CTOR-FIT arm ([`slack_arm`] not 0), the chain count of [`chain_capacity`] when it is
-/// above [`GENEROUS`]; else today's count. Not a GC point.
+/// With CTOR-FIT on ([`ctor_fit`]), the chain count of [`chain_capacity`] at
+/// [`ESCAPE_SLACK`] when it is above [`GENEROUS`]; else the old count ([`own_capacity`]).
+/// Not a GC point.
 fn first_capacity(
     rt: &Runtime,
     fi: &crate::function_info::FunctionInfo,
@@ -331,8 +333,8 @@ fn first_capacity(
     // SAFETY: a bytecode FunctionInfo's code is its unit function's bytecode, which the unit
     // keeps at this address while the info lives (`FunctionInfo::bytecode`).
     let code = unsafe { core::slice::from_raw_parts(fi.code, fi.code_len as usize) };
-    if let Some(slack) = escape_slack(slack_arm())
-        && let Some(n) = chain_capacity(rt, fi, code, proto, slack)
+    if ctor_fit(rt)
+        && let Some(n) = chain_capacity(rt, fi, code, proto, ESCAPE_SLACK)
         && n > usize::from(GENEROUS)
     {
         return Some(n);
@@ -340,8 +342,24 @@ fn first_capacity(
     own_capacity(rt, fi, code, proto)
 }
 
-/// Today's count (arm 0): the scan of `code` (the code of `fi`) and the prototype count.
-/// Not a GC point.
+/// The CTOR-FIT seam (ALLOC-SET design 1.3, contract rules 1-3): true = [`first_capacity`]
+/// tries the chain count first; false = the old count only. This role head: always true, so
+/// the test is a constant and the compiler removes the old branch. The set integrator changes
+/// only this body (a byte of `rt`); the merge head deletes the seam and keeps the chain path.
+/// It reads no execution policy (no preset, no feedback mode, no unit: rule 40, M-R9). Tests
+/// turn it off per thread with [`ctor_fit_override`].
+#[inline(always)]
+pub(crate) fn ctor_fit(rt: &Runtime) -> bool {
+    let _ = rt;
+    #[cfg(test)]
+    if let Some(on) = ctor_fit_override::ON.get() {
+        return on;
+    }
+    true
+}
+
+/// The old count (CTOR-FIT off): the scan of `code` (the code of `fi`) and the prototype
+/// count. Not a GC point.
 fn own_capacity(
     rt: &Runtime,
     fi: &crate::function_info::FunctionInfo,
@@ -378,7 +396,7 @@ fn own_capacity(
     Some((n + extra.min(usize::from(GENEROUS))).min(obj::MAX_INOBJECT))
 }
 
-// ---- CTOR-FIT probe (f-design L1; probe branch only, the merge removes the switch) --------
+// ---- CTOR-FIT (f-design L1; ESCAPE_SLACK 1) -------------------------------------------------
 
 /// The most prototype objects [`chain_capacity`] reads (f-design L1 (2): 8 levels).
 pub(crate) const CHAIN_LEVELS: u32 = 8;
@@ -387,54 +405,9 @@ pub(crate) const CHAIN_LEVELS: u32 = 8;
 /// in the FunctionInfo byte.
 pub(crate) const CHAIN_CAP_MAX: usize = NO_COUNT as usize - 2;
 
-/// The CTOR-FIT probe arm: `EP9_SLACK_ARM`, read once per process ([`slack_arm_from`]).
-/// Probe branch only; the merge removes it.
-///
-/// | `EP9_SLACK_ARM` | arm | capacity of `new F` |
-/// |---|---|---|
-/// | not set, `0`, any other value | 0 | today's count ([`own_capacity`]), bit for bit |
-/// | `1` | CTOR-FIT, ESCAPE_SLACK 1 | the chain count when it is above [`GENEROUS`], else today's |
-/// | `2` | CTOR-FIT, ESCAPE_SLACK 0 | the same |
-/// | `3` | CTOR-FIT, ESCAPE_SLACK 2 | the same |
-///
-/// It reads the environment, not an execution policy (no preset, no feedback mode: rule 40,
-/// M-R9). Tests set a per-thread arm with [`slack_arm_override`].
-pub(crate) fn slack_arm() -> u8 {
-    #[cfg(test)]
-    if let Some(arm) = slack_arm_override::ARM.get() {
-        return arm;
-    }
-    if cfg!(miri) {
-        return 0;
-    }
-    static ARM: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    // bench-only: never merged (an unset switch gives 1; an explicit 0 still gives 0).
-    *ARM.get_or_init(|| match std::env::var("EP9_SLACK_ARM") {
-        Err(std::env::VarError::NotPresent) => 1,
-        v => slack_arm_from(v.ok().as_deref()),
-    })
-}
-
-/// The arm of an `EP9_SLACK_ARM` value ([`slack_arm`]): `"1"`, `"2"`, `"3"` are arms 1-3;
-/// every other value (not set, `"0"`, empty, `" 1"`, ...) is arm 0.
-pub(crate) fn slack_arm_from(var: Option<&str>) -> u8 {
-    match var {
-        Some("1") => 1,
-        Some("2") => 2,
-        Some("3") => 3,
-        _ => 0,
-    }
-}
-
-/// The ESCAPE_SLACK of an arm ([`slack_arm`]), or [`None`] for arm 0 (no chain count).
-pub(crate) const fn escape_slack(arm: u8) -> Option<usize> {
-    match arm {
-        1 => Some(1),
-        2 => Some(0),
-        3 => Some(2),
-        _ => None,
-    }
-}
+/// The room [`first_capacity`] adds to a chain count when a scan saw `this` leave the frame
+/// (f-design L1 (3); plan v19 §4.2: ESCAPE_SLACK 1, the arm the month-13 probe read as arm 1).
+pub(crate) const ESCAPE_SLACK: usize = 1;
 
 /// The distinct names (key bits) of a constructor chain ([`chain_names`]).
 pub(crate) struct ChainNames {
@@ -568,12 +541,13 @@ pub(crate) fn chain_capacity(
     Some((ch.keys().len() + extra.min(usize::from(GENEROUS)) + slack).min(CHAIN_CAP_MAX))
 }
 
-/// Tests only: the arm of [`slack_arm`] for this thread, over the process value.
+/// Tests only: the value of the seam [`ctor_fit`] on this thread (`None`: the role-head value,
+/// true).
 #[cfg(test)]
-pub(crate) mod slack_arm_override {
+pub(crate) mod ctor_fit_override {
     use core::cell::Cell;
 
     std::thread_local! {
-        pub(crate) static ARM: Cell<Option<u8>> = const { Cell::new(None) };
+        pub(crate) static ON: Cell<Option<bool>> = const { Cell::new(None) };
     }
 }

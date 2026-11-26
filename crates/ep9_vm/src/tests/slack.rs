@@ -157,15 +157,15 @@ struct Seen {
 }
 
 /// Runs `make()` in every dispatch expansion, with and without GC stress, with eager
-/// vectors and with none; checks the output and returns what each run saw. The CTOR-FIT
-/// probe arm is 0 (today's count; `slack::slack_arm`).
+/// vectors and with none; checks the output and returns what each run saw. The CTOR-FIT seam
+/// has its role-head value (on; `slack::ctor_fit`).
 fn run_each(make: fn() -> VerifiedUnit, want: &'static [&'static str]) -> Vec<(String, Seen)> {
-    run_each_arm(0, make, want)
+    run_each_on(None, make, want)
 }
 
-/// [`run_each`] with the CTOR-FIT probe arm `arm` (`EP9_SLACK_ARM`) on each run thread.
-fn run_each_arm(
-    arm: u8,
+/// [`run_each`] with the CTOR-FIT seam set to `on` on each run thread (`None`: not set).
+fn run_each_on(
+    on: Option<bool>,
     make: fn() -> VerifiedUnit,
     want: &'static [&'static str],
 ) -> Vec<(String, Seen)> {
@@ -180,7 +180,7 @@ fn run_each_arm(
                 let label = format!("{} stress={stress} threshold={threshold}", d.name());
                 let l = label.clone();
                 let s = on_big_stack(move || {
-                    slack::slack_arm_override::ARM.set(Some(arm));
+                    slack::ctor_fit_override::ON.set(on);
                     let mut iso = isolate(c);
                     take_output();
                     let r =
@@ -613,29 +613,19 @@ fn a_fused_named_load_scans_as_its_pair() {
     }
 }
 
-// ---- CTOR-FIT probe (f-design L1; `EP9_SLACK_ARM`, probe branch only) -----------------------
+// ---- CTOR-FIT (f-design L1; ESCAPE_SLACK 1, always on) --------------------------------------
 
 #[test]
-fn the_slack_arm_parse() {
-    assert_eq!(slack::slack_arm_from(None), 0);
-    for (v, arm) in [("0", 0), ("1", 1), ("2", 2), ("3", 3)] {
-        assert_eq!(slack::slack_arm_from(Some(v)), arm, "{v}");
-    }
-    // Every other value is arm 0 (today's count).
-    for v in ["", "4", " 1", "1 ", "01", "on", "true", "-1"] {
-        assert_eq!(slack::slack_arm_from(Some(v)), 0, "{v:?}");
-    }
-    // Arm 1 = ESCAPE_SLACK 1, arm 2 = 0, arm 3 = 2; arm 0 reads no chain.
-    assert_eq!(slack::escape_slack(0), None);
-    assert_eq!(slack::escape_slack(1), Some(1));
-    assert_eq!(slack::escape_slack(2), Some(0));
-    assert_eq!(slack::escape_slack(3), Some(2));
-    assert_eq!(slack::escape_slack(4), None);
-    // The per-thread arm of the tests wins over the process value.
+fn ctor_fit_is_on_with_escape_slack_1() {
+    assert_eq!(slack::ESCAPE_SLACK, 1);
     on_big_stack(|| {
-        for arm in 0..=3 {
-            slack::slack_arm_override::ARM.set(Some(arm));
-            assert_eq!(slack::slack_arm(), arm);
+        let iso = isolate(config(Dispatch::ALL[0], false));
+        // The role head: on, with no setting (no switch, no environment read).
+        assert!(slack::ctor_fit(&iso.rt));
+        // The per-thread test value wins; `None` is the role-head value again.
+        for on in [Some(false), Some(true), None] {
+            slack::ctor_fit_override::ON.set(on);
+            assert_eq!(slack::ctor_fit(&iso.rt), on.unwrap_or(true), "{on:?}");
         }
     });
 }
@@ -748,6 +738,51 @@ enum Level {
     Accessor(&'static str),
     /// No own `constructor`.
     Bare,
+    /// `constructor` = the global function, then the data properties `data` (value null)
+    /// and `methods` (value: the same function, callable), in that order.
+    Fields(
+        &'static str,
+        &'static [&'static str],
+        &'static [&'static str],
+    ),
+}
+
+/// Makes the prototype chain `levels` in `iso` (the first is `F.prototype`, the last has
+/// %Object.prototype% as its prototype) and returns its first object.
+fn make_chain(iso: &Isolate, levels: &[Level]) -> u64 {
+    let rt = &*iso.rt;
+    let global = |n: &str| iso.global_raw(n).unwrap().to_bits();
+    let ctor_key = rt.atom(Atom::Constructor);
+    let mut proto = rt.root(Root::ObjectPrototype);
+    for l in levels.iter().rev() {
+        let p = object::new_object(rt, proto);
+        match *l {
+            Level::Ctor(f) => object::own_define(rt, p, ctor_key, global(f), object::attr::HIDDEN),
+            Level::Dictionary(f) => {
+                object::own_define(rt, p, ctor_key, global(f), object::attr::HIDDEN);
+                crate::props::to_dictionary(rt, p);
+                assert!(shape::is_dictionary(shape::shape_of(p)));
+            }
+            Level::Accessor(f) => {
+                let pair = crate::accessor::new_pair(rt, global(f), UNDEFINED);
+                let at = object::attr::ACCESSOR | object::attr::CONFIGURABLE;
+                object::own_define(rt, p, ctor_key, pair, at);
+            }
+            Level::Bare => {}
+            Level::Fields(f, data, methods) => {
+                object::own_define(rt, p, ctor_key, global(f), object::attr::HIDDEN);
+                for (names, v) in [(data, crate::frame::NULL), (methods, global(f))] {
+                    for n in names {
+                        let k = crate::atoms::intern_str(rt, n);
+                        object::own_define(rt, p, k, v, object::attr::DEFAULT);
+                    }
+                }
+                assert!(!shape::is_dictionary(shape::shape_of(p)));
+            }
+        }
+        proto = p;
+    }
+    proto
 }
 
 /// Makes the prototype chain `levels` (the first is `F.prototype`, the last has
@@ -757,30 +792,9 @@ fn chain_of(levels: &'static [Level]) -> (usize, bool, u32, [usize; 3]) {
     on_big_stack(move || {
         let mut iso = isolate(config(Dispatch::ALL[0], false));
         iso.run_raw(chain_functions(), "chain.js").unwrap();
+        let proto = make_chain(&iso, levels);
         let rt = &*iso.rt;
         let global = |n: &str| iso.global_raw(n).unwrap().to_bits();
-        let ctor_key = rt.atom(Atom::Constructor);
-        let mut proto = rt.root(Root::ObjectPrototype);
-        for l in levels.iter().rev() {
-            let p = object::new_object(rt, proto);
-            match *l {
-                Level::Ctor(f) => {
-                    object::own_define(rt, p, ctor_key, global(f), object::attr::HIDDEN)
-                }
-                Level::Dictionary(f) => {
-                    object::own_define(rt, p, ctor_key, global(f), object::attr::HIDDEN);
-                    crate::props::to_dictionary(rt, p);
-                    assert!(shape::is_dictionary(shape::shape_of(p)));
-                }
-                Level::Accessor(f) => {
-                    let pair = crate::accessor::new_pair(rt, global(f), UNDEFINED);
-                    let at = object::attr::ACCESSOR | object::attr::CONFIGURABLE;
-                    object::own_define(rt, p, ctor_key, pair, at);
-                }
-                Level::Bare => {}
-            }
-            proto = p;
-        }
         let fi = object::function_info(global("D"));
         // SAFETY: `D` is a bytecode function: its code lives while the isolate does.
         let code = unsafe { core::slice::from_raw_parts(fi.code, fi.code_len as usize) };
@@ -951,51 +965,350 @@ fn es5_chain_5() -> VerifiedUnit {
 
 #[test]
 fn an_es5_class_chain_gets_its_chain_count_in_object() {
-    // Arm 0 (today): `this` leaves in the super call, so no count: GENEROUS slots, and
-    // fields 9 and 10 in a SLOTS cell.
-    for (label, s) in run_each_arm(0, es5_chain_10, &["1"]) {
-        assert_eq!(s.first, (usize::from(GENEROUS), 10), "arm 0 {label}");
-        assert_eq!(s.last, (usize::from(GENEROUS), 10), "arm 0 {label}");
-        assert_eq!(s.slots, (true, true), "arm 0 {label}");
-        assert!(s.same_shape, "arm 0 {label}");
+    // CTOR-FIT off (the old count): `this` leaves in the super call, so no count: GENEROUS
+    // slots, and fields 9 and 10 in a SLOTS cell.
+    for (label, s) in run_each_on(Some(false), es5_chain_10, &["1"]) {
+        assert_eq!(s.first, (usize::from(GENEROUS), 10), "off {label}");
+        assert_eq!(s.last, (usize::from(GENEROUS), 10), "off {label}");
+        assert_eq!(s.slots, (true, true), "off {label}");
+        assert!(s.same_shape, "off {label}");
     }
-    // Arms 1, 2, 3 (ESCAPE_SLACK 1, 0, 2): n_chain = 10 + slack in-object slots and no
-    // SLOTS cell, for the first instance too; one shape family.
-    for (arm, cap) in [(1, 11), (2, 10), (3, 12)] {
-        for (label, s) in run_each_arm(arm, es5_chain_10, &["1"]) {
-            assert_eq!(s.first, (cap, 10), "arm {arm} {label}");
-            assert_eq!(s.last, (cap, 10), "arm {arm} {label}");
-            assert_eq!(s.slots, (false, false), "arm {arm} {label}");
-            assert!(s.same_shape, "arm {arm} {label}");
+    // CTOR-FIT on (ESCAPE_SLACK 1), set or by the role-head value: n_chain = 10 + 1
+    // in-object slots and no SLOTS cell, for the first instance too; one shape family.
+    for on in [Some(true), None] {
+        for (label, s) in run_each_on(on, es5_chain_10, &["1"]) {
+            assert_eq!(s.first, (11, 10), "{on:?} {label}");
+            assert_eq!(s.last, (11, 10), "{on:?} {label}");
+            assert_eq!(s.slots, (false, false), "{on:?} {label}");
+            assert!(s.same_shape, "{on:?} {label}");
         }
     }
 }
 
 #[test]
 fn a_chain_count_of_8_or_less_keeps_todays_answer() {
-    // n_chain = 5 + ESCAPE_SLACK <= GENEROUS: every arm gives today's answer (no count for
+    // n_chain = 5 + ESCAPE_SLACK <= GENEROUS: CTOR-FIT gives the old answer (no count for
     // an escaping `this`: GENEROUS).
-    let today = run_each_arm(0, es5_chain_5, &["1"]);
+    let today = run_each_on(Some(false), es5_chain_5, &["1"]);
     for (label, s) in &today {
         assert_eq!(s.last, (usize::from(GENEROUS), 5), "{label}");
         assert_eq!(s.slots, (false, false), "{label}");
     }
-    for arm in [1, 2, 3] {
-        let seen = run_each_arm(arm, es5_chain_5, &["1"]);
-        for ((label, s), (_, t)) in seen.iter().zip(&today) {
-            assert_eq!((s.first, s.last), (t.first, t.last), "arm {arm} {label}");
-            assert_eq!(s.slots, t.slots, "arm {arm} {label}");
-        }
+    let seen = run_each(es5_chain_5, &["1"]);
+    for ((label, s), (_, t)) in seen.iter().zip(&today) {
+        assert_eq!((s.first, s.last), (t.first, t.last), "on {label}");
+        assert_eq!(s.slots, t.slots, "on {label}");
     }
 }
 
 #[test]
-fn every_arm_keeps_the_count_of_a_constructor_with_no_chain() {
-    // A plain constructor (no chain level adds a name, n_chain = 2): every arm gives
-    // today's 2 slots.
-    for arm in 0..=3 {
-        for (label, s) in run_each_arm(arm, plain_point, &["3"]) {
-            assert_eq!(s.last, (2, 2), "arm {arm} {label}");
+fn ctor_fit_keeps_the_count_of_a_constructor_with_no_chain() {
+    // A plain constructor (no chain level adds a name, n_chain = 2): on and off give the
+    // old 2 slots.
+    for on in [false, true] {
+        for (label, s) in run_each_on(Some(on), plain_point, &["3"]) {
+            assert_eq!(s.last, (2, 2), "on {on} {label}");
+        }
+    }
+}
+
+// ---- CTOR-FIT: the 3 test gaps of the month-13 K3 check ---------------------------------------
+
+/// A constructor of the K3 tests: its global name, `_super.call(this, a)` first or not, and
+/// its `this.<name> = a` stores.
+type K3Ctor = (&'static str, bool, &'static [&'static str]);
+
+/// The code of `c`.
+fn ctor_code((name, sup, names): K3Ctor) -> FunctionCode {
+    ctor(name, |a| {
+        if sup {
+            super_call(a, 0);
+        }
+        stores(a, names);
+    })
+}
+
+/// The unit that makes each of `fns` (function i + 1) a global. No constructor runs: the
+/// tests read the scans.
+fn ctor_unit(fns: &[K3Ctor]) -> VerifiedUnit {
+    let mut s = Asm::script(0);
+    for (i, &(g, _, _)) in fns.iter().enumerate() {
+        let c = s.b.function_constant(FunctionId(i as u32 + 1));
+        s.b.create_closure(c, s.closure, 0);
+        s.sta_global(g);
+    }
+    s.b.lda_undefined().return_();
+    let mut all = vec![s.finish()];
+    all.extend(fns.iter().map(|&c| ctor_code(c)));
+    unit("", all)
+}
+
+/// The first construct of `new F` on a chain (a K3 case).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Case {
+    /// The chain names, `escaped`, the prototype objects read ([`slack::chain_names`]).
+    names: usize,
+    escaped: bool,
+    levels: u32,
+    /// [`slack::chain_capacity`] at [`slack::ESCAPE_SLACK`].
+    chain: usize,
+    /// [`slack::instance_capacity`] with CTOR-FIT on, and off (the old count); [`None`] =
+    /// [`GENEROUS`].
+    on: Option<usize>,
+    off: Option<usize>,
+}
+
+/// The [`Case`] of the global constructor `f` of `fns` with `F.prototype` = the first of
+/// `levels` ([`make_chain`]).
+fn chain_case(fns: &'static [K3Ctor], f: &'static str, levels: &'static [Level]) -> Case {
+    on_big_stack(move || {
+        let mut iso = isolate(config(Dispatch::ALL[0], false));
+        iso.run_raw(ctor_unit(fns), "k3.js").unwrap();
+        let proto = make_chain(&iso, levels);
+        let rt = &*iso.rt;
+        let fv = iso.global_raw(f).unwrap().to_bits();
+        let fi = object::function_info(fv);
+        // SAFETY: `f` is a bytecode function: its code lives while the isolate does.
+        let code = unsafe { core::slice::from_raw_parts(fi.code, fi.code_len as usize) };
+        let ch = slack::chain_names(rt, fi, code, proto).unwrap();
+        let chain = slack::chain_capacity(rt, fi, code, proto, slack::ESCAPE_SLACK).unwrap();
+        let mut cap = [None; 2];
+        for (i, on) in [true, false].into_iter().enumerate() {
+            slack::ctor_fit_override::ON.set(Some(on));
+            // A new first construct: the memo byte back to "not chosen".
+            fi.slack_capacity.set(0);
+            cap[i] = slack::instance_capacity(rt, fv, proto);
+        }
+        slack::ctor_fit_override::ON.set(None);
+        Case {
+            names: ch.keys().len(),
+            escaped: ch.escaped,
+            levels: ch.levels,
+            chain,
+            on: cap[0],
+            off: cap[1],
+        }
+    })
+}
+
+/// K3 gap 1: the chain counts a name once by its key (atom) bits, across 2 levels and
+/// more, not by its constant index: `x` has another constant index in `D` than in `B`, and
+/// constant 0 of `C` (`c0`) and of `B` (`x`) name 2 texts that both count.
+#[test]
+fn ctor_fit_counts_a_name_once_across_2_levels() {
+    use Level::*;
+    const FNS: &[K3Ctor] = &[
+        ("D", true, &["x", "d0"]),
+        ("B", false, &["x", "b0", "b1", "b2", "b3", "b4", "b5"]),
+        ("C", false, &["c0", "x", "b0"]),
+    ];
+    let first = |i: usize| scan_escape(&ctor_code(FNS[i])).unwrap().0[0];
+    assert_ne!(first(0), first(1), "x: one constant index in D and in B");
+    assert_eq!(first(1), first(2), "B's x and C's c0: one constant index");
+    // D.prototype -> B.prototype: x (D and B), d0, b0..b5 = 8 names; + ESCAPE_SLACK = 9.
+    let c = chain_case(FNS, "D", &[Ctor("D"), Ctor("B")]);
+    assert_eq!((c.names, c.escaped, c.levels), (8, true, 2));
+    assert_eq!((c.chain, c.on, c.off), (9, Some(9), None));
+    // D.prototype -> C.prototype -> B.prototype: x (3 levels) and b0 (levels 2 and 3) count
+    // once: x, d0, c0, b0..b5 = 9 (12 by constant index); + 1 = 10.
+    let c = chain_case(FNS, "D", &[Ctor("D"), Ctor("C"), Ctor("B")]);
+    assert_eq!((c.names, c.escaped, c.levels), (9, true, 3));
+    assert_eq!((c.chain, c.on, c.off), (10, Some(10), None));
+}
+
+/// K3 gap 2: the prototype-field extra of the chain count is the data fields of
+/// `F.prototype` (not callable) whose key (`shape::key_at`) no level of the chain stores, at
+/// most GENEROUS; the old count drops only the names of `F` itself (`shape::lookup`).
+#[test]
+fn ctor_fit_extra_counts_only_prototype_fields_no_level_stores() {
+    use Level::*;
+    const FNS: &[K3Ctor] = &[
+        ("D", true, &["x", "d0"]),
+        ("E", false, &["x", "d0"]),
+        ("B", false, &["x", "b0", "b1", "b2", "b3", "b4", "b5"]),
+    ];
+    // F.prototype has d0 (D stores it), b0 (B stores it), left (no level) and the method m:
+    // extra = 1 (left). 8 names + 1 + ESCAPE_SLACK = 10.
+    let c = chain_case(
+        FNS,
+        "D",
+        &[Fields("D", &["d0", "b0", "left"], &["m"]), Ctor("B")],
+    );
+    assert_eq!((c.names, c.chain, c.on, c.off), (8, 10, Some(10), None));
+    // A data field of B.prototype (`z`) is no extra: only F.prototype counts.
+    let c = chain_case(
+        FNS,
+        "D",
+        &[
+            Fields("D", &["d0", "b0", "left"], &["m"]),
+            Fields("B", &["z"], &[]),
+        ],
+    );
+    assert_eq!((c.names, c.chain, c.on), (8, 10, Some(10)));
+    // 10 data fields that no level stores: extra 8 (GENEROUS): 8 + 8 + 1 = 17.
+    let c = chain_case(
+        FNS,
+        "D",
+        &[
+            Fields(
+                "D",
+                &["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"],
+                &[],
+            ),
+            Ctor("B"),
+        ],
+    );
+    assert_eq!((c.names, c.chain, c.on), (8, 17, Some(17)));
+    // No leave of `this` (E): chain 8 + 1 (left) = 9. The old count is E's x, d0 + b0, left
+    // = 4: b0 is no name of E itself, so the old rule counts it.
+    let c = chain_case(
+        FNS,
+        "E",
+        &[Fields("E", &["d0", "b0", "left"], &[]), Ctor("B")],
+    );
+    assert_eq!((c.names, c.escaped, c.chain), (8, false, 9));
+    assert_eq!((c.on, c.off), (Some(9), Some(4)));
+}
+
+/// K3 gap 3: a chain count of exactly 8 with no leave of `this` keeps the old count (the
+/// chain count is used only above GENEROUS); 9 uses it. With a leave, 7 + ESCAPE_SLACK = 8
+/// keeps the old count and 8 + 1 = 9 uses it.
+#[test]
+fn ctor_fit_uses_a_chain_count_only_above_8() {
+    use Level::*;
+    const FNS: &[K3Ctor] = &[
+        ("E", false, &["d0", "d1", "d2"]),
+        ("D2", true, &["d0", "d1"]),
+        ("D3", true, &["d0", "d1", "d2"]),
+        ("B5", false, &["b0", "b1", "b2", "b3", "b4"]),
+        ("B6", false, &["b0", "b1", "b2", "b3", "b4", "b5"]),
+    ];
+    // No leave: 3 + 5 = exactly 8: the old count, 3.
+    let c = chain_case(FNS, "E", &[Ctor("E"), Ctor("B5")]);
+    assert_eq!((c.names, c.escaped, c.chain), (8, false, 8));
+    assert_eq!((c.on, c.off), (Some(3), Some(3)));
+    // No leave: 3 + 6 = 9: the chain count.
+    let c = chain_case(FNS, "E", &[Ctor("E"), Ctor("B6")]);
+    assert_eq!((c.names, c.escaped, c.chain), (9, false, 9));
+    assert_eq!((c.on, c.off), (Some(9), Some(3)));
+    // A leave: 2 + 5 + 1 = 8: the old count (none: GENEROUS).
+    let c = chain_case(FNS, "D2", &[Ctor("D2"), Ctor("B5")]);
+    assert_eq!((c.names, c.escaped, c.chain), (7, true, 8));
+    assert_eq!((c.on, c.off), (None, None));
+    // A leave: 3 + 5 + 1 = 9: the chain count.
+    let c = chain_case(FNS, "D3", &[Ctor("D3"), Ctor("B5")]);
+    assert_eq!((c.names, c.escaped, c.chain), (8, true, 9));
+    assert_eq!((c.on, c.off), (Some(9), None));
+}
+
+// ---- CTOR-FIT and M-R9: full and ics_only, with and without a loaded unit -------------------
+
+/// Runs `make()` under `exec` (the first dispatch expansion, no GC stress, feedback threshold
+/// `threshold`), with the native part of its unit loaded (`with_unit`: each function gets a
+/// jitless AotBaseline variant over a text that never runs; the loader picks it under a
+/// jitless policy and installs nothing) or with none. Returns what the run saw and the
+/// `picked` count of the load (0 with no unit).
+fn run_exec(
+    exec: crate::ExecOptions,
+    threshold: u32,
+    with_unit: bool,
+    make: fn() -> VerifiedUnit,
+    want: &'static [&'static str],
+) -> (Seen, u32) {
+    use crate::dispatch::DispatchKind;
+    use crate::select::lowering;
+    on_big_stack(move || {
+        let c = IsolateConfig {
+            feedback_threshold: threshold,
+            ..config(Dispatch::ALL[0], false)
+        };
+        let mut iso = Isolate::new_with(c, exec).unwrap();
+        iso.register_host_function("print", 1, super::support::print);
+        take_output();
+        let u = make();
+        let vars: &[(u8, u8, u32, u32, u64, &[u32])] = &[(
+            DispatchKind::AotBaseline as u8,
+            lowering::JITLESS,
+            0,
+            8,
+            0,
+            &[],
+        )];
+        let n = u.unit().functions.len() as u32;
+        let fns: Vec<_> = (1..n)
+            .map(|i| {
+                let d = crate::unit_loader::unit_function_digest(&u, i).unwrap();
+                (i, d, vars)
+            })
+            .collect();
+        let text = vec![0xCCu8; 64];
+        let r = iso.with_cx(|cx| {
+            if with_unit {
+                let (rows, r) = cx.run_script_with_unit_code(u, "slack.js", &text, 0, &fns);
+                let picked = rows.iter().find(|(k, _)| *k == "picked").unwrap().1;
+                let installed = rows.iter().find(|(k, _)| *k == "installed").unwrap().1;
+                assert_eq!(installed, 0);
+                r.map(|_| picked)
+            } else {
+                cx.run_script(u, "slack.js").map(|_| 0)
+            }
+        });
+        let out = take_output();
+        let picked = r.unwrap_or_else(|e| panic!("uncaught {e}"));
+        assert_eq!(out, want);
+        let s = observe(&iso);
+        iso.collect_garbage();
+        iso.verify_heap().unwrap();
+        (s, picked)
+    })
+}
+
+/// Doc 13 M-R9 for CTOR-FIT (ALLOC-SET design 7, must-show): the same in-object capacity,
+/// property count, shape family and SLOTS cells under `ics_only` and `full` (and the `jit`
+/// preset when this build has it), at both feedback thresholds, with and without a loaded
+/// unit; the scan reads the bytecode of the FunctionInfo only (`slack.rs`, the rule-40
+/// line). An install of unit code for a constructor is the A2 test of
+/// `crates/ep9_unit/tests/loader.rs`: an ep9_vm test has no unit text that runs.
+#[test]
+fn ctor_fit_makes_the_same_shapes_under_full_and_ics_only_with_and_without_a_unit() {
+    use crate::{ExecOptions, Feedback, Preset};
+    let mut presets = vec![
+        ExecOptions::jitless(),
+        ExecOptions::jitless().feedback(Feedback::FULL),
+    ];
+    if Preset::JIT.available() {
+        presets.push(ExecOptions::jit());
+    }
+    type Make = fn() -> VerifiedUnit;
+    let cases: [(Make, &'static [&'static str], (usize, usize)); 3] = [
+        (es5_chain_10, &["1"], (11, 10)),
+        (es5_chain_5, &["1"], (usize::from(GENEROUS), 5)),
+        (point_with_prototype_fields, &["3"], (3, 2)),
+    ];
+    for (make, want, last) in cases {
+        let mut seen = Vec::new();
+        for &exec in &presets {
+            for threshold in [0, u32::MAX] {
+                for with_unit in [false, true] {
+                    let label = format!(
+                        "{} {} threshold={threshold} unit={with_unit}",
+                        exec.preset().name(),
+                        exec.feedback_mode().name()
+                    );
+                    let (s, picked) = run_exec(exec, threshold, with_unit, make, want);
+                    if with_unit && exec.preset() == Preset::JITLESS {
+                        assert!(picked > 0, "{label}: the loader picked a unit variant");
+                    }
+                    seen.push((label, s));
+                }
+            }
+        }
+        let (l0, s0) = &seen[0];
+        assert_eq!(s0.last, last, "{l0}");
+        for (label, s) in &seen {
+            assert_eq!((s.first, s.last), (s0.first, s0.last), "{label} vs {l0}");
+            assert_eq!(s.slots, s0.slots, "{label} vs {l0}");
+            assert_eq!(s.same_shape, s0.same_shape, "{label} vs {l0}");
         }
     }
 }
