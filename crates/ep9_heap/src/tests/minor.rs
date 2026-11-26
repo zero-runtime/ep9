@@ -1168,26 +1168,27 @@ fn the_budget_after_a_gc_is_the_old_bytes() {
     heap.drop_global(g);
 }
 
-/// The S1 budget cap (`MAX_S1_BUDGET`, Codex r1 on LEVER-7, M8-P4), the bounded-memory form:
-/// about 76 MiB of rooted old bytes, above the cap (72 MiB) and below twice it, then young
-/// cells that all die. Each budget GC is minor and comes after the cap (within a page), not
-/// after the old bytes, so the heap before a minor GC holds at most the old bytes + 72 MiB.
-/// Without the cap (5084c6c3 to 61418822) the first minor GC comes after the old bytes (about
-/// 76 MiB), and the test fails. Old bytes up to 72 MiB keep the LEVER-7 budget (the test
-/// above); `the_s1_budget_rule` checks all three bands of the rule.
+/// The S1 budget cap (`S1_GROW_CAP`, GC-BUDGET, M13-P1; before it `MAX_S1_BUDGET`, Codex r1
+/// on LEVER-7, M8-P4), the bounded-memory form: about 40 MiB of rooted old bytes, above
+/// 38.4 MiB (where 12 MiB + 5 x (old bytes - 12 MiB) reaches the cap) and below twice the cap,
+/// then young cells that all die. Each budget GC is minor and comes after the cap (within a
+/// page), not after 12 MiB + 5 x (old bytes - 12 MiB) (about 152 MiB), so the heap before a
+/// minor GC holds at most the old bytes + 144 MiB. `the_s1_budget_rule` checks all bands of
+/// the rule.
 #[test]
-#[cfg_attr(miri, ignore = "76 MiB of old cells")]
+#[cfg_attr(miri, ignore = "40 MiB of old cells and 150 MiB of young ones")]
 fn the_s1_budget_stops_at_the_cap() {
-    // `MAX_S1_BUDGET` as a literal, so the test also builds on a tree without the const.
-    const CAP: u64 = 72 << 20;
+    // `S1_GROW_CAP` as a literal, so the test also builds on a tree without the const.
+    const CAP: u64 = 144 << 20;
+    const MIB: u64 = 1 << 20;
     // An initial budget below the cap: the budget after a GC can only be the cap here.
     let heap = gen_heap(false, |c| c.initial_budget = 64 << 20);
-    // 76 rooted nodes of about 1 MiB (LOS cells). A major GC every 38 nodes keeps the budget
+    // 40 rooted nodes of about 1 MiB (LOS cells). A major GC every 20 nodes keeps the budget
     // GCs out (no minor GC, so the nursery policy for high survival never starts).
-    let root = new_node(&heap, 0, 76);
+    let root = new_node(&heap, 0, 40);
     let g = heap.new_global(root.to_value());
-    for i in 0..76u32 {
-        if i % 38 == 0 {
+    for i in 0..40u32 {
+        if i % 20 == 0 {
             major(&heap);
         }
         let big = new_node(&heap, i + 1, 131_000);
@@ -1195,14 +1196,14 @@ fn the_s1_budget_stops_at_the_cap() {
     }
     major(&heap);
     let live = heap.stats().last_marked_bytes as u64;
-    assert!(
-        live > CAP + 2 * PAGE_SIZE as u64 && live < 2 * CAP,
-        "{live} live bytes"
-    );
+    // Above 39 MiB the growth term is above the cap; below 64 MiB the initial budget and the
+    // LEVER-7 base (at most 64 MiB here) are below it.
+    assert!(live > 39 * MIB && live < 64 * MIB, "{live} live bytes");
+    assert!(12 * MIB + 5 * (live - 12 * MIB) > CAP + PAGE_SIZE as u64);
     // Young nodes of 4,016 B that all die: the old bytes stay `live`, below the major limit
-    // (2 * live). 20,000 of them: about 80 MB, one window of the cap (more costs memory: the
-    // sweep after a minor GC is lazy or concurrent, so the next window takes fresh pages).
-    let gcs = budget_gcs(&heap, 20_000, |i| {
+    // (2 * live). 39,000 of them: about 149 MiB, one window of the cap (more costs memory:
+    // the sweep after a minor GC is lazy or concurrent, so the next window takes fresh pages).
+    let gcs = budget_gcs(&heap, 39_000, |i| {
         new_node(&heap, 1_000 + i, 500);
     });
     assert!(!gcs.is_empty(), "{gcs:?}");
@@ -1217,36 +1218,50 @@ fn the_s1_budget_stops_at_the_cap() {
     heap.drop_global(g);
 }
 
-/// `s1_budget` (LEVER-7 and its cap), all three bands with no heap: old bytes up to
-/// `MAX_S1_BUDGET` give the old bytes; 72-144 MiB give the cap; from 144 MiB on, half the old
-/// bytes (the rule before LEVER-7). The budget is never below the initial budget and, above
-/// it, never more than `max(MAX_S1_BUDGET, old bytes / 2)`.
+/// `s1_budget` (LEVER-7, its cap, and GC-BUDGET), every band with no heap. The base
+/// (LEVER-7): old bytes up to `MAX_S1_BUDGET` give the old bytes, then the cap 72 MiB, then
+/// half the old bytes. GC-BUDGET (M13-P1): up to `S1_KNEE` (12 MiB) of old bytes the budget is
+/// the base; above it `max(base, min(12 MiB + 5 x (old bytes - 12 MiB), 144 MiB))`, so
+/// 38.4-288 MiB give the cap 144 MiB, and from 288 MiB on, half the old bytes. The budget is
+/// never below the initial budget and, above it, never more than `max(144 MiB, old bytes / 2)`.
 #[test]
 fn the_s1_budget_rule() {
-    use crate::heap::{MAX_S1_BUDGET, s1_budget};
+    use crate::heap::{MAX_S1_BUDGET, S1_GROW_CAP, S1_KNEE, s1_budget};
     const MIB: usize = 1 << 20;
     assert_eq!(MAX_S1_BUDGET, 72 * MIB);
-    // Band 1: the old bytes (the initial budget is the floor).
+    assert_eq!(S1_KNEE, 12 * MIB);
+    assert_eq!(S1_GROW_CAP, 144 * MIB);
+    // Band 1, up to the knee: the old bytes (the initial budget is the floor).
     assert_eq!(s1_budget(8 * MIB, 2 * MIB), 8 * MIB);
-    assert_eq!(s1_budget(8 * MIB, 40 * MIB), 40 * MIB);
-    assert_eq!(s1_budget(8 * MIB, 72 * MIB), 72 * MIB);
-    // Band 2: the cap.
-    assert_eq!(s1_budget(8 * MIB, 72 * MIB + 1), 72 * MIB);
-    assert_eq!(s1_budget(8 * MIB, 80 * MIB), 72 * MIB);
-    assert_eq!(s1_budget(8 * MIB, 144 * MIB), 72 * MIB);
-    // Band 3: half the old bytes.
-    assert_eq!(s1_budget(8 * MIB, 144 * MIB + 2), 72 * MIB + 1);
+    assert_eq!(s1_budget(8 * MIB, 10 * MIB), 10 * MIB);
+    assert_eq!(s1_budget(8 * MIB, 12 * MIB), 12 * MIB);
+    // Band 2, above the knee: 12 MiB + 5 x (old bytes - 12 MiB).
+    assert_eq!(s1_budget(8 * MIB, 12 * MIB + 1), 12 * MIB + 5);
+    assert_eq!(s1_budget(8 * MIB, 20 * MIB), 52 * MIB);
+    assert_eq!(s1_budget(8 * MIB, 38 * MIB), 142 * MIB);
+    // Band 3: the cap 144 MiB (the base gives 72 MiB at most here).
+    assert_eq!(s1_budget(8 * MIB, 39 * MIB), 144 * MIB);
+    assert_eq!(s1_budget(8 * MIB, 40 * MIB), 144 * MIB);
+    assert_eq!(s1_budget(8 * MIB, 72 * MIB + 1), 144 * MIB);
+    assert_eq!(s1_budget(8 * MIB, 80 * MIB), 144 * MIB);
+    assert_eq!(s1_budget(8 * MIB, 144 * MIB + 2), 144 * MIB);
+    assert_eq!(s1_budget(8 * MIB, 288 * MIB), 144 * MIB);
+    // Band 4: half the old bytes.
+    assert_eq!(s1_budget(8 * MIB, 288 * MIB + 2), 144 * MIB + 1);
     assert_eq!(s1_budget(8 * MIB, 1024 * MIB), 512 * MIB);
     // An initial budget above the rule wins.
-    assert_eq!(s1_budget(100 * MIB, 80 * MIB), 100 * MIB);
+    assert_eq!(s1_budget(200 * MIB, 80 * MIB), 200 * MIB);
     // The bound, on a sweep of old sizes (1 MiB to 1 GiB, odd steps).
     for old in (MIB..=1024 * MIB).step_by(MIB + 4_099) {
         let b = s1_budget(PAGE_SIZE, old);
-        assert!(b <= MAX_S1_BUDGET.max(old / 2), "old {old}: budget {b}");
-        if old <= MAX_S1_BUDGET {
+        assert!(b <= S1_GROW_CAP.max(old / 2), "old {old}: budget {b}");
+        if old <= S1_KNEE {
             assert_eq!(b, old, "old {old}");
+        } else if old <= 288 * MIB {
+            let grow = (S1_KNEE + 5 * (old - S1_KNEE)).min(S1_GROW_CAP);
+            assert_eq!(b, grow, "old {old}");
         } else {
-            assert!(b >= old / 2 && b >= MAX_S1_BUDGET, "old {old}: budget {b}");
+            assert_eq!(b, old / 2, "old {old}");
         }
     }
 }

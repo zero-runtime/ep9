@@ -1,0 +1,1403 @@
+diff --git a/crates/ep9_heap/Cargo.toml b/crates/ep9_heap/Cargo.toml
+index a9a0bd44..336fcfdd 100644
+--- a/crates/ep9_heap/Cargo.toml
++++ b/crates/ep9_heap/Cargo.toml
+@@ -11,6 +11,10 @@ ep9_value = { path = "../ep9_value" }
+ # The cage (H7), stack bounds and spill trampolines for the conservative scan (H10).
+ ep9_platform = { path = "../ep9_platform" }
+ 
++[features]
++# K2 census (scratch count build; never committed).
++census = []
++
+ [lints]
+ workspace = true
+ 
+diff --git a/crates/ep9_heap/src/heap.rs b/crates/ep9_heap/src/heap.rs
+index a495d323..d93946e1 100644
+--- a/crates/ep9_heap/src/heap.rs
++++ b/crates/ep9_heap/src/heap.rs
+@@ -706,6 +706,8 @@ impl Heap {
+         if kind_size != DYNAMIC_SIZE && kind_size != size {
+             return Err(AllocError::WrongSize(kind));
+         }
++        #[cfg(feature = "census")]
++        crate::census::note(kind.get(), size);
+         if size <= MAX_SMALL_SIZE {
+             let cur = self.hot.cursor.get();
+             let end = cur.wrapping_add(size);
+@@ -749,6 +751,8 @@ impl Heap {
+             }
+             size
+         };
++        #[cfg(feature = "census")]
++        crate::census::note(kind.get(), size);
+         let mut collected = self.collect_if_triggered(size);
+         let mut swept = false;
+         let mut asked = false;
+diff --git a/crates/ep9_heap/src/lib.rs b/crates/ep9_heap/src/lib.rs
+index 20f78219..26fd2fd6 100644
+--- a/crates/ep9_heap/src/lib.rs
++++ b/crates/ep9_heap/src/lib.rs
+@@ -65,3 +65,21 @@ pub use verify::{
+ 
+ #[cfg(test)]
+ mod tests;
++
++/// K2 census (scratch count build; never committed): cells and bytes allocated per kind.
++#[cfg(feature = "census")]
++pub mod census {
++    use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
++    static N: [AtomicU64; 256] = [const { AtomicU64::new(0) }; 256];
++    static B: [AtomicU64; 256] = [const { AtomicU64::new(0) }; 256];
++    /// One cell of kind `k` with `size` bytes.
++    #[inline(never)]
++    pub fn note(k: u8, size: usize) {
++        N[k as usize].fetch_add(1, Relaxed);
++        B[k as usize].fetch_add(size as u64, Relaxed);
++    }
++    /// (cells, bytes) of kind `k`.
++    pub fn get(k: usize) -> (u64, u64) {
++        (N[k].load(Relaxed), B[k].load(Relaxed))
++    }
++}
+diff --git a/crates/ep9_vm/Cargo.toml b/crates/ep9_vm/Cargo.toml
+index aced6870..043d50c3 100644
+--- a/crates/ep9_vm/Cargo.toml
++++ b/crates/ep9_vm/Cargo.toml
+@@ -36,6 +36,8 @@ spike-native = ["jit"]
+ # Inline-cache hit and miss counters (H16), for reports. Off in every shipped build; never in the
+ # ep9 graph (.github/scripts/dep-guards.sh check 11).
+ ic-stats = []
++# K2 census (scratch count build; never committed).
++census = ["ep9_heap/census"]
+ # FASTDIFF hit counters (route P0-FASTHITS): each Switch human fast path counts the times it is
+ # taken, so the FASTDIFF report shows that it ran. Only the ep9_builtins dev-dependency turns it
+ # on (the FASTDIFF test); never in the ep9 graph (.github/scripts/dep-guards.sh check 11).
+diff --git a/crates/ep9_vm/src/ic.rs b/crates/ep9_vm/src/ic.rs
+index 8a9fa040..4e8eedeb 100644
+--- a/crates/ep9_vm/src/ic.rs
++++ b/crates/ep9_vm/src/ic.rs
+@@ -500,6 +500,16 @@ pub(crate) fn load(rt: &Runtime, fi: &FunctionInfo, o: u64, slot: u32, name: u32
+ fn load_with(rt: &Runtime, o: u64, id: u32, key: impl Fn() -> u64, h: u64) -> Option<u64> {
+     if is_i32(h) {
+         let x = int32_of(h);
++        #[cfg(feature = "census")]
++        crate::census::load_field(
++            o,
++            match x & smi::KIND_MASK {
++                smi::FIELD_IN_OBJECT => 0,
++                smi::FIELD_OUT_OF_LINE => 1,
++                _ => 2,
++            },
++            (x >> smi::SHIFT) as usize,
++        );
+         return match x & smi::KIND_MASK {
+             smi::FIELD_IN_OBJECT | smi::FIELD_OUT_OF_LINE => read_field(o, x),
+             smi::ARRAY_LENGTH => Some(rd(cell(o), arr::LENGTH)),
+@@ -524,6 +534,8 @@ fn load_with(rt: &Runtime, o: u64, id: u32, key: impl Fn() -> u64, h: u64) -> Op
+     if id == 0 && !kind::is_string(o) {
+         return None;
+     }
++    #[cfg(feature = "census")]
++    crate::census::load(if k == hk::MISSING { 4 } else { 3 });
+     if k == hk::MISSING {
+         #[cfg(debug_assertions)]
+         cross_check(rt, o, key(), c);
+@@ -636,6 +648,8 @@ fn store_with<const CHECK_EPOCH: bool>(
+     // An add case is made for a fast, extensible shape that is not in prototype mode
+     // ([`store_pre`]), so `o` is extensible and its change invalidates no validity cell.
+     debug_assert!(shape::is_extensible(shape::shape_of(o)) && !shape::is_prototype_object(o));
++    #[cfg(feature = "census")]
++    crate::census::add(rt, o, target, true, false);
+     shape::install_keep(rt, o, target);
+     true
+ }
+diff --git a/crates/ep9_vm/src/interp/ops.rs b/crates/ep9_vm/src/interp/ops.rs
+index be56187e..3b670a5a 100644
+--- a/crates/ep9_vm/src/interp/ops.rs
++++ b/crates/ep9_vm/src/interp/ops.rs
+@@ -1216,6 +1216,8 @@ op!(SetKeyedProperty(st, object: R, key: R, s: FSlot) {
+ } cold {
+     let (o, k, v) = (st.reg(object), st.reg(key), st.acc);
+     profile::record_keyed_cold(st, s, o, k);
++    #[cfg(feature = "census")]
++    let _g = crate::census::enter(crate::census::ctx::KEYED_SET_COLD);
+     prop_cold(st, PropOp::SetKeyed, o, k, v)
+ });
+ op!(DefineKeyedOwnProperty(st, object: R, key: R, flags: u8, s: FSlot) {
+diff --git a/crates/ep9_vm/src/interp/slow/property.rs b/crates/ep9_vm/src/interp/slow/property.rs
+index e592dc2a..96dc377f 100644
+--- a/crates/ep9_vm/src/interp/slow/property.rs
++++ b/crates/ep9_vm/src/interp/slow/property.rs
+@@ -327,6 +327,8 @@ pub(crate) fn get_named(
+     key: u64,
+     slot: u32,
+ ) -> u64 {
++    #[cfg(feature = "census")]
++    let _g = crate::census::enter(crate::census::ctx::NAMED_GET_MISS);
+     enter(cx, fp, pc);
+     let rt = cx.rt();
+     let vector = feedback::vector(info(fp));
+@@ -422,6 +424,8 @@ pub(crate) fn set_named(
+     slot: u32,
+     define: bool,
+ ) -> u64 {
++    #[cfg(feature = "census")]
++    let _g = crate::census::enter(crate::census::ctx::NAMED_SET_MISS);
+     if ic::handler_mega_store(cx.rt(), info(fp), o, slot, key, v, define) {
+         return v;
+     }
+diff --git a/crates/ep9_vm/src/keyed_ic.rs b/crates/ep9_vm/src/keyed_ic.rs
+index 945accb5..28cd37a8 100644
+--- a/crates/ep9_vm/src/keyed_ic.rs
++++ b/crates/ep9_vm/src/keyed_ic.rs
+@@ -720,6 +720,10 @@ mod view {
+ /// jump to the cold handler and its record, as before TA-2.
+ #[inline(always)]
+ pub(crate) fn cold_get(st: &mut St<'_>, o: u64, k: u64) -> Done {
++    #[cfg(feature = "census")]
++    crate::census::keyed_get(o, k);
++    #[cfg(feature = "census")]
++    let _g = crate::census::enter(crate::census::ctx::KEYED_GET_COLD);
+     if let Some(v) = view::get(o, k) {
+         st.acc = v;
+         return Done::Next;
+diff --git a/crates/ep9_vm/src/lib.rs b/crates/ep9_vm/src/lib.rs
+index 1be5e024..b0e2241a 100644
+--- a/crates/ep9_vm/src/lib.rs
++++ b/crates/ep9_vm/src/lib.rs
+@@ -67,6 +67,8 @@ mod arguments;
+ mod atoms;
+ mod bound;
+ mod builtins;
++#[cfg(feature = "census")]
++mod census;
+ mod call;
+ mod compiler;
+ mod construct_ic;
+diff --git a/crates/ep9_vm/src/natives.rs b/crates/ep9_vm/src/natives.rs
+index 302ee1e9..a31a480b 100644
+--- a/crates/ep9_vm/src/natives.rs
++++ b/crates/ep9_vm/src/natives.rs
+@@ -865,6 +865,8 @@ pub(crate) fn array_constructor<'s>(
+     args: Args<'s>,
+     nt: Local<'s>,
+ ) -> JsResult<Local<'s>> {
++    #[cfg(feature = "census")]
++    crate::census::array_ctor(args.len(), nt.as_object().is_some());
+     // 2. Let proto be ? GetPrototypeFromConstructor(newTarget, "%Array.prototype%"). GC point
+     //    (a getter may run): `proto` then lives in a Rust local.
+     let proto = match nt.as_object() {
+diff --git a/crates/ep9_vm/src/object.rs b/crates/ep9_vm/src/object.rs
+index 4ecee16b..879d1d7a 100644
+--- a/crates/ep9_vm/src/object.rs
++++ b/crates/ep9_vm/src/object.rs
+@@ -1313,6 +1313,8 @@ fn store_element_slow(rt: &Runtime, o: u64, i: u32, v: u64, from: u8, to: u8) {
+     } else {
+         // GC point: `o` and `v` live in Rust locals.
+         let new_cap = (i as usize + 1).max(cap * 2).max(4);
++        #[cfg(feature = "census")]
++        crate::census::elem_grow(cap);
+         let n = if doubles {
+             crate::elements::new_double_cell(rt, new_cap)
+         } else {
+diff --git a/crates/ep9_vm/src/property.rs b/crates/ep9_vm/src/property.rs
+index 81eea8f6..f54fb2e6 100644
+--- a/crates/ep9_vm/src/property.rs
++++ b/crates/ep9_vm/src/property.rs
+@@ -1311,6 +1311,8 @@ fn is_has_instance_intrinsic(rt: &Runtime, h: u64) -> bool {
+ /// skipped), as a new array. A routed kind lists its keys through `[[OwnPropertyKeys]]` and
+ /// [`for_in_attrs`] (a proxy's key is a candidate; [`for_in_has`] filters it). GC point.
+ pub(crate) fn for_in_keys(cx: &mut Cx, o: u64) -> Res<u64> {
++    #[cfg(feature = "census")]
++    let _g = crate::census::enter(crate::census::ctx::FOR_IN_KEYS);
+     let rt = cx.rt();
+     let keys = object::new_array(rt, 0);
+     if !is_object(o) {
+@@ -1441,6 +1443,8 @@ pub(crate) fn for_in_keys(cx: &mut Cx, o: u64) -> Res<u64> {
+         cur = p;
+     }
+     std::hint::black_box(kept);
++    #[cfg(feature = "census")]
++    crate::census::for_in_keys(object::array_len(keys));
+     Ok(keys)
+ }
+ 
+@@ -2309,6 +2313,10 @@ fn for_in_attrs(cx: &mut Cx, o: u64, k: u64) -> Res<Option<i32>> {
+ /// GC point at a proxy only.
+ pub(crate) fn for_in_has(cx: &mut Cx, o: u64, k: u64) -> Res<bool> {
+     debug_assert!(is_object(o));
++    #[cfg(feature = "census")]
++    crate::census::for_in_has();
++    #[cfg(feature = "census")]
++    let _g = crate::census::enter(crate::census::ctx::FOR_IN_HAS);
+     let key = to_property_key(cx, k)?;
+     let how = key::probe(key);
+     let mut cur = o;
+diff --git a/crates/ep9_vm/src/props.rs b/crates/ep9_vm/src/props.rs
+index 9a5b67e3..9d2edbde 100644
+--- a/crates/ep9_vm/src/props.rs
++++ b/crates/ep9_vm/src/props.rs
+@@ -252,14 +252,15 @@ pub(crate) fn reserve_field(rt: &Runtime, o: u64, s: u64, f: usize) {
+     if f < cap {
+         return;
+     }
+-    reserve_field_slots(rt, o, f - cap + 1);
++    reserve_field_slots(rt, o, f - cap + 1, s, f);
+ }
+ 
+ /// The out-of-line part of [`reserve_field`]: makes the SLOTS cell of `o` hold at least `need`
+ /// fields (a new cell if it is too small). GC point.
+ #[cold]
+ #[inline(never)]
+-fn reserve_field_slots(rt: &Runtime, o: u64, need: usize) {
++#[allow(unused_variables)]
++fn reserve_field_slots(rt: &Runtime, o: u64, need: usize, s: u64, f: usize) {
+     let old = rd(cell(o), obj::SLOTS);
+     let have = if old == UNDEFINED {
+         0
+@@ -270,6 +271,8 @@ fn reserve_field_slots(rt: &Runtime, o: u64, need: usize) {
+         return;
+     }
+     let n = need.max(2 * have).max(MIN_SLOTS);
++    #[cfg(feature = "census")]
++    crate::census::slots(rt, o, s, f, have, n);
+     // GC point: `o` and `old` live in Rust locals.
+     let c = rt.alloc(kind::SLOTS, slf::DATA + 8 * n);
+     init(c, slf::CAPACITY, int32_bits(n as i32));
+@@ -300,12 +303,14 @@ enum Hit {
+ /// The own property `key` of `o`, with its probe classified once: where it is, its value and
+ /// its attributes. Not a GC point.
+ #[inline]
++#[track_caller]
+ fn find_own(o: u64, key: u64, how: Probe) -> Option<(Hit, u64, i32)> {
+     find_own_in(o, shape::shape_of(o), key, how)
+ }
+ 
+ /// [`find_own`] with the shape `s` of `o` already loaded.
+ #[inline(always)]
++#[track_caller]
+ fn find_own_in(o: u64, s: u64, key: u64, how: Probe) -> Option<(Hit, u64, i32)> {
+     if shape::is_dictionary(s) {
+         let (p, e) = dict_find(o, key, how)?;
+@@ -319,6 +324,7 @@ fn find_own_in(o: u64, s: u64, key: u64, how: Probe) -> Option<(Hit, u64, i32)>
+ /// An own property of `o` with a probe the caller classified: (value, attributes). Not a GC
+ /// point.
+ #[inline]
++#[track_caller]
+ pub(crate) fn own_get_with(o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
+     find_own(o, key, how).map(|(_, v, a)| (v, a))
+ }
+@@ -328,6 +334,7 @@ pub(crate) fn own_get_with(o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
+ /// (`attr::ACCESSOR`) the value is its ACCESSOR_PAIR (`accessor.rs`). Not a GC point. Always
+ /// inlined: the `[[Get]]` walk is hot until the ICs.
+ #[inline(always)]
++#[track_caller]
+ pub(crate) fn own_value_or_proto(o: u64, key: u64, how: Probe) -> Result<(u64, i32), u64> {
+     let s = shape::shape_of(o);
+     match find_own_in(o, s, key, how) {
+@@ -337,12 +344,14 @@ pub(crate) fn own_value_or_proto(o: u64, key: u64, how: Probe) -> Result<(u64, i
+ }
+ 
+ /// An own named property: (value, attributes). Not a GC point.
++#[track_caller]
+ pub(crate) fn own_get(o: u64, key: u64) -> Option<(u64, i32)> {
+     own_get_with(o, key, key::probe(key))
+ }
+ 
+ /// Writes an existing own property's value (attributes are not checked). False if `o` has
+ /// no such property. Not a GC point.
++#[track_caller]
+ pub(crate) fn own_replace(rt: &Runtime, o: u64, key: u64, v: u64) -> bool {
+     own_replace_with(rt, o, key, key::probe(key), v)
+ }
+@@ -352,6 +361,7 @@ pub(crate) fn own_replace(rt: &Runtime, o: u64, key: u64, v: u64) -> bool {
+ /// it gives `Some(false)` too), `Some(true)` once stored. Not a GC point. Always inlined: the
+ /// `[[Set]]` walk is hot until the ICs.
+ #[inline(always)]
++#[track_caller]
+ pub(crate) fn own_store_if_writable(
+     rt: &Runtime,
+     o: u64,
+@@ -372,6 +382,7 @@ pub(crate) fn own_store_if_writable(
+ 
+ /// [`own_replace`] with a classified probe. The property must be a data property (an
+ /// accessor's pair is replaced through [`own_define`]).
++#[track_caller]
+ pub(crate) fn own_replace_with(rt: &Runtime, o: u64, key: u64, how: Probe, v: u64) -> bool {
+     let found = find_own(o, key, how);
+     debug_assert!(
+@@ -399,6 +410,7 @@ pub(crate) fn own_replace_with(rt: &Runtime, o: u64, key: u64, how: Probe, v: u6
+ /// key move a fast object to dictionary mode (OM-10). A new pair in place of an accessor's
+ /// old one is a structural change (`accessor.rs`): it bumps the epoch of a prototype. GC
+ /// point.
++#[track_caller]
+ pub(crate) fn own_define(rt: &Runtime, o: u64, key: u64, v: u64, attrs: i32) {
+     debug_assert!(object::is_object(o));
+     let key = key::intern_key(rt, key);
+@@ -449,8 +461,12 @@ pub(crate) fn own_add(rt: &Runtime, o: u64, key: u64, v: u64, attrs: i32) {
+     if !shape::is_dictionary(s) {
+         // GC points: `o`, `key`, `v` and `child` live in Rust locals (CSS); `child` is also
+         // a (weak) transition of `s`, or a unique shape nothing else holds yet.
++        #[cfg(feature = "census")]
++        let made = crate::census::shapes_made();
+         match shape::add_with(rt, s, key, attrs, crate::field_rep::initial(v)) {
+             Added::Shape(child) => {
++                #[cfg(feature = "census")]
++                crate::census::add(rt, o, child, false, crate::census::shapes_made() > made);
+                 let f = shape::count(child) - 1;
+                 reserve_field(rt, o, child, f);
+                 field_init(rt, o, child, f, v);
+@@ -468,6 +484,7 @@ pub(crate) fn own_add(rt: &Runtime, o: u64, key: u64, v: u64, attrs: i32) {
+ /// Removes an own property. Returns its attributes, or `None` if it was absent. Deleting the
+ /// last-added property of a fast object goes back to the parent shape; any other delete
+ /// moves it to dictionary mode first (OM-10). GC point.
++#[track_caller]
+ pub(crate) fn own_delete(rt: &Runtime, o: u64, key: u64) -> Option<i32> {
+     let how = key::probe(key);
+     let (hit, _, attrs) = find_own(o, key, how)?;
+@@ -503,6 +520,8 @@ pub(crate) fn to_dictionary(rt: &Runtime, o: u64) {
+     if shape::is_dictionary(s) {
+         return;
+     }
++    #[cfg(feature = "census")]
++    crate::census::to_dictionary();
+     // GC points first: the shape, then the table (filled with initializing stores, E2).
+     let ds = shape::dictionary_shape_of(rt, s, true);
+     let n = shape::count(s);
+diff --git a/crates/ep9_vm/src/shape.rs b/crates/ep9_vm/src/shape.rs
+index 36984f34..392efba6 100644
+--- a/crates/ep9_vm/src/shape.rs
++++ b/crates/ep9_vm/src/shape.rs
+@@ -833,6 +833,7 @@ pub(crate) fn set_field_bits_in_family(
+ 
+ /// The own property `key` of objects with `shape`: its descriptor index and details. Not a GC
+ /// point. A dictionary shape has no descriptors (the object's PROPS table holds them).
++#[track_caller]
+ pub(crate) fn lookup(rt: &Runtime, shape: u64, key: u64) -> Option<Found> {
+     debug_assert!(is_shape(shape));
+     if count_of(cell(shape)) == 0 {
+@@ -849,7 +850,53 @@ thread_local! {
+ 
+ /// [`lookup`] with a probe the caller classified once ([`key::probe`]) for a walk over
+ /// several shapes. Not a GC point.
++#[track_caller]
+ pub(crate) fn lookup_with(shape: u64, key: u64, how: Probe) -> Option<Found> {
++    #[cfg(feature = "census")]
++    {
++        let site = core::panic::Location::caller();
++        let r = lookup_with_raw(shape, key, how);
++        let (n, work, hashed) = census_work(shape, key, how, r.as_ref().map(|f| f.index));
++        crate::census::lookup(site, shape, key, n, work, r.is_some(), hashed);
++        r
++    }
++    #[cfg(not(feature = "census"))]
++    lookup_with_raw(shape, key, how)
++}
++
++/// K2 census: (keys, compares or probes, hashed) of one [`lookup_with`].
++#[cfg(feature = "census")]
++fn census_work(shape: u64, key: u64, how: Probe, found: Option<usize>) -> (usize, u64, bool) {
++    let s = cell(shape);
++    let n = count_of(s);
++    if n == 0 {
++        return (0, 0, false);
++    }
++    let d = cell(rd(s, shf::DESCRIPTORS));
++    let ix = if n <= LINEAR_MAX { UNDEFINED } else { rd(d, dsc::INDEX) };
++    if ix == UNDEFINED {
++        return (n, found.map_or(n, |i| i + 1) as u64, false);
++    }
++    let ix = cell(ix);
++    let mask = rd_i32(ix, dix::BUCKETS) as usize - 1;
++    let mut b = hash_of(key) as usize & mask;
++    let mut probes = 0u64;
++    loop {
++        probes += 1;
++        let e = rd(ix, dix::DATA + 8 * b);
++        if e == UNDEFINED {
++            return (n, probes, true);
++        }
++        let i = int32_of(e) as usize;
++        if i < n && same_key(d_key(d, i), key, how) {
++            return (n, probes, true);
++        }
++        b = (b + 1) & mask;
++    }
++}
++
++#[inline(always)]
++fn lookup_with_raw(shape: u64, key: u64, how: Probe) -> Option<Found> {
+     debug_assert!(is_shape(shape));
+     #[cfg(test)]
+     SCANS.with(|c| {
+@@ -1191,6 +1238,8 @@ fn new_shape(rt: &Runtime, proto: u64, parent: u64, d: u64, counts: u64, flags:
+         proto == NULL || is_prototype_object(proto),
+         "a shape whose proto {proto:#x} is not in prototype mode"
+     );
++    #[cfg(feature = "census")]
++    crate::census::new_shape();
+     let s = match rt.heap.alloc_shape(kind::SHAPE, shf::SIZE) {
+         Ok(c) => c,
+         Err(e) => panic!("ep9: shape allocation failed: {e:?}"),
+diff --git a/crates/ep9_vm/src/slack.rs b/crates/ep9_vm/src/slack.rs
+index 9410bc4a..cd457dde 100644
+--- a/crates/ep9_vm/src/slack.rs
++++ b/crates/ep9_vm/src/slack.rs
+@@ -332,3 +332,202 @@ fn first_capacity(
+     }
+     Some((n + extra.min(usize::from(GENEROUS))).min(obj::MAX_INOBJECT))
+ }
++
++/// K2 census (scratch; never committed): the constructor chain of a prototype, as the
++/// f-design L1 CTOR-FIT rule would read it.
++#[cfg(feature = "census")]
++pub(crate) struct Chain {
++    /// The name of `proto.constructor` (or "(none)").
++    pub name: String,
++    /// `proto.constructor` is a bytecode constructor that is not derived.
++    pub bytecode: bool,
++    /// The distinct names (key bits) of the chain's `this.<name> =` stores.
++    pub names: Vec<u64>,
++    /// A scan of the chain saw `this` leave the frame (today: no count).
++    pub escaped: bool,
++    /// The non-callable data properties of `proto` that the chain does not store.
++    pub extra: usize,
++    /// Chain levels read.
++    pub levels: u32,
++    /// Names of the first level only.
++    pub own_n: usize,
++}
++
++/// [`this_store_names`] in the escape mode of f-design L1: at a leave of `this`, mark
++/// `escaped` and go on. Returns (names, escaped).
++#[cfg(feature = "census")]
++fn this_store_names_esc(code: &[u8], names: &mut [u32; MAX_NAMES]) -> (usize, bool) {
++    let mut h = Holders::default();
++    let mut n = 0;
++    let mut esc = false;
++    for insn in Instructions::new(code) {
++        let Ok(insn) = insn else { break };
++        let op = insn.opcode;
++        let info = op.info();
++        match op {
++            Opcode::Ldar => {
++                h.acc = h.holds(insn.register(0));
++                continue;
++            }
++            Opcode::Star => {
++                if !h.set(insn.register(0), h.acc) {
++                    esc = true;
++                }
++                continue;
++            }
++            Opcode::Mov => {
++                let on = h.holds(insn.register(0));
++                if !h.set(insn.register(1), on) {
++                    esc = true;
++                }
++                continue;
++            }
++            Opcode::Return => continue,
++            Opcode::SetNamedProperty | Opcode::DefineNamedOwnProperty => {
++                if h.acc {
++                    esc = true;
++                }
++                if h.holds(insn.register(0)) {
++                    let k = insn.unsigned(1);
++                    if !names[..n].contains(&k) && n < MAX_NAMES {
++                        names[n] = k;
++                        n += 1;
++                    }
++                }
++                h.acc = false;
++                continue;
++            }
++            Opcode::GetNamedProperty => {
++                h.acc = false;
++                continue;
++            }
++            Opcode::GetNamedPropertyStar => {
++                h.acc = false;
++                let _ = h.set(insn.register(3), false);
++                continue;
++            }
++            _ => {}
++        }
++        if h.acc && info.acc.reads() {
++            esc = true;
++        }
++        let count = insn.operand_count();
++        let mut i = 0;
++        while i < count {
++            let k = insn.operand_kind(i);
++            match k {
++                OperandKind::Reg | OperandKind::RegInOut => {
++                    if h.holds(insn.register(i)) {
++                        esc = true;
++                    }
++                }
++                OperandKind::RegOut => {
++                    let _ = h.set(insn.register(i), false);
++                }
++                OperandKind::RegList | OperandKind::RegOutList => {
++                    let first = insn.register(i).to_operand();
++                    let len = insn.unsigned(i + 1) as i32;
++                    for j in 0..len {
++                        let r = Register::from_operand(first + j);
++                        if k == OperandKind::RegList && h.holds(r) {
++                            esc = true;
++                        }
++                        if k == OperandKind::RegOutList {
++                            let _ = h.set(r, false);
++                        }
++                    }
++                    i += 1;
++                }
++                OperandKind::RegPair | OperandKind::RegOutPair | OperandKind::RegOutTriple => {
++                    let first = insn.register(i).to_operand();
++                    let len = if k == OperandKind::RegOutTriple { 3 } else { 2 };
++                    for j in 0..len {
++                        let r = Register::from_operand(first + j);
++                        if k == OperandKind::RegPair && h.holds(r) {
++                            esc = true;
++                        }
++                        if k != OperandKind::RegPair {
++                            let _ = h.set(r, false);
++                        }
++                    }
++                }
++                _ => {}
++            }
++            i += 1;
++        }
++        if info.acc.writes() {
++            h.acc = false;
++        }
++    }
++    (n, esc)
++}
++
++/// The constructor chain of `proto` (f-design L1 (2)): walk the [[Prototype]] chain from
++/// `proto`; at each object read the own data property `constructor`; a bytecode constructor
++/// that is not derived adds its distinct names. Stops at a host function, a dictionary-mode
++/// object, an accessor, or 8 levels. Not a GC point.
++#[cfg(feature = "census")]
++pub(crate) fn census_chain(rt: &Runtime, proto: u64) -> Chain {
++    let mut ch = Chain {
++        name: String::from("(none)"),
++        bytecode: false,
++        names: Vec::new(),
++        escaped: false,
++        extra: 0,
++        levels: 0,
++        own_n: 0,
++    };
++    let ctor_key = rt.atom(crate::runtime::Atom::Constructor);
++    let mut cur = proto;
++    let mut first = true;
++    while ch.levels < 8 && kind::is_object(cur) {
++        let s = shape::shape_of(cur);
++        if shape::is_dictionary(s) {
++            break;
++        }
++        let Some((c, _)) = crate::props::own_get(cur, ctor_key) else {
++            break;
++        };
++        if !object::is_function(c) {
++            break;
++        }
++        let fi = object::function_info(c);
++        if first {
++            ch.name = fi.name.clone();
++        }
++        let need = fi_flags::BYTECODE | fi_flags::CONSTRUCTOR;
++        if fi.flags & need != need || fi.flags & fi_flags::DERIVED != 0 || fi.code.is_null() {
++            break;
++        }
++        if first {
++            ch.bytecode = true;
++        }
++        // SAFETY: as in `first_capacity`.
++        let code = unsafe { core::slice::from_raw_parts(fi.code, fi.code_len as usize) };
++        let mut names = [0u32; MAX_NAMES];
++        let (n, esc) = this_store_names_esc(code, &mut names);
++        ch.escaped |= esc;
++        for &k in &names[..n] {
++            // SAFETY: `k` is a verified String constant index of this function.
++            let key = unsafe { (*fi.consts.add(k as usize)).bits() };
++            if !ch.names.contains(&key) {
++                ch.names.push(key);
++            }
++        }
++        if first {
++            ch.own_n = ch.names.len();
++        }
++        ch.levels += 1;
++        first = false;
++        cur = shape::proto(s);
++    }
++    if ch.bytecode {
++        let ps = shape::shape_of(proto);
++        if !shape::is_dictionary(ps) {
++            ch.extra = (0..shape::count(ps))
++                .filter(|&i| is_proto_field(proto, ps, i) && !ch.names.contains(&shape::key_at(ps, i)))
++                .count();
++        }
++    }
++    ch
++}
+diff --git a/crates/ep9_vm/src/census.rs b/crates/ep9_vm/src/census.rs
+new file mode 100644
+index 00000000..4ef25946
+--- /dev/null
++++ b/crates/ep9_vm/src/census.rs
+@@ -0,0 +1,747 @@
++//! K2 CENSUS + SHAPE-LOOKUP-COUNT (scratch count build, feature `census`; never committed).
++//! Counts per thread; prints `ep9 census: ...` lines to stderr when the isolate thread ends.
++
++use core::cell::{Cell, RefCell};
++use std::collections::{BTreeMap, HashMap};
++use std::panic::Location;
++
++use crate::runtime::Runtime;
++use crate::shape;
++use crate::slack::{self, Chain};
++
++/// Where the VM is when a count runs (the caller split).
++pub(crate) mod ctx {
++    pub(crate) const OTHER: u8 = 0;
++    pub(crate) const NAMED_GET_MISS: u8 = 1;
++    pub(crate) const NAMED_SET_MISS: u8 = 2;
++    pub(crate) const KEYED_GET_COLD: u8 = 3;
++    pub(crate) const KEYED_SET_COLD: u8 = 4;
++    pub(crate) const FOR_IN_KEYS: u8 = 5;
++    pub(crate) const FOR_IN_HAS: u8 = 6;
++    pub(crate) const N: usize = 7;
++    pub(crate) const NAMES: [&str; N] = [
++        "other",
++        "named-get-miss",
++        "named-set-miss",
++        "keyed-get-cold",
++        "keyed-set-cold",
++        "for-in-keys",
++        "for-in-has",
++    ];
++}
++
++/// Restores the old context when it drops.
++pub(crate) struct Guard(u8);
++
++impl Drop for Guard {
++    fn drop(&mut self) {
++        CTX.with(|c| c.set(self.0));
++    }
++}
++
++/// Sets the context for the life of the guard.
++pub(crate) fn enter(c: u8) -> Guard {
++    Guard(CTX.with(|x| x.replace(c)))
++}
++
++fn cur() -> u8 {
++    CTX.with(Cell::get)
++}
++
++thread_local! {
++    static CTX: Cell<u8> = const { Cell::new(0) };
++    /// Census code runs: do not count its own lookups.
++    static QUIET: Cell<bool> = const { Cell::new(false) };
++    static C: Counters = Counters::default();
++}
++
++#[derive(Default)]
++struct SiteCache {
++    calls: u64,
++    work: u64,
++    lru: Vec<(u64, u64)>,
++    hit: [u64; 3],
++    hit_work: [u64; 3],
++}
++
++struct Class {
++    chain: Chain,
++    /// Adds of a field (all paths) to an OBJECT of this class.
++    adds: u64,
++    /// Adds with field index 0 (instances that got at least 1 field).
++    first_adds: u64,
++    /// Adds of a name that the chain scan did not find, by extra index 1..=5 (5 = 5+).
++    extra: [u64; 5],
++    extra_names: HashMap<u64, (String, u64)>,
++    slots_cells: u64,
++    slots_bytes: u64,
++    /// SLOTS growths covered by the chain rule at ESCAPE_SLACK 0, 1, 2.
++    covered: [u64; 3],
++    /// The largest field index seen.
++    max_f: usize,
++    /// The in-object capacity of the shapes seen (today).
++    today_cap: BTreeMap<u8, u64>,
++    /// Adds by field index.
++    by_f: Vec<u64>,
++    /// Named-load hits by field index: [in-object, out of line].
++    loads_by_f: Vec<[u64; 2]>,
++    /// obj::FIXED + 8 * fixed_count of the class's objects.
++    obj_base: usize,
++}
++
++#[derive(Default)]
++struct Counters {
++    classes: RefCell<HashMap<u64, Class>>,
++    // SLOTS (props::reserve_field_slots)
++    slots_by_new_cap: RefCell<BTreeMap<usize, u64>>,
++    slots_by_old_cap: RefCell<BTreeMap<usize, u64>>,
++    slots_n: Cell<u64>,
++    slots_non_object: Cell<u64>,
++    // adds
++    adds_own: Cell<u64>,
++    adds_ic: Cell<u64>,
++    adds_by_ctx: RefCell<[u64; ctx::N]>,
++    adds_new_shape_by_ctx: RefCell<[u64; ctx::N]>,
++    /// Keyed-set adds whose out-of-object count passes max(12, capacity) (the TABLE-MODE line).
++    keyed_adds_past_line: Cell<u64>,
++    keyed_adds_past_line_new_shape: Cell<u64>,
++    to_dictionary_by_ctx: RefCell<[u64; ctx::N]>,
++    // shapes
++    shapes_by_ctx: RefCell<[u64; ctx::N]>,
++    // named loads (ic::load_with answered)
++    load_in_object: Cell<u64>,
++    load_out_of_line: Cell<u64>,
++    load_len: Cell<u64>,
++    load_proto: Cell<u64>,
++    load_missing: Cell<u64>,
++    load_no_class: Cell<u64>,
++    // keyed get cold
++    keyed_get_cold: Cell<u64>,
++    keyed_get_on_dict: Cell<u64>,
++    keyed_get_past_line: Cell<u64>,
++    keyed_get_string_key: Cell<u64>,
++    // for-in
++    for_in_keys_calls: Cell<u64>,
++    for_in_keys_keys: Cell<u64>,
++    for_in_keys_hist: RefCell<BTreeMap<u32, u64>>,
++    for_in_has_calls: Cell<u64>,
++    // Array constructor: [argc 0, 1, 2+][call, construct]
++    array_ctor: RefCell<[[u64; 2]; 3]>,
++    // store_element_slow growths by old capacity
++    elem_grow_by_old: RefCell<BTreeMap<usize, u64>>,
++    elem_grow_copied: Cell<u64>,
++    // lookup_with
++    lk_calls: Cell<u64>,
++    lk_found: Cell<u64>,
++    lk_work: Cell<u64>,
++    lk_linear: Cell<u64>,
++    lk_hashed: Cell<u64>,
++    lk_empty: Cell<u64>,
++    lk_by_ctx: RefCell<[[u64; 2]; ctx::N]>,
++    lk_by_n: RefCell<BTreeMap<usize, u64>>,
++    lk_sites: RefCell<HashMap<usize, (&'static Location<'static>, SiteCache)>>,
++    lk_global: RefCell<[Vec<(u64, u64)>; 2]>,
++    lk_global_hit: RefCell<[u64; 2]>,
++    lk_global_hit_work: RefCell<[u64; 2]>,
++    lk_global_ctx_hit: RefCell<[[u64; ctx::N]; 2]>,
++    lk_ctx_work: RefCell<[u64; ctx::N]>,
++}
++
++const GLOBAL: [usize; 2] = [256, 1024];
++const WAYS: [usize; 3] = [1, 2, 4];
++
++fn quiet<R>(f: impl FnOnce() -> R) -> R {
++    let old = QUIET.with(|q| q.replace(true));
++    let r = f();
++    QUIET.with(|q| q.set(old));
++    r
++}
++
++fn inc(c: &Cell<u64>) {
++    c.set(c.get() + 1);
++}
++
++/// The class of a plain object (kind OBJECT, not a prototype) with shape `s`.
++fn with_class<R>(rt: &Runtime, s: u64, f: impl FnOnce(&mut Class) -> R) -> R {
++    let proto = shape::proto(s);
++    C.with(|c| {
++        let mut m = c.classes.borrow_mut();
++        let cl = m.entry(proto).or_insert_with(|| Class {
++            chain: quiet(|| slack::census_chain(rt, proto)),
++            adds: 0,
++            first_adds: 0,
++            extra: [0; 5],
++            extra_names: HashMap::new(),
++            slots_cells: 0,
++            slots_bytes: 0,
++            covered: [0; 3],
++            max_f: 0,
++            today_cap: BTreeMap::new(),
++            by_f: Vec::new(),
++            loads_by_f: Vec::new(),
++            obj_base: {
++                let (_, k) = shape::field_layout(s);
++                crate::object::obj::FIXED + 8 * crate::object::fixed_count(k)
++            },
++        });
++        f(cl)
++    })
++}
++
++fn plain_object(o: u64) -> bool {
++    crate::kinds::cell_kind(o) == crate::kinds::OBJECT.get() && !shape::is_prototype_object(o)
++}
++
++/// The chain-rule capacity (f-design L1) with ESCAPE_SLACK `k`; `today` when it is not above
++/// GENEROUS.
++fn rule_cap(ch: &Chain, k: usize, today: usize) -> usize {
++    if !ch.bytecode {
++        return today;
++    }
++    let n = ch.names.len() + ch.extra.min(usize::from(slack::GENEROUS)) + if ch.escaped { k } else { 0 };
++    if n > usize::from(slack::GENEROUS) {
++        n.min(crate::object::obj::MAX_INOBJECT)
++    } else {
++        today
++    }
++}
++
++/// A new SLOTS cell for field `f` of `o` under shape `s` (capacity `have` -> `n` fields).
++pub(crate) fn slots(rt: &Runtime, o: u64, s: u64, f: usize, have: usize, n: usize) {
++    C.with(|c| {
++        inc(&c.slots_n);
++        *c.slots_by_new_cap.borrow_mut().entry(n).or_insert(0) += 1;
++        *c.slots_by_old_cap.borrow_mut().entry(have).or_insert(0) += 1;
++    });
++    if !plain_object(o) {
++        C.with(|c| inc(&c.slots_non_object));
++        return;
++    }
++    let today = usize::from(shape::capacity(s));
++    with_class(rt, s, |cl| {
++        cl.slots_cells += 1;
++        cl.slots_bytes += 16 + 8 * n as u64;
++        for (i, k) in [0, 1, 2].into_iter().enumerate() {
++            if f < rule_cap(&cl.chain, k, today) {
++                cl.covered[i] += 1;
++            }
++        }
++    });
++}
++
++/// An add of the last field of `target` to `o` (all paths). `new_shape`: the add made a shape.
++pub(crate) fn add(rt: &Runtime, o: u64, target: u64, ic: bool, new_shape: bool) {
++    let x = cur() as usize;
++    C.with(|c| {
++        inc(if ic { &c.adds_ic } else { &c.adds_own });
++        c.adds_by_ctx.borrow_mut()[x] += 1;
++        if new_shape {
++            c.adds_new_shape_by_ctx.borrow_mut()[x] += 1;
++        }
++    });
++    let f = shape::count(target) - 1;
++    let cap = usize::from(shape::capacity(target));
++    if x == usize::from(ctx::KEYED_SET_COLD) {
++        let out = (f + 1).saturating_sub(cap);
++        if out > cap.max(12) {
++            C.with(|c| {
++                inc(&c.keyed_adds_past_line);
++                if new_shape {
++                    inc(&c.keyed_adds_past_line_new_shape);
++                }
++            });
++        }
++    }
++    if !plain_object(o) {
++        return;
++    }
++    let key = shape::key_at(target, f);
++    with_class(rt, target, |cl| {
++        cl.adds += 1;
++        if f == 0 {
++            cl.first_adds += 1;
++        }
++        cl.max_f = cl.max_f.max(f);
++        if cl.by_f.len() <= f {
++            cl.by_f.resize(f + 1, 0);
++        }
++        cl.by_f[f] += 1;
++        *cl.today_cap.entry(cap as u8).or_insert(0) += 1;
++        if cl.chain.bytecode && !cl.chain.names.contains(&key) {
++            let e = (0..=f)
++                .filter(|&i| !cl.chain.names.contains(&shape::key_at(target, i)))
++                .count();
++            cl.extra[e.clamp(1, 5) - 1] += 1;
++            cl.extra_names.entry(key).or_insert_with(|| (key_name(key), 0)).1 += 1;
++        }
++    });
++}
++
++/// A shape cell was made.
++pub(crate) fn new_shape() {
++    let x = cur() as usize;
++    C.with(|c| c.shapes_by_ctx.borrow_mut()[x] += 1);
++}
++
++/// The shapes made so far (all contexts).
++pub(crate) fn shapes_made() -> u64 {
++    C.with(|c| c.shapes_by_ctx.borrow().iter().sum())
++}
++
++/// A move to dictionary mode.
++pub(crate) fn to_dictionary() {
++    let x = cur() as usize;
++    C.with(|c| c.to_dictionary_by_ctx.borrow_mut()[x] += 1);
++}
++
++/// `ic::load_with` answered with handler kind `k` (0 in-object, 1 out of line, 2 length,
++/// 3 proto, 4 missing).
++pub(crate) fn load(k: u8) {
++    C.with(|c| {
++        inc(match k {
++            0 => &c.load_in_object,
++            1 => &c.load_out_of_line,
++            2 => &c.load_len,
++            3 => &c.load_proto,
++            _ => &c.load_missing,
++        })
++    });
++}
++
++/// A named-load hit on a field: `k` 0 in-object, 1 out of line, 2 other; `off` the byte offset.
++pub(crate) fn load_field(o: u64, k: u8, off: usize) {
++    load(k);
++    if k > 1 || !plain_object(o) {
++        return;
++    }
++    let s = shape::shape_of(o);
++    let (cap, kd) = shape::field_layout(s);
++    let f = if k == 0 {
++        (off - crate::object::obj::FIXED) / 8 - crate::object::fixed_count(kd)
++    } else {
++        cap + (off - crate::shape::slf::DATA) / 8
++    };
++    C.with(|c| {
++        let mut m = c.classes.borrow_mut();
++        match m.get_mut(&shape::proto(s)) {
++            Some(cl) => {
++                if cl.loads_by_f.len() <= f {
++                    cl.loads_by_f.resize(f + 1, [0, 0]);
++                }
++                cl.loads_by_f[f][usize::from(k)] += 1;
++            }
++            None => inc(&c.load_no_class),
++        }
++    });
++}
++
++/// A `GetKeyedProperty` cold body on `o` with key `k`.
++pub(crate) fn keyed_get(o: u64, k: u64) {
++    C.with(|c| {
++        inc(&c.keyed_get_cold);
++        if crate::kinds::is_string(k) {
++            inc(&c.keyed_get_string_key);
++        }
++        if crate::kinds::is_object(o) {
++            let s = shape::shape_of(o);
++            if shape::is_dictionary(s) {
++                inc(&c.keyed_get_on_dict);
++            } else {
++                let cap = usize::from(shape::capacity(s));
++                let out = shape::count(s).saturating_sub(cap);
++                if out > cap.max(12) {
++                    inc(&c.keyed_get_past_line);
++                }
++            }
++        }
++    });
++}
++
++pub(crate) fn for_in_keys(n: u32) {
++    C.with(|c| {
++        inc(&c.for_in_keys_calls);
++        c.for_in_keys_keys.set(c.for_in_keys_keys.get() + u64::from(n));
++        let b = if n < 8 { n } else { n.next_power_of_two() };
++        *c.for_in_keys_hist.borrow_mut().entry(b).or_insert(0) += 1;
++    });
++}
++
++pub(crate) fn for_in_has() {
++    C.with(|c| inc(&c.for_in_has_calls));
++}
++
++pub(crate) fn array_ctor(argc: usize, construct: bool) {
++    C.with(|c| c.array_ctor.borrow_mut()[argc.min(2)][usize::from(construct)] += 1);
++}
++
++pub(crate) fn elem_grow(old: usize) {
++    C.with(|c| {
++        *c.elem_grow_by_old.borrow_mut().entry(old).or_insert(0) += 1;
++        c.elem_grow_copied.set(c.elem_grow_copied.get() + old as u64);
++    });
++}
++
++fn lru(v: &mut Vec<(u64, u64)>, ways: usize, e: (u64, u64)) -> bool {
++    if let Some(p) = v.iter().position(|&x| x == e) {
++        let x = v.remove(p);
++        v.insert(0, x);
++        return true;
++    }
++    v.insert(0, e);
++    v.truncate(ways);
++    false
++}
++
++/// One `shape::lookup_with` call from `site`: `n` keys, `work` compares or probes.
++pub(crate) fn lookup(site: &'static Location<'static>, s: u64, key: u64, n: usize, work: u64, found: bool, hashed: bool) {
++    if QUIET.with(Cell::get) {
++        return;
++    }
++    let x = cur() as usize;
++    let e = (s, key);
++    C.with(|c| {
++        inc(&c.lk_calls);
++        if found {
++            inc(&c.lk_found);
++        }
++        c.lk_work.set(c.lk_work.get() + work);
++        inc(if n == 0 {
++            &c.lk_empty
++        } else if hashed {
++            &c.lk_hashed
++        } else {
++            &c.lk_linear
++        });
++        c.lk_by_ctx.borrow_mut()[x][usize::from(found)] += 1;
++        c.lk_ctx_work.borrow_mut()[x] += work;
++        let b = if n <= 8 { n } else { n.next_power_of_two() };
++        *c.lk_by_n.borrow_mut().entry(b).or_insert(0) += 1;
++        {
++            let mut sites = c.lk_sites.borrow_mut();
++            let (_, sc) = sites
++                .entry(site as *const _ as usize)
++                .or_insert_with(|| (site, SiteCache::default()));
++            sc.calls += 1;
++            sc.work += work;
++            // One LRU list of 4 holds the answers of 1 and 2 entries too (its first 1 or 2).
++            let p = sc.lru.iter().position(|&y| y == e);
++            for (i, w) in WAYS.into_iter().enumerate() {
++                if p.is_some_and(|p| p < w) {
++                    sc.hit[i] += 1;
++                    sc.hit_work[i] += work;
++                }
++            }
++            lru(&mut sc.lru, 4, e);
++        }
++        let h = ((s >> 3) ^ key.wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29)) as usize;
++        let mut g = c.lk_global.borrow_mut();
++        for (i, size) in GLOBAL.into_iter().enumerate() {
++            if g[i].is_empty() {
++                g[i] = vec![(0, 0); size];
++            }
++            let slot = &mut g[i][h & (size - 1)];
++            if *slot == e {
++                c.lk_global_hit.borrow_mut()[i] += 1;
++                c.lk_global_hit_work.borrow_mut()[i] += work;
++                c.lk_global_ctx_hit.borrow_mut()[i][x] += 1;
++            } else {
++                *slot = e;
++            }
++        }
++    });
++}
++
++fn key_name(k: u64) -> String {
++    if crate::kinds::is_string(k) {
++        crate::string::to_rust_string(k)
++    } else {
++        format!("<{k:#x}>")
++    }
++}
++
++fn kind_name(k: usize) -> String {
++    let n = match k {
++        1 => "seq_latin1",
++        2 => "seq_utf16",
++        3 => "cons",
++        4 => "sliced",
++        5 => "thin",
++        8 => "symbol",
++        9 => "bigint",
++        16 => "object",
++        17 => "function",
++        18 => "array",
++        19 => "error",
++        20 => "iterator",
++        21 => "wrapper",
++        22 => "bound_function",
++        23 => "generator",
++        24 => "slot_object",
++        25 => "arguments",
++        64 => "props",
++        65 => "elements",
++        66 => "context",
++        67 => "accessor_pair",
++        68 => "feedback",
++        69 => "poly_ic",
++        70 => "ic_handler",
++        71 => "slots",
++        72 => "descriptors",
++        73 => "desc_index",
++        74 => "transitions",
++        75 => "proto_info",
++        77 => "ordered_table",
++        79 => "validity_cell",
++        80 => "weak_cell",
++        81 => "elements_double",
++        82 => "elements_dict",
++        83 => "fuse",
++        84 => "props_indexed",
++        85 => "bytes",
++        128 => "shape",
++        _ => return format!("kind{k}"),
++    };
++    n.to_string()
++}
++
++impl Drop for Counters {
++    fn drop(&mut self) {
++        let p = |s: String| eprintln!("ep9 census: {s}");
++        // cells by kind
++        let (mut tn, mut tb) = (0u64, 0u64);
++        let mut rows: Vec<(u64, u64, usize)> = (0..256)
++            .map(|k| {
++                let (n, b) = ep9_heap::census::get(k);
++                (b, n, k)
++            })
++            .filter(|r| r.1 > 0)
++            .collect();
++        rows.sort_by(|a, b| b.cmp(a));
++        for &(b, n, k) in &rows {
++            tn += n;
++            tb += b;
++            p(format!("kind {} id={k} cells={n} bytes={b}", kind_name(k)));
++        }
++        p(format!("kind TOTAL cells={tn} bytes={tb}"));
++        // SLOTS
++        p(format!(
++            "slots grow cells={} non_plain_object={}",
++            self.slots_n.get(),
++            self.slots_non_object.get()
++        ));
++        for (k, v) in self.slots_by_new_cap.borrow().iter() {
++            p(format!("slots new_cap={k} cells={v}"));
++        }
++        for (k, v) in self.slots_by_old_cap.borrow().iter() {
++            p(format!("slots old_cap={k} cells={v}"));
++        }
++        // classes
++        let classes = self.classes.borrow();
++        let mut cl: Vec<(&u64, &Class)> = classes.iter().collect();
++        cl.sort_by(|a, b| b.1.slots_cells.cmp(&a.1.slots_cells).then(b.1.adds.cmp(&a.1.adds)));
++        let (mut cov, mut all) = ([0u64; 3], 0u64);
++        for (_, c) in &cl {
++            all += c.slots_cells;
++            for i in 0..3 {
++                cov[i] += c.covered[i];
++            }
++        }
++        p(format!(
++            "slots plain_object cells={all} covered_k0={} covered_k1={} covered_k2={}",
++            cov[0], cov[1], cov[2]
++        ));
++        let (mut ex, mut adds) = ([0u64; 5], 0u64);
++        for (_, c) in &cl {
++            adds += c.adds;
++            for i in 0..5 {
++                ex[i] += c.extra[i];
++            }
++        }
++        p(format!(
++            "adds plain_object={adds} extra_e1={} e2={} e3={} e4={} e5plus={}",
++            ex[0], ex[1], ex[2], ex[3], ex[4]
++        ));
++        p(format!("named_load plain_object no_class={}", self.load_no_class.get()));
++        for (_, c) in &cl {
++            let bf: Vec<String> = c.by_f.iter().map(u64::to_string).collect();
++            let lf: Vec<String> = c.loads_by_f.iter().map(|x| format!("{}/{}", x[0], x[1])).collect();
++            p(format!(
++                "classf {} base={} names={} extra={} escaped={} bytecode={} today_cap=[{}] by_f=[{}] loads_by_f=[{}]",
++                c.chain.name,
++                c.obj_base,
++                c.chain.names.len(),
++                c.chain.extra,
++                c.chain.escaped,
++                c.chain.bytecode,
++                c.today_cap.iter().map(|(k, v)| format!("{k}:{v}")).collect::<Vec<_>>().join(" "),
++                bf.join(" "),
++                lf.join(" ")
++            ));
++        }
++        for (_, c) in cl.iter().take(40) {
++            let ch = &c.chain;
++            let mut names: Vec<&(String, u64)> = c.extra_names.values().collect();
++            names.sort_by(|a, b| b.1.cmp(&a.1));
++            let nm: Vec<String> = names
++                .iter()
++                .take(4)
++                .map(|(k, v)| format!("{k}:{v}"))
++                .collect();
++            let caps: Vec<String> = c.today_cap.iter().map(|(k, v)| format!("{k}:{v}")).collect();
++            p(format!(
++                "class {} bytecode={} levels={} own_names={} chain_names={} proto_extra={} escaped={} rule_cap_k0={} instances~{} adds={} max_f={} today_cap=[{}] slots_cells={} slots_bytes={} covered=[{} {} {}] extra=[{} {} {} {} {}] extra_names=[{}]",
++                ch.name,
++                ch.bytecode,
++                ch.levels,
++                ch.own_n,
++                ch.names.len(),
++                ch.extra,
++                ch.escaped,
++                rule_cap(ch, 0, 8),
++                c.first_adds,
++                c.adds,
++                c.max_f,
++                caps.join(" "),
++                c.slots_cells,
++                c.slots_bytes,
++                c.covered[0],
++                c.covered[1],
++                c.covered[2],
++                c.extra[0],
++                c.extra[1],
++                c.extra[2],
++                c.extra[3],
++                c.extra[4],
++                nm.join(" ")
++            ));
++        }
++        // adds and shapes
++        let row = |a: &[u64; ctx::N]| -> String {
++            (0..ctx::N)
++                .filter(|&i| a[i] > 0)
++                .map(|i| format!("{}={}", ctx::NAMES[i], a[i]))
++                .collect::<Vec<_>>()
++                .join(" ")
++        };
++        p(format!("adds own_add={} ic_add_hit={}", self.adds_own.get(), self.adds_ic.get()));
++        p(format!("adds by_ctx {}", row(&self.adds_by_ctx.borrow())));
++        p(format!("adds new_shape by_ctx {}", row(&self.adds_new_shape_by_ctx.borrow())));
++        p(format!(
++            "keyed_set adds past_line(max(12,cap) out-of-object)={} of them new_shape={}",
++            self.keyed_adds_past_line.get(),
++            self.keyed_adds_past_line_new_shape.get()
++        ));
++        p(format!("shapes made by_ctx {}", row(&self.shapes_by_ctx.borrow())));
++        p(format!("to_dictionary by_ctx {}", row(&self.to_dictionary_by_ctx.borrow())));
++        // loads
++        p(format!(
++            "named_load answered in_object={} out_of_line={} length={} proto={} missing={}",
++            self.load_in_object.get(),
++            self.load_out_of_line.get(),
++            self.load_len.get(),
++            self.load_proto.get(),
++            self.load_missing.get()
++        ));
++        p(format!(
++            "keyed_get cold={} string_key={} on_dict={} past_line={}",
++            self.keyed_get_cold.get(),
++            self.keyed_get_string_key.get(),
++            self.keyed_get_on_dict.get(),
++            self.keyed_get_past_line.get()
++        ));
++        p(format!(
++            "for_in_keys calls={} keys={} for_in_has calls={}",
++            self.for_in_keys_calls.get(),
++            self.for_in_keys_keys.get(),
++            self.for_in_has_calls.get()
++        ));
++        for (k, v) in self.for_in_keys_hist.borrow().iter() {
++            p(format!("for_in_keys len<={k} calls={v}"));
++        }
++        let a = self.array_ctor.borrow();
++        p(format!(
++            "array_ctor argc0 call={} construct={} argc1 call={} construct={} argc2+ call={} construct={}",
++            a[0][0], a[0][1], a[1][0], a[1][1], a[2][0], a[2][1]
++        ));
++        let eg = self.elem_grow_by_old.borrow();
++        p(format!(
++            "elem_grow total={} copied_slots={}",
++            eg.values().sum::<u64>(),
++            self.elem_grow_copied.get()
++        ));
++        for (k, v) in eg.iter() {
++            p(format!("elem_grow old_cap={k} count={v}"));
++        }
++        // lookup_with
++        let calls = self.lk_calls.get();
++        let work = self.lk_work.get();
++        p(format!(
++            "lookup calls={calls} found={} work={work} linear={} hashed={} empty={}",
++            self.lk_found.get(),
++            self.lk_linear.get(),
++            self.lk_hashed.get(),
++            self.lk_empty.get()
++        ));
++        let bc = self.lk_by_ctx.borrow();
++        let cw = self.lk_ctx_work.borrow();
++        for i in 0..ctx::N {
++            if bc[i][0] + bc[i][1] > 0 {
++                p(format!(
++                    "lookup ctx {} calls={} found={} work={}",
++                    ctx::NAMES[i],
++                    bc[i][0] + bc[i][1],
++                    bc[i][1],
++                    cw[i]
++                ));
++            }
++        }
++        for (k, v) in self.lk_by_n.borrow().iter() {
++            p(format!("lookup n<={k} calls={v}"));
++        }
++        let gh = self.lk_global_hit.borrow();
++        let gw = self.lk_global_hit_work.borrow();
++        let gc = self.lk_global_ctx_hit.borrow();
++        for i in 0..2 {
++            p(format!(
++                "lookup global{} hits={} hit_work={} by_ctx {}",
++                GLOBAL[i],
++                gh[i],
++                gw[i],
++                row(&gc[i])
++            ));
++        }
++        let sites = self.lk_sites.borrow();
++        let mut tot = [0u64; 3];
++        let mut totw = [0u64; 3];
++        let mut ss: Vec<&(&Location, SiteCache)> = sites.values().collect();
++        ss.sort_by(|a, b| b.1.calls.cmp(&a.1.calls));
++        for (_, sc) in &ss {
++            for i in 0..3 {
++                tot[i] += sc.hit[i];
++                totw[i] += sc.hit_work[i];
++            }
++        }
++        p(format!(
++            "lookup per_site sites={} hits_1={} hits_2={} hits_4={} hit_work_1={} hit_work_2={} hit_work_4={}",
++            ss.len(),
++            tot[0],
++            tot[1],
++            tot[2],
++            totw[0],
++            totw[1],
++            totw[2]
++        ));
++        for (loc, sc) in ss.iter().take(25) {
++            p(format!(
++                "lookup site {}:{} calls={} work={} hits_1={} hits_2={} hits_4={}",
++                loc.file(),
++                loc.line(),
++                sc.calls,
++                sc.work,
++                sc.hit[0],
++                sc.hit[1],
++                sc.hit[2]
++            ));
++        }
++    }
++}
