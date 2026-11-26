@@ -679,7 +679,7 @@ macro_rules! record_pair_next_fn {
             let slot = $crate::interp::dsl::FSlot(slot);
             // SAFETY: caller contract (`St::new`: `next` is an instruction start of `fp`).
             let st = unsafe { crate::interp::St::new(cx, next, fp, acc, next) };
-            $crate::profile::record_pair(&st, $crate::profile::Pair::new(slot, l, r));
+            $crate::profile::record_pair_lean(&st, slot, l, r);
             let crate::interp::St { cx, fp, acc, .. } = st;
             // SAFETY: `next` is an instruction start of verified code.
             let h = cx.table[unsafe { *next } as usize];

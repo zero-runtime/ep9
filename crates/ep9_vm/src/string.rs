@@ -1487,3 +1487,37 @@ pub(crate) fn sip13_bigint(v: ep9_bigint::View<'_>) -> u32 {
     }
     s.finish(((8 * (v.digits.len() + 1)) as u64 & 0xff) << 56) as u32
 }
+
+/// What the hash field and the length say of [`array_index`] of a string, with no read of
+/// its text (JIT-LEAN, M14-P1: the pre-test of `profile::keyed_bits_lean`).
+pub(crate) enum IndexHint {
+    /// [`array_index`] gives `Some` of this index.
+    Index(u32),
+    /// [`array_index`] gives `None`.
+    NotIndex,
+    /// Only the text decides: call [`array_index`].
+    Unknown,
+}
+
+/// [`IndexHint`] of the live string cell `c`: the head of [`array_index`] (the same tests in
+/// the same order), which stops where it reads the text. The caller gives `c` with no check
+/// (`profile::cell_ptr`, after a kind read): this function has no panic path, reads 2 fields
+/// and writes nothing (it does not compute or cache a hash).
+#[inline(always)]
+pub(crate) fn index_hint(c: CellPtr) -> IndexHint {
+    let f = hash_field_raw(c);
+    if f & HASH_COMPUTED != 0 {
+        if f & HASH_IS_INDEX != 0 {
+            return IndexHint::Index(f >> HASH_SHIFT);
+        }
+        // Every index below 10^7 < 2^24 is cached, so a short string is not an index.
+        if len_of(c) <= 7 {
+            return IndexHint::NotIndex;
+        }
+    }
+    // An index has at most 10 digits.
+    if len_of(c) > 10 {
+        return IndexHint::NotIndex;
+    }
+    IndexHint::Unknown
+}

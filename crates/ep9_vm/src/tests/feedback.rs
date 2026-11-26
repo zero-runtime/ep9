@@ -835,3 +835,252 @@ fn compare_classes_equal_the_old_test_chain() {
     );
     assert!(real.0 > 0);
 }
+
+// ---- Keyed classes (M14-P1 JIT-LEAN, C2) --------------------------------------------------
+
+/// Fake cells (one 8-byte header each) of every kind byte, in a small cage below 2^47 (the
+/// form of [`compare_classes_equal_the_old_test_chain`]); only the header is read.
+fn with_fake_cells<T>(f: impl FnOnce(&[u64]) -> T) -> T {
+    use ep9_platform::va;
+    use ep9_value::{ShapeId, Word0};
+    let fakes: Vec<Word0> = (0..=255u8)
+        .map(|k| Word0::new(ShapeId::new(0), 0, k, 0))
+        .collect();
+    let size = (fakes.len() * size_of::<Word0>()).next_multiple_of(va::allocation_granularity());
+    let cage = va::Cage::reserve(&va::CageConfig {
+        cage_size: size,
+        ..va::CageConfig::default()
+    })
+    .expect("a cage below 2^47");
+    cage.heap()
+        .commit(0, size)
+        .expect("commit the fake-cell pages");
+    let base = std::ptr::with_exposed_provenance_mut::<Word0>(cage.heap().base());
+    let mut cells = Vec::new();
+    for (i, w) in fakes.into_iter().enumerate() {
+        // SAFETY: `base` is the start of `size` committed read-write bytes of `cage`, 8-aligned
+        // (a granularity multiple), and `(i + 1) * 8 <= size`.
+        let at = unsafe {
+            let at = base.add(i);
+            at.write(w);
+            at
+        };
+        cells.push(at.expose_provenance() as u64);
+    }
+    let r = f(&cells);
+    drop(cage);
+    r
+}
+
+/// T2 (JIT-LEAN C2): `profile::keyed_bits_lean` (one kind read per operand; the hash field
+/// and the length of a string key) equals `profile::keyed_bits` (the base class work of
+/// `record_keyed_cold`) on every receiver x key pair of a value set. The pre-test only
+/// returns early when the value half holds every bit of `keyed_bits_lean`, so equal bits mean
+/// that it skips exactly the records that would store nothing (FACT_SCHEMA 2). Keys: int32s
+/// around the edges and the array lengths; doubles (-0, integral, the 2^32 - 2 and 2^32 - 1
+/// edges, NaN); strings of index and name texts in 3 forms each (a new string, a new string
+/// with its hash computed, an atom), ropes, slices and a THIN string; a symbol, a BigInt, the
+/// immediates, an object; fake cells of every kind that is not a string. Receivers: Arrays
+/// (empty, packed, double, holey, Value elements), plain objects, an object with no prototype,
+/// an error object, strings, a symbol, a BigInt, numbers, the immediates; fake cells of every
+/// kind (with an index key, only the kinds whose index record reads no more than the kind).
+#[test]
+fn keyed_classes_equal_the_base_class_work() {
+    let (pairs, hints) = on_big_stack(|| {
+        let mut iso = isolate(config(Dispatch::DEFAULT, false));
+        let rt = iso.cx.rt();
+        let gcs = rt.heap.stats().collections;
+        let mut keys: Vec<u64> = Vec::new();
+        for i in [-1, 0, 1, 2, 3, 4, 5, 7, 100, i32::MAX, i32::MIN] {
+            keys.push(int32_bits(i));
+        }
+        for d in [
+            0.0,
+            -0.0,
+            1.0,
+            1.5,
+            3.0,
+            1e9,
+            4294967294.0,
+            4294967295.0,
+            4294967296.0,
+            -1.0,
+            f64::NAN,
+            f64::INFINITY,
+            1e300,
+        ] {
+            keys.push(Value::number(d).to_bits());
+        }
+        let texts = [
+            "",
+            "0",
+            "00",
+            "1",
+            "7",
+            "-1",
+            "1.5",
+            "a",
+            "x",
+            "length",
+            "1234567",
+            "12345678",
+            "16777215",
+            "16777216",
+            "4294967294",
+            "4294967295",
+            "4294967296",
+            "12345678901",
+            "abcdefghijk",
+            "\u{3b1}",
+        ];
+        let mut strings: Vec<u64> = Vec::new();
+        for t in texts {
+            strings.push(object::new_string(rt, t));
+            let hashed = object::new_string(rt, t);
+            crate::string::hash(hashed);
+            strings.push(hashed);
+            strings.push(crate::atoms::intern_str(rt, t));
+        }
+        let flat = |t: &str| object::new_string(rt, t);
+        // Ropes (CONS: 13 or more units), slices (SLICED) and a THIN cell (a CONS whose text
+        // has an atom becomes a THIN cell when it is interned).
+        let ropes = [
+            crate::string::concat(rt, flat("1234567"), flat("890123")).unwrap(),
+            crate::string::concat(rt, flat("abcdefg"), flat("hijklm")).unwrap(),
+        ];
+        let slices = [
+            crate::string::substring(rt, flat("abcdefghijklmnopqrstuvwxyz"), 1, 15),
+            crate::string::substring(rt, flat("123456789012345678901234"), 0, 14),
+        ];
+        crate::atoms::intern_str(rt, "zyxwvutsrqponm");
+        let thin = crate::string::concat(rt, flat("zyxwvut"), flat("srqponm")).unwrap();
+        crate::atoms::intern(rt, thin);
+        strings.extend(ropes);
+        strings.extend(slices);
+        strings.push(thin);
+        assert!(
+            strings
+                .iter()
+                .any(|&s| kinds::cell_kind(s) != kinds::cell_kind(strings[0])),
+            "more than one string kind"
+        );
+        keys.extend(&strings);
+        let sym = crate::symbol::new_symbol(rt, UNDEFINED);
+        let big = crate::bigint::alloc(rt, &ep9_bigint::from_i64(3));
+        let key_obj = object::new_plain_object(rt);
+        keys.extend([sym, big, key_obj, UNDEFINED, crate::frame::NULL]);
+        keys.extend([crate::frame::TRUE, crate::frame::FALSE]);
+
+        // Receivers.
+        let one = int32_bits(1);
+        let empty = object::new_array(rt, 0);
+        let packed = object::new_array(rt, 4);
+        for i in 0..4 {
+            assert!(object::array_set(rt, packed, i, int32_bits(i as i32)));
+        }
+        let doubles = object::new_array(rt, 2);
+        for i in 0..2 {
+            assert!(object::array_set(
+                rt,
+                doubles,
+                i,
+                Value::number(1.5).to_bits()
+            ));
+        }
+        let holey = object::new_array(rt, 8);
+        assert!(object::array_set(rt, holey, 0, one));
+        assert!(object::array_set(rt, holey, 3, one));
+        let values = object::new_array(rt, 2);
+        assert!(object::array_set(rt, values, 0, key_obj));
+        assert!(object::array_set(rt, values, 1, one));
+        let mut receivers = vec![empty, packed, doubles, holey, values];
+        receivers.extend([
+            object::new_plain_object(rt),
+            object::new_object(rt, crate::frame::NULL),
+            object::new_error_object(rt, crate::frame::NULL),
+            flat("abc"),
+            crate::atoms::intern_str(rt, "abc"),
+            ropes[0],
+            sym,
+            big,
+            one,
+            Value::number(2.5).to_bits(),
+            UNDEFINED,
+            crate::frame::NULL,
+            crate::frame::TRUE,
+        ]);
+        assert_eq!(
+            rt.heap.stats().collections,
+            gcs,
+            "no GC while the values live in Rust memory only"
+        );
+
+        let check = |o: u64, k: u64| {
+            assert_eq!(
+                crate::profile::keyed_bits_lean(o, k),
+                crate::profile::keyed_bits(o, k),
+                "keyed bits of receiver {o:#x} (kind {}), key {k:#x} (kind {})",
+                kinds::cell_kind(o),
+                kinds::cell_kind(k)
+            );
+        };
+        let mut n = 0;
+        for &o in &receivers {
+            for &k in &keys {
+                check(o, k);
+                n += 1;
+            }
+        }
+        // T2b: the hint is the head of `array_index`.
+        let mut hints = [0usize; 3];
+        for &k in &strings {
+            let want = crate::string::array_index(k);
+            match crate::string::index_hint(object::cell(k)) {
+                crate::string::IndexHint::Index(i) => {
+                    assert_eq!(want, Some(i), "index_hint of {k:#x}");
+                    hints[0] += 1;
+                }
+                crate::string::IndexHint::NotIndex => {
+                    assert_eq!(want, None, "index_hint of {k:#x}");
+                    hints[1] += 1;
+                }
+                crate::string::IndexHint::Unknown => hints[2] += 1,
+            }
+        }
+        // Fake cells: as keys (not strings: a string key reads its hash field) on the real
+        // receivers; as receivers of every kind with every key whose base bits have no index
+        // (an index on an Array or a plain-elements kind reads the elements), and of the
+        // other kinds with every key.
+        let fake_pairs = with_fake_cells(|fakes| {
+            let mut n = 0;
+            for &k in fakes.iter().filter(|&&k| !kinds::is_string(k)) {
+                for &o in &receivers {
+                    check(o, k);
+                    n += 1;
+                }
+            }
+            for &o in fakes {
+                let kind = kinds::cell_kind(o);
+                let reads_elements =
+                    kind == kinds::ARRAY.get() || crate::elements::plain_elements_kind(kind);
+                for &k in &keys {
+                    let index = crate::profile::keyed_bits(UNDEFINED, k)
+                        & crate::profile::keyed::INDEX
+                        != 0;
+                    if !(reads_elements && index) {
+                        check(o, k);
+                        n += 1;
+                    }
+                }
+            }
+            n
+        });
+        black_box(&mut iso);
+        (n + fake_pairs, hints)
+    });
+    assert!(pairs > 10_000, "{pairs} pairs");
+    assert!(
+        hints.iter().all(|&h| h > 0),
+        "each hint is seen (Index, NotIndex, Unknown): {hints:?}"
+    );
+}

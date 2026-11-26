@@ -905,19 +905,19 @@ pub(crate) fn keyed_hit_kind(st: &St<'_>, o: u64) -> u32 {
 /// kind before the operation, which may make a transition).
 #[inline(always)]
 pub(crate) fn record_keyed_cold(st: &mut St<'_>, s: FSlot, o: u64, k: u64) {
-    let Some(v) = rec_vector(st) else { return };
-    let (key, index) = keyed_key(k);
-    let mut bits = key | keyed_receiver(o);
-    if let Some(i) = index
-        && kinds::is_array(o)
-    {
-        bits |= element_case(o, i) | crate::elements::kinds_set_bit(crate::elements::kind_of(o));
-    } else if index.is_some()
-        && kinds::is_cell_bits(o)
-        && crate::elements::plain_elements_kind(kinds::cell_kind(o))
-    {
-        bits |= crate::elements::kinds_set_bit(crate::elements::kind_of(o));
-    }
+    let Some(v) = keyed_rec_vector(st, s, o, k) else {
+        return;
+    };
+    // JIT-LEAN (M14-P1, C2): `keyed_rec_vector` is `rec_vector` with the pre-test of the V8
+    // `UpdateFeedback` form before the class work: it loads the value half, ORs the bits of
+    // `keyed_bits_lean` (one kind read per operand; for a string key the hash field and the
+    // length, and `string::array_index` only when they do not decide), and gives none when no
+    // bit is new. This record would then store nothing, so the early return changes no fact.
+    // Else the base record below runs: `keyed_bits` is the class work that stood here (the key
+    // bits, the receiver bits, the element case of an Array index, the kinds-set bit), moved
+    // word for word to the end of this file; this function stays the one writer of the slot.
+    // `ics_only` leaves in `rec_vector`, as before. One line count: docs cite this file by line.
+    let bits = keyed_bits(o, k);
     let old = value(v, s.0);
     if old as u32 | bits != old as u32 {
         put_int(st.rt(), v, s.0, old as u32 | bits);
@@ -1181,4 +1181,203 @@ pub(crate) fn nullish_pair_bits(l: u64, r: u64) -> Option<u32> {
         CompareHint::OTHER.bits()
     };
     Some(u32::from(h))
+}
+
+// ---- JIT-LEAN (M14-P1): the class work after the no-change test -----------------------------
+//
+// The V8 `UpdateFeedback` form (load the slot, OR the new bits, compare, store only on a
+// change) for the two records that did their class work before the test (JDR ideas 1 + 2):
+//
+// | record | lean path | base path (as before) |
+// |---|---|---|
+// | `interp::dsl::record_pair_next` (C1) | a pair with null or undefined on a side: [`nullish_pair_bits`] (one kind read), then [`add_bits`] | [`compare_record`] |
+// | [`record_keyed_cold`] (C2) | [`keyed_rec_vector`]: the value half, then [`keyed_bits_lean`]; no new bit: return | [`keyed_bits`] and the store on a change |
+//
+// The lean path never stores a value that the base path would not store: C1 calls the same
+// [`add_bits`] with the bits of [`compare_bits`] (the oracle of `tests::feedback`); C2 returns
+// early only when no bit of [`keyed_bits_lean`], which holds every bit of [`keyed_bits`] (the
+// oracle of `tests::feedback`), is new, and else runs the base record, the one writer. So every
+// slot gets the same bits (FACT_SCHEMA 2). [`lean`] is the one switch seam, read only in
+// [`record_pair_lean`] and [`keyed_rec_vector`]: never in [`compare_record`], [`record_pair`],
+// `interp::Flow::recorded` or the `become` arm (the base path that the match loop runs).
+
+/// The seam of the set switch: one predicate, read at 2 sites only ([`record_pair_lean`],
+/// [`keyed_rec_vector`]). Role head: `true` (tests: a thread-local, so one test binary runs
+/// the lean path off and on). Set binary: the integrator changes the body, and only the body,
+/// to `st.rt().set & LEAN != 0`.
+#[inline(always)]
+pub(crate) fn lean(st: &St<'_>) -> bool {
+    let _ = st;
+    #[cfg(test)]
+    {
+        lean_test::ON.with(core::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        true
+    }
+}
+
+/// C1 (JIT-LEAN): the record of `interp::dsl::record_pair_next`. A pair with null or undefined
+/// on a side gets its bits from [`nullish_pair_bits`] (equal to [`compare_bits`]: the oracle
+/// of `tests::feedback`; never 0) and the load, test and store-on-change of [`add_bits`]. Other
+/// pairs: [`compare_record`], as before.
+#[inline(always)]
+pub(crate) fn record_pair_lean(st: &St<'_>, s: FSlot, l: u64, r: u64) {
+    if lean(st)
+        && let Some(bits) = nullish_pair_bits(l, r)
+    {
+        debug_assert_eq!(bits, compare_bits(l, r));
+        #[cfg(test)]
+        lean_test::bump(&lean_test::PAIRS);
+        // The test of [`adds_bit`] (the vector found with no 64-bit constant), and
+        // [`add_bits`] only for a new bit: with `add_bits` alone LLVM hoisted its constant to
+        // the entry, and x86-64 `record_pair_next` saved a register on every call.
+        if adds_bit(st, s, bits) {
+            core::hint::cold_path();
+            add_bits(st, s, bits);
+        }
+        return;
+    }
+    compare_record(st, s, l, r);
+}
+
+/// The kind byte of the live cell Value `v`, with no check (the read of [`compare_operand`]).
+#[inline(always)]
+fn kind_byte(v: u64) -> u8 {
+    // SAFETY: a cell Value held by the VM is live (crate invariant, object.rs).
+    unsafe { cell_ptr(v).header() }.kind()
+}
+
+/// The bits of a keyed cold record ([`record_keyed_cold`]): the key bits, the receiver bits,
+/// for an index of an Array the element case and its kinds-set bit, for an index on a receiver
+/// with plain elements its kinds-set bit. The lines that stood in [`record_keyed_cold`] at
+/// 0b710261, moved word for word.
+#[inline(always)]
+pub(crate) fn keyed_bits(o: u64, k: u64) -> u32 {
+    let (key, index) = keyed_key(k);
+    let mut bits = key | keyed_receiver(o);
+    if let Some(i) = index
+        && kinds::is_array(o)
+    {
+        bits |= element_case(o, i) | crate::elements::kinds_set_bit(crate::elements::kind_of(o));
+    } else if index.is_some()
+        && kinds::is_cell_bits(o)
+        && crate::elements::plain_elements_kind(kinds::cell_kind(o))
+    {
+        bits |= crate::elements::kinds_set_bit(crate::elements::kind_of(o));
+    }
+    bits
+}
+
+/// C2 (JIT-LEAN): [`rec_vector`] for [`record_keyed_cold`]; none also when the record can add
+/// no bit (the value half already holds every bit of [`keyed_bits_lean`], so it holds every
+/// bit of [`keyed_bits`]). Writes nothing, allocates nothing, is not a GC point.
+#[inline(always)]
+fn keyed_rec_vector(st: &St<'_>, s: FSlot, o: u64, k: u64) -> Option<u64> {
+    // The jitless build (`ics_only`) returns here, as before.
+    let v = rec_vector(st)?;
+    if lean(st) {
+        #[cfg(test)]
+        lean_test::bump(&lean_test::KEYED);
+        // The load, before any class work.
+        let old = value(v, s.0) as u32;
+        if keyed_bits_lean(o, k) & !old == 0 {
+            debug_assert!(keyed_bits(o, k) & !old == 0);
+            #[cfg(test)]
+            lean_test::bump(&lean_test::KEYED_SKIP);
+            return None;
+        }
+    }
+    // The base record: the one writer.
+    Some(v)
+}
+
+/// [`keyed_bits`] with one kind read per operand, and no call for a string key whose hash
+/// field and length decide ([`string::index_hint`]). Written to be equal to [`keyed_bits`]
+/// (the oracle of `tests::feedback`); each branch names the base code it follows.
+#[inline(always)]
+pub(crate) fn keyed_bits_lean(o: u64, k: u64) -> u32 {
+    // The key: [`keyed_key`].
+    let (key, index) = if is_i32(k) {
+        match u32::try_from(int32_of(k)) {
+            Ok(i) => (keyed::INDEX, Some(i)),
+            Err(_) => (keyed::OTHER_KEY, None),
+        }
+    } else if kinds::is_cell_bits(k) && matches!(kind_byte(k), 1..=7) {
+        // A string (`kinds::is_string`): the head of `string::array_index` on the unchecked
+        // pointer, then the base call only when it does not decide.
+        match string::index_hint(cell_ptr(k)) {
+            string::IndexHint::Index(i) => (keyed::INDEX, Some(i)),
+            string::IndexHint::NotIndex => (keyed::NAME, None),
+            string::IndexHint::Unknown => match string::array_index(k) {
+                Some(i) => (keyed::INDEX, Some(i)),
+                None => (keyed::NAME, None),
+            },
+        }
+    } else {
+        // A double, a symbol, another value: the base function.
+        keyed_key(k)
+    };
+    // The receiver: [`keyed_receiver`], with one kind read.
+    let ko = if kinds::is_cell_bits(o) {
+        kind_byte(o)
+    } else {
+        0
+    };
+    let recv = match ko {
+        _ if ko == kinds::ARRAY.get() => keyed::ARRAY,
+        16..=63 => keyed::OBJECT,
+        1..=7 => keyed::STRING,
+        _ => keyed::PRIMITIVE,
+    };
+    let mut bits = key | recv;
+    // The element case and the kinds-set bit: the base lines of [`keyed_bits`].
+    if let Some(i) = index {
+        if ko == kinds::ARRAY.get() {
+            bits |=
+                element_case(o, i) | crate::elements::kinds_set_bit(crate::elements::kind_of(o));
+        } else if crate::elements::plain_elements_kind(ko) {
+            bits |= crate::elements::kinds_set_bit(crate::elements::kind_of(o));
+        }
+    }
+    bits
+}
+
+/// The test seam of [`lean`] and its counters (per thread: a test sets the switch on the
+/// thread that runs the isolate).
+#[cfg(test)]
+pub(crate) mod lean_test {
+    use core::cell::Cell;
+    std::thread_local! {
+        /// The value of [`super::lean`] (default on, as the role head).
+        pub(crate) static ON: Cell<bool> = const { Cell::new(true) };
+        /// Pairs that took the lean path of [`super::record_pair_lean`].
+        pub(crate) static PAIRS: Cell<u64> = const { Cell::new(0) };
+        /// Keyed cold records that ran the pre-test of [`super::keyed_rec_vector`].
+        pub(crate) static KEYED: Cell<u64> = const { Cell::new(0) };
+        /// Of these, the records that returned early (no new bit).
+        pub(crate) static KEYED_SKIP: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// Sets the switch and clears the counters of this thread.
+    pub(crate) fn set(on: bool) {
+        ON.with(|c| c.set(on));
+        for c in [&PAIRS, &KEYED, &KEYED_SKIP] {
+            c.with(|n| n.set(0));
+        }
+    }
+
+    /// (pairs, keyed, keyed_skip) of this thread.
+    pub(crate) fn counts() -> (u64, u64, u64) {
+        (
+            PAIRS.with(Cell::get),
+            KEYED.with(Cell::get),
+            KEYED_SKIP.with(Cell::get),
+        )
+    }
+
+    pub(super) fn bump(c: &'static std::thread::LocalKey<Cell<u64>>) {
+        c.with(|n| n.set(n.get() + 1));
+    }
 }

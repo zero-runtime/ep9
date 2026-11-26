@@ -2245,3 +2245,296 @@ fn a_test_equal_pair_with_no_new_bit_runs_no_record_exit() {
         "(record_next, record_pair_next) runs"
     );
 }
+
+// ---- JIT-LEAN (M14-P1): the lean records give the same slots -------------------------------
+
+/// The loop turns of the JIT-LEAN programs.
+const LEAN_TURNS: i32 = 40;
+
+/// T1b (C1): a loop of strict-equality sites, each with its own slot: 7 sites with null or
+/// undefined on a side (an object, a string, a double, a boolean, null and undefined against
+/// a nullish value; `undefined === undefined` is the `l == r` arm) and 1 site with an object
+/// pair (`compare_record`). Every pair is a `Flow::RecordPair` of the `TestEqualStrict` body.
+fn lean_pair_program() -> (VerifiedUnit, Vec<FeedbackSlot>) {
+    let mut s = Asm::script(0);
+    let (o, o2, n, u, d, t, st) = (
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+    );
+    s.b.create_empty_object_literal().star(o);
+    s.b.create_empty_object_literal().star(o2);
+    s.b.lda_null().star(n);
+    s.b.lda_undefined().star(u);
+    s.lda_num(1.5);
+    s.b.star(d);
+    s.b.lda_true().star(t);
+    s.lda_str("not null");
+    s.b.star(st);
+    let ks: Vec<FeedbackSlot> = (0..8)
+        .map(|_| s.b.feedback_slot(FeedbackSlotKind::CompareOp))
+        .collect();
+    let k = ks.clone();
+    counted_loop(&mut s, LEAN_TURNS, move |s, _| {
+        // o === undefined; null === o; "not null" === null; 1.5 === undefined; true === null;
+        // undefined === null; undefined === undefined; o === o2.
+        s.b.lda_undefined().test_equal_strict(o, k[0]);
+        s.b.ldar(o).test_equal_strict(n, k[1]);
+        s.b.lda_null().test_equal_strict(st, k[2]);
+        s.b.lda_undefined().test_equal_strict(d, k[3]);
+        s.b.lda_null().test_equal_strict(t, k[4]);
+        s.b.lda_null().test_equal_strict(u, k[5]);
+        s.b.lda_undefined().test_equal_strict(u, k[6]);
+        s.b.ldar(o2).test_equal_strict(o, k[7]);
+    });
+    s.b.lda_undefined().return_();
+    (unit("", vec![s.finish()]), ks)
+}
+
+/// C2: a loop of keyed sites whose records repeat (so the pre-test returns early after the
+/// first turns): names and index strings on an object and on arrays, an int32 index that goes
+/// out of bounds, a hole, a double key, a negative key, a string receiver, a number receiver,
+/// `in`, stores of a name and of an index string, a rope key and a new flat index string.
+fn lean_keyed_program() -> VerifiedUnit {
+    use FeedbackSlotKind::{HasKeyed, LoadKeyed, StoreKeyed};
+    let mut s = Asm::script(0);
+    let (a, h, o, str_, seven, key, val) = (
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+        s.b.new_register(),
+    );
+    s.b.create_empty_array_literal(s.lit).star(a);
+    s.b.create_empty_array_literal(s.lit).star(h);
+    s.b.create_empty_object_literal().star(o);
+    s.lda_str("abc");
+    s.b.star(str_);
+    s.b.lda_smi(7).star(seven);
+    s.b.lda_smi(1).star(val);
+    let init = s.b.feedback_slot(StoreKeyed);
+    for i in 0..3 {
+        s.b.lda_smi(i)
+            .star(key)
+            .ldar(val)
+            .set_keyed_property(a, key, init);
+    }
+    let init_h = s.b.feedback_slot(StoreKeyed);
+    s.b.lda_smi(3)
+        .star(key)
+        .ldar(val)
+        .set_keyed_property(h, key, init_h);
+    let loads: Vec<FeedbackSlot> = (0..13).map(|_| s.b.feedback_slot(LoadKeyed)).collect();
+    let (st0, st1) = (s.b.feedback_slot(StoreKeyed), s.b.feedback_slot(StoreKeyed));
+    let has = s.b.feedback_slot(HasKeyed);
+    counted_loop(&mut s, LEAN_TURNS, move |s, i| {
+        s.lda_str("x");
+        s.b.get_keyed_property(o, loads[0]);
+        s.lda_str("1");
+        s.b.get_keyed_property(o, loads[1]);
+        s.lda_str("1");
+        s.b.get_keyed_property(a, loads[2]);
+        s.lda_str("12345678");
+        s.b.get_keyed_property(a, loads[3]);
+        s.b.lda_smi(5).get_keyed_property(a, loads[4]);
+        s.b.ldar(i).get_keyed_property(a, loads[5]);
+        s.b.lda_smi(1).get_keyed_property(h, loads[6]);
+        s.lda_num(1.5);
+        s.b.get_keyed_property(a, loads[7]);
+        s.b.lda_smi(-1).get_keyed_property(a, loads[8]);
+        s.b.lda_smi(1).get_keyed_property(str_, loads[9]);
+        s.b.lda_zero().get_keyed_property(seven, loads[10]);
+        let lhs = s.b.new_register();
+        s.lda_str("abcdefg");
+        s.b.star(lhs);
+        s.lda_str("hijklm");
+        s.b.add(lhs, s.bin).get_keyed_property(o, loads[11]);
+        s.lda_str("1");
+        s.b.star(lhs);
+        s.lda_str("2");
+        s.b.add(lhs, s.bin).get_keyed_property(a, loads[12]);
+        s.lda_str("y");
+        s.b.star(key).ldar(val).set_keyed_property(o, key, st0);
+        s.lda_str("0");
+        s.b.star(key).ldar(val).set_keyed_property(a, key, st1);
+        s.lda_str("x");
+        s.b.star(key).ldar(o).test_in(key, has);
+    });
+    s.b.lda_undefined().return_();
+    unit("", vec![s.finish()])
+}
+
+/// One run of `make` (threshold 0) in dispatch `d`, GC stress `stress`, feedback mode `f`,
+/// with the JIT-LEAN switch `on` (`profile::lean_test`, on the thread of the run).
+struct LeanRun {
+    /// The value halves of every slot after the run, then after a full GC (a cell value
+    /// reads [`CELL_VALUE`]).
+    values: [Vec<Option<Vec<u64>>>; 2],
+    /// `profile::lean_test::counts`: (lean pairs, keyed pre-tests, keyed early returns).
+    counts: (u64, u64, u64),
+    /// The runs of `record_pair_next`.
+    pair_exits: u32,
+}
+
+fn lean_run(
+    make: fn() -> VerifiedUnit,
+    d: Dispatch,
+    stress: bool,
+    f: Feedback,
+    on: bool,
+) -> LeanRun {
+    use crate::interp::dsl::exit_count::RECORD_PAIR;
+    on_big_stack(move || {
+        let mut iso = isolate_with(
+            IsolateConfig {
+                feedback_threshold: 0,
+                ..config(d, stress)
+            },
+            f,
+        );
+        profile::lean_test::set(on);
+        RECORD_PAIR.with(|n| n.set(0));
+        let r = iso.with_cx_checkpoint(|cx| cx.run_script(make(), "lean.js").map(|_| ()));
+        assert!(r.is_ok(), "{r:?}");
+        let counts = profile::lean_test::counts();
+        let pair_exits = RECORD_PAIR.with(|n| n.get());
+        let halves = |s: Vec<Slots>| -> Vec<Option<Vec<u64>>> {
+            s.into_iter()
+                .map(|f| f.map(|v| v.into_iter().map(|(_, v)| v).collect()))
+                .collect()
+        };
+        let before = halves(read(&iso));
+        iso.collect_garbage();
+        iso.verify_heap().unwrap();
+        let after = halves(read(&iso));
+        profile::lean_test::set(true);
+        LeanRun {
+            values: [before, after],
+            counts,
+            pair_exits,
+        }
+    })
+}
+
+/// T1b (C1): in the `full` sibling expansion each pair of [`lean_pair_program`] runs
+/// `record_pair_next`; with JIT-LEAN on, each of the 7 nullish sites takes the lean path
+/// (`nullish_pair_bits`, then `add_bits`) on every turn, and the object pair takes
+/// `compare_record`. The match loop records with `record_pair` (the base path, never the lean
+/// one). The slots hold the bits of `compare_bits` on each site, with JIT-LEAN off and on.
+#[test]
+fn jit_lean_nullish_pairs_take_the_lean_path_and_record_the_same_bits() {
+    let turns = LEAN_TURNS as u64;
+    let k = lean_pair_program().1;
+    let obj_null = cmp(CompareHint::RECEIVER) | cmp(CompareHint::NULLISH);
+    let want = [
+        obj_null,
+        obj_null,
+        cmp(CompareHint::OTHER),
+        cmp(CompareHint::OTHER),
+        cmp(CompareHint::OTHER),
+        cmp(CompareHint::NULLISH),
+        cmp(CompareHint::NULLISH),
+        cmp(CompareHint::RECEIVER),
+    ];
+    let make = || lean_pair_program().0;
+    for stress in [false, true] {
+        let on = lean_run(make, Dispatch::Sibling, stress, Feedback::FULL, true);
+        let off = lean_run(make, Dispatch::Sibling, stress, Feedback::FULL, false);
+        assert_eq!(on.pair_exits as u64, 8 * turns, "record_pair_next runs");
+        assert_eq!(on.counts.0, 7 * turns, "lean pairs (on)");
+        assert_eq!(
+            off.pair_exits as u64,
+            8 * turns,
+            "record_pair_next runs (off)"
+        );
+        assert_eq!(off.counts.0, 0, "lean pairs (off)");
+        assert_eq!(
+            on.values, off.values,
+            "stress={stress}: the slots, off and on"
+        );
+        let script = on.values[0][0].as_ref().expect("a vector");
+        for (i, (&slot, &w)) in k.iter().zip(&want).enumerate() {
+            assert_eq!(script[slot.index()] as u32, w, "site {i}");
+        }
+        let m = lean_run(make, Dispatch::Match, stress, Feedback::FULL, true);
+        assert_eq!(
+            (m.counts.0, m.pair_exits),
+            (0, 0),
+            "the match loop: no lean pair"
+        );
+        assert_eq!(
+            m.values, on.values,
+            "stress={stress}: match against sibling"
+        );
+    }
+}
+
+/// T3 (C1 + C2): every program of this file that hits the two sites (the compare, nullish and
+/// keyed programs) gives the same value half in every slot with JIT-LEAN off and on, after the
+/// run and after a full GC, in every dispatch expansion and GC mode. The value halves are int32
+/// records (no weak word, so a GC cannot change them; the key halves are weak). The lean paths
+/// must have run, and the keyed pre-test must have returned early, so the check is not empty.
+#[test]
+fn jit_lean_off_and_on_give_the_same_value_halves() {
+    type Make = fn() -> VerifiedUnit;
+    let programs: [(&str, Make); 7] = [
+        ("lean_pair", || lean_pair_program().0),
+        ("lean_keyed", lean_keyed_program),
+        ("compare", || compare_program().0),
+        ("nullish_pair", || nullish_pair_program().0),
+        ("keyed", || keyed_program().0),
+        ("keyed_index", || keyed_index_program().0),
+        ("keyed_rope", || keyed_rope_program().0),
+    ];
+    let mut total = (0, 0, 0);
+    for (name, make) in programs {
+        for &d in Dispatch::ALL {
+            for stress in [false, true] {
+                let on = lean_run(make, d, stress, Feedback::FULL, true);
+                let off = lean_run(make, d, stress, Feedback::FULL, false);
+                assert_eq!(
+                    off.counts,
+                    (0, 0, 0),
+                    "{name} {}: off runs no lean path",
+                    d.name()
+                );
+                assert_eq!(
+                    on.values,
+                    off.values,
+                    "{name} {} stress={stress}: the value halves, off and on",
+                    d.name()
+                );
+                total.0 += on.counts.0;
+                total.1 += on.counts.1;
+                total.2 += on.counts.2;
+            }
+        }
+    }
+    assert!(total.0 > 0 && total.1 > 0, "the lean paths ran: {total:?}");
+    assert!(
+        total.2 > 0 && total.2 < total.1,
+        "some early returns, not all: {total:?}"
+    );
+}
+
+/// The switch is read only behind a record: under `ics_only` (the jitless preset's mode) no
+/// lean path runs (the seam counters stay 0), in every dispatch expansion.
+#[test]
+fn jit_lean_seam_counters_stay_0_under_ics_only() {
+    for make in [
+        || lean_pair_program().0,
+        lean_keyed_program as fn() -> VerifiedUnit,
+    ] {
+        for &d in Dispatch::ALL {
+            let r = lean_run(make, d, false, Feedback::ICS_ONLY, true);
+            assert_eq!(r.counts, (0, 0, 0), "{}", d.name());
+            assert_eq!(r.pair_exits, 0, "{}", d.name());
+        }
+    }
+}
