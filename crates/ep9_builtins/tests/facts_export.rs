@@ -1810,5 +1810,39 @@ fn sibling_records_give_the_facts_of_the_inline_records() {
                 SlotFacts::CompareOp(h) if h.bits() & !CompareHint::INT32.bits() != 0)),
             "no recorded CompareOp bit in richards"
         );
+        // M14-P1 JIT-LEAN (C1): strict-equality pairs with null or undefined on a side. The
+        // sibling handlers record them with the lean path of `record_pair_next`
+        // (`profile::record_pair_lean`: `nullish_pair_bits`, then the load and test); the
+        // match loop records them with the base `record_pair`. The same bytes.
+        let nullish_src = "function f(xs) {\n\
+              var n = 0;\n\
+              for (var i = 0; i < xs.length; i++) {\n\
+                var x = xs[i];\n\
+                if (x === undefined) n += 1;\n\
+                if (x === null) n += 2;\n\
+                if (null === x) n += 4;\n\
+                if (undefined === x) n += 8;\n\
+              }\n\
+              return n;\n\
+            }\n\
+            var xs = [{}, 's', 1.5, true, null, undefined, [], function () {}];\n\
+            var t = 0;\n\
+            for (var k = 0; k < 3000; k++) t += f(xs);\n\
+            if (t !== 3000 * 15) throw new Error('nullish ' + t);\n";
+        let inline = facts_under(nullish_src, ep9_vm::Dispatch::Match);
+        let sibling = facts_under(nullish_src, ep9_vm::Dispatch::Sibling);
+        assert!(
+            inline == sibling,
+            "the nullish facts differ: {} bytes (match) vs {} bytes (sibling)",
+            inline.len(),
+            sibling.len()
+        );
+        let facts = FactSnapshot::decode(&inline).expect("the exporter's bytes decode");
+        let obj_null = CompareHint::RECEIVER.bits() | CompareHint::NULLISH.bits();
+        assert!(
+            facts.records().any(|(_, r)| matches!(r,
+                SlotFacts::CompareOp(h) if h.bits() & obj_null == obj_null)),
+            "no RECEIVER | NULLISH CompareOp record in the nullish script"
+        );
     });
 }
