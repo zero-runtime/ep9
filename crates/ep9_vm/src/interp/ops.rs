@@ -3400,3 +3400,41 @@ mod star_dst_branch_form {
         }
     }
 }
+
+// ---- TO-BOOL (M15-P1): the cell arm of `fast_truthy`, its seam and its counts ----------------
+// At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan).
+
+/// The TO-BOOL counts of gate line (1) (feature `ic-stats`; without it the functions are empty).
+/// Per thread; one line to stderr when the thread ends: `ep9 ic-stats: to-boolean slow=N arm=N`.
+pub(crate) mod to_bool_stats {
+    /// Counts one call of `slow::ops_misc::to_boolean`; gives `v` back.
+    #[inline(always)]
+    pub(crate) fn slow(v: u64) -> u64 {
+        #[cfg(feature = "ic-stats")]
+        imp::COUNTS.with(|c| c.slow.set(c.slow.get() + 1));
+        v
+    }
+
+    #[cfg(feature = "ic-stats")]
+    mod imp {
+        use core::cell::Cell;
+
+        pub(super) struct Counts {
+            pub(super) slow: Cell<u64>,
+            pub(super) arm: Cell<u64>,
+        }
+
+        impl Drop for Counts {
+            fn drop(&mut self) {
+                let (slow, arm) = (self.slow.get(), self.arm.get());
+                eprintln!("ep9 ic-stats: to-boolean slow={slow} arm={arm}");
+            }
+        }
+
+        std::thread_local! {
+            pub(super) static COUNTS: Counts = const {
+                Counts { slow: Cell::new(0), arm: Cell::new(0) }
+            };
+        }
+    }
+}

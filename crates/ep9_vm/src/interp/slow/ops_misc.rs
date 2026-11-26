@@ -131,7 +131,7 @@ pub(crate) fn type_of(cx: &Cx, v: u64) -> u64 {
 #[cold]
 #[inline(never)]
 pub(crate) fn to_boolean(v: u64) -> bool {
-    conv::to_boolean(v)
+    conv::to_boolean(crate::interp::ops::to_bool_stats::slow(v))
 }
 
 /// `TestEqualStrict` for values that the fast path does not handle.
