@@ -44,8 +44,8 @@
 //! | `recv.f(..)`, the type T of `recv` known (`self`, a typed parameter that no pattern of the body binds again, a field of a struct of the sources, the return type of a call of a fn of the sources; through `&`, `Box`, `Rc`, `Pin` and the other [`DEREF`] wrappers) | T a trait of the sources: its default `T::f` and every fn `f` of its impls; T a type: `T::f` if the sources define it; else every method named `f` if T has an impl in the sources; else (a foreign type such as `str` or `Vec`) only the methods named `f` of a blanket impl (`impl<X> Tr for X`) |
 //! | `recv.f(..)`, the type not known, or a generic parameter (`config: C`) | every method named `f` |
 //! | `Self::f`, `T::f`, `<X as T>::f` (T a type or trait) | the same as a receiver of type T (`Self` = the impl type); T a generic parameter (`C::f`): every method named `f` |
-//! | `m::f` (m a module: a lower-case segment) | every free fn, static or const named `f` |
-//! | `f`, `f(..)` (one segment: a local or a free fn in Rust) | every free fn, static or const named `f` |
+//! | `m::f` (m a module: a lower-case segment) | every free fn, static or const named `f`; for a name that 2 modules define, the one of the module that the path names from the module of the use (`super`, `self`, `crate`, a child module), if the sources hold it there |
+//! | `f`, `f(..)` (one segment: a local or a free fn in Rust) | every free fn, static or const named `f`; for a name that 2 modules define (each is its own node `f@module`), the one of the own module, else the one that a `use` of the module names, else the ones of its glob `use`s, if the sources hold one; never narrowed when a `use` in a block (or in the rules of a macro of the sources) names `f` or a glob |
 //! | a call of a macro of the sources in a body | the edges of its expansion; if it does not expand, also every fn named by an identifier of its rules |
 //! | an identifier in a macro body of another crate that does not parse as expressions | every fn named it |
 //!
@@ -278,6 +278,9 @@ struct Func {
     uses: BTreeMap<Use, usize>,
     /// A static or const (its initializer), not a fn.
     data: bool,
+    /// The module of the item: the file path (`lexer/mod.rs` is `lexer`) and the inline `mod`s
+    /// around it, joined by `::` (`lexer::byte_handlers::token_handlers`; the crate root is "").
+    module: String,
 }
 
 #[derive(Debug, Default)]
@@ -492,6 +495,16 @@ pub(crate) fn run(
         types.visit_file(ast);
     }
     types.check_fields()?;
+    // The `use` items of each module, and the names that a `use` in a block brings in.
+    let mut imports = Imports::default();
+    for (rel, ast) in &asts {
+        ImportCollector {
+            module: file_module(rel),
+            depth: 0,
+            out: &mut imports,
+        }
+        .visit_file(ast);
+    }
     // Pass 2: functions, statics and consts.
     let mut funcs = Vec::new();
     for (rel, ast) in &asts {
@@ -503,8 +516,33 @@ pub(crate) fn run(
             types: &types,
             defs: &defs,
             out: &mut funcs,
+            module: file_module(rel),
         };
         c.visit_file(ast);
+    }
+    // A free name of 2 modules (the lexer of 0.160.0: the byte handler `SPS` of
+    // `lexer::byte_handlers` and the token handler `SPS` of its inline `mod token_handlers`) is
+    // 2 nodes, `SPS@lexer/byte_handlers` and `SPS@lexer/byte_handlers/token_handlers`, not one
+    // node with the edges of both fns; a use of the name goes to the fns that Rust resolves it
+    // to (see [`Scope`]).
+    let mut free_modules: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for f in &funcs {
+        if !f.key.contains("::") {
+            free_modules
+                .entry(f.name.clone())
+                .or_default()
+                .insert(f.module.clone());
+        }
+    }
+    let split: BTreeSet<String> = free_modules
+        .into_iter()
+        .filter(|(_, m)| m.len() > 1)
+        .map(|(n, _)| n)
+        .collect();
+    for f in &mut funcs {
+        if !f.key.contains("::") && split.contains(&f.name) {
+            f.key = module_key(&f.name, &f.module);
+        }
     }
     for f in &mut funcs {
         if f.check_line.is_none() && (assume.contains(&f.key) || assume.contains(label(&f.key))) {
@@ -532,6 +570,25 @@ pub(crate) fn run(
             .iter()
             .map(|s| s.to_string())
             .collect()
+    };
+    let scope = Scope {
+        split: &split,
+        imports: &imports,
+        keys: funcs
+            .iter()
+            .filter(|f| !f.key.contains("::"))
+            .map(|f| ((f.name.clone(), f.module.clone()), f.key.clone()))
+            .fold(BTreeMap::new(), |mut m, (k, v)| {
+                m.entry(k).or_insert_with(BTreeSet::new).insert(v);
+                m
+            }),
+    };
+    // A one-segment name or a module path: every free fn, static or const of the name, or for a
+    // name of 2 modules the ones of the module that Rust resolves it to.
+    let free_of = |module: &str, qual: Option<&str>, n: &str| -> Vec<String> {
+        scope
+            .resolve(module, qual, n)
+            .unwrap_or_else(|| all(&free, n))
     };
     // The other names of a type or trait (review R2 B2-2): a `use .. as` rename and a type alias
     // of the sources. `names_of(t)`: `t`, each name that `t` stands for (to the end of a chain
@@ -655,9 +712,11 @@ pub(crate) fn run(
                 }
                 Use::Method(Some(t), n) => typed(t, n),
                 Use::Method(None, n) => all(&methods, n),
-                Use::Path(q, n) if q.starts_with(|c: char| c.is_ascii_lowercase()) => all(&free, n),
+                Use::Path(q, n) if q.starts_with(|c: char| c.is_ascii_lowercase()) => {
+                    free_of(&f.module, Some(q), n)
+                }
                 Use::Path(q, n) => typed(q, n),
-                Use::Bare(n) => all(&free, n),
+                Use::Bare(n) => free_of(&f.module, None, n),
                 Use::Any(n) => all(&by_name, n),
             };
             let text = format!("{u:?}");
@@ -1404,6 +1463,8 @@ struct Collector<'o> {
     types: &'o Types,
     defs: &'o Macros,
     out: &'o mut Vec<Func>,
+    /// The module of the current item (see [`Func::module`]).
+    module: Vec<String>,
 }
 
 impl Collector<'_> {
@@ -1462,6 +1523,7 @@ impl Collector<'_> {
             name,
             file: self.file.clone(),
             line: sig.ident.span().start().line,
+            module: self.module.join("::"),
             ..Func::default()
         };
         let mut nested = Vec::new();
@@ -1540,6 +1602,7 @@ impl Collector<'_> {
             file: self.file.clone(),
             line: ident.span().start().line,
             data: true,
+            module: self.module.join("::"),
             ..Func::default()
         };
         let mut nested = Vec::new();
@@ -1576,7 +1639,9 @@ impl Collector<'_> {
 impl<'ast> Visit<'ast> for Collector<'_> {
     fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
         if !is_test(&m.attrs) {
+            self.module.push(m.ident.to_string());
             visit::visit_item_mod(self, m);
+            self.module.pop();
         }
     }
 
@@ -1658,6 +1723,263 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         // Left after pass 0: `macro_rules!` (read in pass 0) and item macros of other crates
         // whose tokens hold no fn (`bitflags!`, `fieldless_enum!`).
     }
+}
+
+/// The `use` items of the sources: per module, each name that it brings in (`*` for a glob),
+/// the name in the target module and the path of that module as written; and each name that a
+/// `use` in a block brings in (`*` for a glob), with no module.
+#[derive(Debug, Default)]
+struct Imports {
+    by_module: BTreeMap<String, Vec<(String, String, Vec<String>)>>,
+    in_blocks: BTreeSet<String>,
+}
+
+/// Collects [`Imports`] (test code is skipped, as in pass 2).
+struct ImportCollector<'i> {
+    module: Vec<String>,
+    /// The blocks around the current item: a `use` there is a block `use`.
+    depth: usize,
+    out: &'i mut Imports,
+}
+
+impl<'ast> Visit<'ast> for ImportCollector<'_> {
+    fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
+        if !is_test(&m.attrs) {
+            self.module.push(m.ident.to_string());
+            visit::visit_item_mod(self, m);
+            self.module.pop();
+        }
+    }
+
+    fn visit_item_impl(&mut self, i: &'ast syn::ItemImpl) {
+        if !is_test(&i.attrs) {
+            visit::visit_item_impl(self, i);
+        }
+    }
+
+    fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
+        if !is_test(&i.attrs) {
+            visit::visit_item_fn(self, i);
+        }
+    }
+
+    fn visit_block(&mut self, b: &'ast Block) {
+        self.depth += 1;
+        visit::visit_block(self, b);
+        self.depth -= 1;
+    }
+
+    fn visit_item_use(&mut self, u: &'ast syn::ItemUse) {
+        if is_test(&u.attrs) {
+            return;
+        }
+        let mut list = Vec::new();
+        let root = if u.leading_colon.is_some() {
+            vec!["::".to_string()]
+        } else {
+            Vec::new()
+        };
+        use_names(&u.tree, root, &mut list);
+        for (local, orig, path) in list {
+            if self.depth > 0 {
+                self.out.in_blocks.insert(local);
+            } else {
+                self.out
+                    .by_module
+                    .entry(self.module.join("::"))
+                    .or_default()
+                    .push((local, orig, path));
+            }
+        }
+    }
+
+    /// A `use` in the rules of a macro of the sources can land in a body (a macro call in an
+    /// expression is expanded only in pass 2): each name in it (every identifier between `use`
+    /// and `;`, or `*` for a glob) counts as a name of a block `use`.
+    fn visit_item_macro(&mut self, m: &'ast syn::ItemMacro) {
+        if m.mac.path.is_ident("macro_rules") {
+            macro_use_names(&m.mac.tokens, &mut self.out.in_blocks);
+        }
+    }
+}
+
+/// The names of each `use .. ;` in macro tokens (see [`ImportCollector::visit_item_macro`]).
+fn macro_use_names(tokens: &TokenStream, out: &mut BTreeSet<String>) {
+    fn names(tokens: TokenStream, out: &mut BTreeSet<String>) {
+        for t in tokens {
+            match t {
+                TokenTree::Ident(i) => {
+                    out.insert(i.to_string());
+                }
+                TokenTree::Punct(p) if p.as_char() == '*' => {
+                    out.insert("*".to_string());
+                }
+                TokenTree::Group(g) => names(g.stream(), out),
+                _ => {}
+            }
+        }
+    }
+    let mut it = tokens.clone().into_iter();
+    while let Some(t) = it.next() {
+        match t {
+            TokenTree::Ident(i) if i == "use" => {
+                let mut body = Vec::new();
+                for t in it.by_ref() {
+                    if matches!(&t, TokenTree::Punct(p) if p.as_char() == ';') {
+                        break;
+                    }
+                    body.push(t);
+                }
+                names(body.into_iter().collect(), out);
+            }
+            TokenTree::Group(g) => macro_use_names(&g.stream(), out),
+            _ => {}
+        }
+    }
+}
+
+/// Each (name brought in, its name in the target module, the module path) of a `use` tree.
+fn use_names(t: &syn::UseTree, path: Vec<String>, out: &mut Vec<(String, String, Vec<String>)>) {
+    match t {
+        syn::UseTree::Path(p) => {
+            let mut path = path;
+            path.push(p.ident.to_string());
+            use_names(&p.tree, path, out);
+        }
+        syn::UseTree::Name(n) => {
+            let n = n.ident.to_string();
+            if n == "self" {
+                // `use a::b::{self}` brings in the module `b`, no fn.
+                return;
+            }
+            out.push((n.clone(), n, path));
+        }
+        syn::UseTree::Rename(r) => {
+            out.push((r.rename.to_string(), r.ident.to_string(), path));
+        }
+        syn::UseTree::Glob(_) => out.push(("*".into(), "*".into(), path)),
+        syn::UseTree::Group(g) => {
+            for t in &g.items {
+                use_names(t, path.clone(), out);
+            }
+        }
+    }
+}
+
+/// The module of a source file: `lexer/byte_handlers.rs` is `lexer::byte_handlers`,
+/// `lexer/mod.rs` is `lexer`, `lib.rs` is the crate root (no segment).
+fn file_module(rel: &str) -> Vec<String> {
+    let mut segs: Vec<String> = rel.split('/').map(str::to_string).collect();
+    if let Some(last) = segs.pop() {
+        let stem = last.strip_suffix(".rs").unwrap_or(&last).to_string();
+        if !(stem == "mod" || (segs.is_empty() && (stem == "lib" || stem == "main"))) {
+            segs.push(stem);
+        }
+    }
+    segs
+}
+
+/// The node key of a free fn, static or const of a name that 2 modules define: the name and
+/// its module (`SPS@lexer/byte_handlers`; the crate root is `crate`). No `::`: it is no method.
+fn module_key(name: &str, module: &str) -> String {
+    if module.is_empty() {
+        format!("{name}@crate")
+    } else {
+        format!("{name}@{}", module.replace("::", "/"))
+    }
+}
+
+/// Name resolution for the free names that 2 modules define (`split`), as Rust resolves a path:
+/// a one-segment name to an item of its own module, else to the item that a `use` of the module
+/// names, else to the items of its glob `use`s; a module path (`super::f`, `self::m::f`,
+/// `crate::lexer::f`, `m::f` for a child module `m`) to the item of that module. `None` when the
+/// name is not split, when a `use` in a block brings in the name (or a glob), or when the
+/// resolution finds no item of the sources: then the use is an edge to every free fn of the
+/// name, as for every other name (the graph has more edges than the code, never fewer).
+struct Scope<'s> {
+    split: &'s BTreeSet<String>,
+    imports: &'s Imports,
+    /// (name, module) -> the node keys.
+    keys: BTreeMap<(String, String), BTreeSet<String>>,
+}
+
+impl Scope<'_> {
+    fn resolve(&self, module: &str, qual: Option<&str>, n: &str) -> Option<Vec<String>> {
+        if !self.split.contains(n)
+            || self.imports.in_blocks.contains(n)
+            || self.imports.in_blocks.contains("*")
+        {
+            return None;
+        }
+        let here: Vec<String> = if module.is_empty() {
+            Vec::new()
+        } else {
+            module.split("::").map(str::to_string).collect()
+        };
+        let mut found = BTreeSet::new();
+        let mut add = |m: &[String], x: &str| -> bool {
+            match self.keys.get(&(x.to_string(), m.join("::"))) {
+                Some(k) => {
+                    found.extend(k.iter().cloned());
+                    true
+                }
+                None => false,
+            }
+        };
+        match qual {
+            Some(q) => {
+                let segs: Vec<String> = q.split("::").map(str::to_string).collect();
+                let m = module_path(&here, &segs)?;
+                add(&m, n);
+            }
+            None => {
+                if !add(&here, n) {
+                    let uses = self.imports.by_module.get(module);
+                    let named: Vec<_> = uses
+                        .into_iter()
+                        .flatten()
+                        .filter(|(local, _, _)| local == n)
+                        .collect();
+                    if named.is_empty() {
+                        for (_, _, path) in uses.into_iter().flatten().filter(|u| u.0 == "*") {
+                            if let Some(m) = module_path(&here, path) {
+                                add(&m, n);
+                            }
+                        }
+                    } else {
+                        for (_, orig, path) in named {
+                            let m = module_path(&here, path)?;
+                            add(&m, orig);
+                        }
+                    }
+                }
+            }
+        }
+        if found.is_empty() {
+            None
+        } else {
+            Some(found.into_iter().collect())
+        }
+    }
+}
+
+/// The module that the path `segs` names from the module `here`: `crate`, `self` and `super`
+/// as Rust reads them, any other first segment a child module of `here`. `None` for a path
+/// from the root of another crate (`::x`) or a `super` above the crate root.
+fn module_path(here: &[String], segs: &[String]) -> Option<Vec<String>> {
+    let mut m = here.to_vec();
+    for (i, s) in segs.iter().enumerate() {
+        match s.as_str() {
+            "::" => return None,
+            "crate" if i == 0 => m.clear(),
+            "self" if i == 0 => {}
+            "super" => {
+                m.pop()?;
+            }
+            _ => m.push(s.clone()),
+        }
+    }
+    Some(m)
 }
 
 /// A statement that calls [`CHECK`]: `Ok` if it is a site form, else why not. `None` if it does
@@ -1994,7 +2316,27 @@ impl<'ast> Visit<'ast> for Uses<'_> {
             let qual = if let Some(q) = &p.qself {
                 type_name(&q.ty)
             } else if segs.len() >= 2 {
-                Some(segs[segs.len() - 2].ident.to_string())
+                let q = segs[segs.len() - 2].ident.to_string();
+                // A module path (`super::f`, `crate::lexer::f`): all of its segments, so that a
+                // name of 2 modules resolves to its own module (see [`Scope`]).
+                if q.starts_with(|c: char| c.is_ascii_lowercase())
+                    && p.path.leading_colon.is_none()
+                    && segs.iter().take(segs.len() - 1).all(|s| {
+                        s.ident
+                            .to_string()
+                            .starts_with(|c: char| c.is_ascii_lowercase())
+                    })
+                {
+                    Some(
+                        segs.iter()
+                            .take(segs.len() - 1)
+                            .map(|s| s.ident.to_string())
+                            .collect::<Vec<_>>()
+                            .join("::"),
+                    )
+                } else {
+                    Some(q)
+                }
             } else {
                 None
             };
@@ -2739,6 +3081,133 @@ mod tests {
             fn jsx_member_expression_eq() {}
         }"#;
 
+    /// The lexer of oxc_parser 0.160.0 in small: [`LEXER`] plus the token handlers of
+    /// lexer/byte_handlers.rs, free fns of the inline `mod token_handlers` with the names of the
+    /// byte handlers. A token handler calls its byte handler by `super::X` and reads on through
+    /// `next_token_after_trivia`, which calls the byte handlers through the table again.
+    fn lexer_160() -> String {
+        let token_handlers = r#"
+        mod token_handlers {
+            use super::{Config, Kind, Lexer, Token};
+            macro_rules! token_handlers {
+                (general: $($name:ident),+ $(,)?) => {
+                    $(
+                        #[expect(non_snake_case)]
+                        pub unsafe fn $name<C: Config>(lexer: &mut Lexer<'_, C>) -> Token {
+                            unsafe { lexer.general_token_handler(super::$name) }
+                        }
+                    )+
+                };
+            }
+            token_handlers!(general: ERR, SPS, SLH, UNI);
+            impl<C: Config> Lexer<'_, C> {
+                const TOKEN_HANDLERS: [TokenHandler<C>; 4] = [ERR, SPS, SLH, UNI];
+                pub fn next_token_impl(&mut self) -> Token {
+                    let b = self.source.peek();
+                    unsafe { Self::TOKEN_HANDLERS[b as usize](self) }
+                }
+                unsafe fn general_token_handler(&mut self, h: ByteHandler<C>) -> Token {
+                    let k = unsafe { h(self) };
+                    if k == Kind::Skip { return self.next_token_after_trivia(); }
+                    self.finish(k)
+                }
+                fn next_token_after_trivia(&mut self) -> Token {
+                    let k = self.read_next_token();
+                    self.finish(k)
+                }
+            }
+        }"#;
+        format!("{LEXER}\n{token_handlers}")
+    }
+
+    /// oxc 0.160.0 (the 0.160.0 scout): a free name of 2 modules is 2 nodes. The byte handler
+    /// `SPS` (module `lexer`) and the token handler `SPS` (module `lexer::token_handlers`) were
+    /// one node `SPS` with the edges of both fns, so the table of byte handlers reached the
+    /// token handler, which reads on through the table: a cycle that the code does not have.
+    #[test]
+    fn a_name_of_two_modules_is_two_nodes() {
+        let src = lexer_160();
+        let r = report(&[("lexer.rs", &src)]);
+        assert!(r.ok(), "{:?}", r.cycles);
+        for h in ["ERR", "SPS", "SLH", "UNI"] {
+            let byte = format!("{h}@lexer");
+            let token = format!("{h}@lexer/token_handlers");
+            assert!(r.places.contains_key(&byte), "{byte} is a node");
+            assert!(r.places.contains_key(&token), "{token} is a node");
+            // The table gives the byte handler; the token handler calls it by `super::X`.
+            assert!(
+                r.edges["NO_TOKENS"].contains_key(&byte),
+                "NO_TOKENS -> {byte}"
+            );
+            assert!(
+                !r.edges["NO_TOKENS"].contains_key(&token),
+                "no NO_TOKENS -> {token}"
+            );
+            assert!(r.edges[&token].contains_key(&byte), "{token} -> {byte}");
+            assert!(r.edges["Lexer::TOKEN_HANDLERS"].contains_key(&token));
+        }
+        // A byte handler that lexes again is still a cycle, by the split node.
+        let again = src.replace(
+            "ascii_byte_handler!(SLH(lexer) {\n            lexer.skip_comment()",
+            "ascii_byte_handler!(SLH(lexer) {\n            lexer.next_token(); lexer.skip_comment()",
+        );
+        assert_ne!(again, src);
+        let r = report(&[("lexer.rs", &again)]);
+        assert_eq!(
+            r.cycles,
+            vec![keys(&[
+                "Lexer::handle_byte",
+                "Lexer::next_token",
+                "Lexer::read_next_token",
+                "NO_TOKENS",
+                "NoTokensLexerConfig::byte_handlers",
+                "SLH@lexer",
+            ])]
+        );
+        // A token handler that reads on by the token table is a cycle too.
+        let again = src.replace(
+            "unsafe { lexer.general_token_handler(super::$name) }",
+            "lexer.next_token_impl(); unsafe { lexer.general_token_handler(super::$name) }",
+        );
+        assert_ne!(again, src);
+        let r = report(&[("lexer.rs", &again)]);
+        assert_eq!(r.cycles.len(), 1, "{:?}", r.cycles);
+        assert!(r.cycles[0].contains(&"Lexer::next_token_impl".to_string()));
+        assert!(r.cycles[0].contains(&"SPS@lexer/token_handlers".to_string()));
+        // The base rule (one node per free name) gave the false cycle: with the token handlers
+        // renamed, the 2 sets of fns are one set again and the table reaches them.
+        let one = src.replace("super::$name", "$name");
+        let r = report(&[("lexer.rs", &one)]);
+        assert!(
+            !r.cycles.is_empty(),
+            "a token handler that calls itself is a cycle"
+        );
+    }
+
+    /// A `use` in a block is not read for the narrowing: a name that it brings in (or a glob)
+    /// keeps the edge to every free fn of the name. Here the block `use self::a::go` shadows
+    /// the `go` of the own module, and the call is the `go` of `a`, which calls back.
+    #[test]
+    fn a_block_use_keeps_every_fn_of_the_name() {
+        let src = "mod a { pub fn go() -> u32 { super::up() } }
+                   fn go() -> u32 { 0 }
+                   fn up() -> u32 { use self::a::go; go() }";
+        let r = report(&[("n.rs", src)]);
+        assert_eq!(r.cycles, vec![keys(&["go@n/a", "up"])]);
+        // With no block `use`, the one-segment `go` is the `go` of the own module: no cycle.
+        let own = src.replace("use self::a::go; ", "");
+        assert!(report(&[("n.rs", &own)]).cycles.is_empty());
+        // A `use` in the rules of a macro of the sources counts as a block `use`.
+        let mac = format!(
+            "macro_rules! bring {{ () => {{ use self::a::go; }} }}\n{}",
+            src.replace("use self::a::go; ", "bring!(); ")
+        );
+        assert_eq!(
+            report(&[("n.rs", &mac)]).cycles,
+            vec![keys(&["go@n/a", "up"])]
+        );
+    }
+
     /// Fixture 4 (role check 1 F1): the byte handlers are fns that an item macro writes and that
     /// `Lexer::handle_byte` calls through a static table. Each is a node, `handle_byte` reaches
     /// each one, and a handler that lexes again (calls `next_token`) is a cycle.
@@ -2961,6 +3430,29 @@ mod tests {
                 "a nested fn",
                 "fn outer(n: u32) -> u32 { fn inner(n: u32) -> u32 { outer(n) } inner(n) }",
                 &["inner", "outer"],
+            ),
+            // oxc 0.160.0: a free name of 2 modules goes to the fn of the module of the path or of
+            // the use; the fn of the other module (`b::go`) is the decoy.
+            (
+                "a module path to a name of 2 modules",
+                "mod a { pub fn go(n: u32) -> u32 { super::up(n) } }
+                 mod b { pub fn go(n: u32) -> u32 { n } }
+                 fn up(n: u32) -> u32 { a::go(n) }",
+                &["go@n/a", "up"],
+            ),
+            (
+                "a glob use of a name of 2 modules",
+                "mod t { use super::*; pub fn run(n: u32) -> u32 { go(n) } }
+                 mod b { pub fn go(n: u32) -> u32 { n } }
+                 fn go(n: u32) -> u32 { t::run(n) }",
+                &["go@n", "run"],
+            ),
+            (
+                "a named use of a name of 2 modules",
+                "mod t { use crate::n::b::go; pub fn run(n: u32) -> u32 { go(n) } }
+                 mod b { pub fn go(n: u32) -> u32 { super::t::run(n) } }
+                 fn go(n: u32) -> u32 { n }",
+                &["go@n/b", "run"],
             ),
         ];
         for (rule, src, cycle) in cases {

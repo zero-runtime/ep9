@@ -274,3 +274,16 @@ fn round_2_a_field_of_a_known_type_is_its_own_field() {
     assert_cycle(&out, &["S::walk", "Tab::index", "back"]);
     assert!(!out.contains("Plain::index"), "{out}");
 }
+
+/// Route OXC-SITES-LINT-GAPS-2 (A2 "impl Fn args"), found at the oxc 0.160.0 pin (4 new
+/// parameters: list.rs `collect_list` and `collect_long_list`, cursor.rs `eat_if_next`,
+/// js/function.rs): a recursion through a closure or a fn value that an `impl FnMut` parameter
+/// takes is a cycle. A guard: the lint before the scout already reports both.
+#[test]
+fn c1_a_recursion_through_an_impl_fn_argument_fails() {
+    let (code, out, _) = oxc_sites("c1_impl_fn_arg");
+    assert_eq!(code, Some(1));
+    assert_cycle(&out, &["parse_a"]);
+    assert_cycle(&out, &["parse_b"]);
+    assert!(!out.contains("parse_c ("), "parse_c is on no cycle:\n{out}");
+}
