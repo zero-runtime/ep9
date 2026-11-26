@@ -237,8 +237,9 @@ const T262_FRESH_PATHS: [&str; 13] = [
 /// `fuzz/Cargo.toml` and theirs; a test checks the list against them), the regress and oxc
 /// forks that its `[patch.crates-io]` builds ([`REGRESS_PATHS`], [`OXC_PATHS`]), the root
 /// `Cargo.toml` (its `[profile.release]`, the workspace members) and `Cargo.lock`.
-const CARGO_FUZZ_FRESH_PATHS: [&str; 19] = [
+const CARGO_FUZZ_FRESH_PATHS: [&str; 20] = [
     "crates/ep9_frontend",
+    "crates/ep9_hints",
     "crates/ep9_bytecode",
     "crates/ep9_rx1",
     "crates/ep9_regexp",
@@ -395,7 +396,7 @@ const VERDICTS_HOW: &str = "the Spike C and SP-Facts Verdict tables (a markdown 
 /// Files outside the repo (cargo's home config, `RUSTFLAGS`) are out by design: the Verdict row
 /// records the host (protocol §8).
 /// The test `verdict_fresh_paths_are_the_spike_c_closure` reads the closure and compares.
-const VERDICT_FRESH_PATHS: [&str; 25] = [
+const VERDICT_FRESH_PATHS: [&str; 26] = [
     "spikes/spike-c",
     "spikes/spike-b",
     "crates/ep9_bigint",
@@ -404,6 +405,7 @@ const VERDICT_FRESH_PATHS: [&str; 25] = [
     "crates/ep9_facts",
     "crates/ep9_frontend",
     "crates/ep9_heap",
+    "crates/ep9_hints",
     "crates/ep9_intl",
     "crates/ep9_math",
     "crates/ep9_platform",
@@ -3705,7 +3707,7 @@ mod tests {
             ),
             (
                 4,
-                "f2.json: not counted: not this tree: crates/ep9_frontend, crates/ep9_bytecode, crates/ep9_rx1, crates/ep9_regexp, crates/ep9_unit, crates/ep9_vm, crates/ep9_bigint, crates/ep9_facts, crates/ep9_heap, crates/ep9_math, crates/ep9_platform, crates/ep9_value, third_party/regress.commit, third_party/patches/regress, third_party/oxc.commit, third_party/patches/oxc, fuzz, Cargo.toml, Cargo.lock changed",
+                "f2.json: not counted: not this tree: crates/ep9_frontend, crates/ep9_hints, crates/ep9_bytecode, crates/ep9_rx1, crates/ep9_regexp, crates/ep9_unit, crates/ep9_vm, crates/ep9_bigint, crates/ep9_facts, crates/ep9_heap, crates/ep9_math, crates/ep9_platform, crates/ep9_value, third_party/regress.commit, third_party/patches/regress, third_party/oxc.commit, third_party/patches/oxc, fuzz, Cargo.toml, Cargo.lock changed",
             ),
             (7, "Cargo.toml"),
         ] {
