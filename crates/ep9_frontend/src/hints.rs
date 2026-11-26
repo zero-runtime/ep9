@@ -8,6 +8,8 @@
 //!  Hints::file_hints(path, hash): not in the table, type errors, another hash (S3)
 //!    | Err ------------------------------------------------> JoinError::Hints      (counted)
 //!    v Ok(records of the file)
+//!  the path is not a .js, .mjs or .cjs path -------------> JoinError::TsSource   (counted)
+//!    v
 //!  the front end on its worker (lib.rs with_front_end): layer 0, the parse with layer 1,
 //!  layer 2 and the budget check of layer 1, oxc_semantic --> JoinError::Compile    (counted)
 //!    v
@@ -19,6 +21,13 @@
 //! ```
 //!
 //! Rules:
+//! - JS only: the front end parses the JS goals (lib.rs `parse`: `SourceType::script()` or
+//!   `mjs()`). A TS text can parse there as other nodes on the same spans: in TS
+//!   `f<number>(1) + 2` is an addition of a call, in JS the comparison
+//!   `(f < number) > ((1) + 2)`, with the same root span and kind. So a path that is not a
+//!   `.js`, `.mjs` or `.cjs` path (a `.ts`, `.tsx`, `.mts`, `.cts` or `.jsx` path) gives
+//!   [`JoinError::TsSource`], before the parse. The TS parse needs a language in `SourceOpts`
+//!   (H3).
 //! - Offsets: oxc spans of the text after the BOM strip are UTF-8 byte offsets of the decoded
 //!   text, as the records are (S2, H37-Q4). Both sides hash the UTF-8 bytes of that text, never
 //!   an engine string form (MC-w49-6).
@@ -95,6 +104,10 @@ pub enum JoinError {
     /// `ep9_hints` dropped the file's hints: its path is not in the table, it has type errors,
     /// or its text hash is not the hash of this text (S3).
     Hints(DropReason),
+    /// The path is not a `.js`, `.mjs` or `.cjs` path, so its text may be TS (or JSX): the
+    /// front end parses the JS goals only, and the JS parse of a TS text can put other nodes
+    /// on the record spans (module doc). Every hint of the file is dropped; no parse runs.
+    TsSource,
     /// S3: the span of this record is a node of another kind, so the two parses do not agree:
     /// every hint of the file is dropped.
     KindMismatch {
@@ -113,6 +126,7 @@ impl std::fmt::Display for JoinError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             JoinError::Hints(reason) => write!(f, "hints dropped: {reason}"),
+            JoinError::TsSource => write!(f, "hints dropped: ts-source (the join parses JS only)"),
             JoinError::KindMismatch { start, end, kind } => write!(
                 f,
                 "hints dropped: kind-mismatch ({} at {start}..{end})",
@@ -169,9 +183,10 @@ impl HintJoin {
 ///
 /// # Errors
 ///
-/// [`JoinError::Hints`] when `ep9_hints` drops the file (S3), [`JoinError::Compile`] when the
-/// front end rejects the source, and [`JoinError::KindMismatch`] when a record's span is a node
-/// of another kind (S3).
+/// [`JoinError::Hints`] when `ep9_hints` drops the file (S3), [`JoinError::TsSource`] when
+/// `path` is not a `.js`, `.mjs` or `.cjs` path, [`JoinError::Compile`] when the front end
+/// rejects the source, and [`JoinError::KindMismatch`] when a record's span is a node of
+/// another kind (S3).
 pub fn join_hints(
     source: &str,
     opts: SourceOpts,
@@ -181,12 +196,23 @@ pub fn join_hints(
     let text = decoded_text(source);
     let hash = ep9_bytecode::sha256::sha256(text.as_bytes());
     let records = hints.file_hints(path, &hash).map_err(JoinError::Hints)?;
+    if !is_js_path(path) {
+        return Err(JoinError::TsSource);
+    }
     let walked = crate::with_front_end(text, opts, |fe| {
         walk(fe.program)
             .map_err(|at| CompileError::Range(RangeError::stack_limit(fe.source, Some(at))))
     })
     .map_err(JoinError::Compile)?;
     join_records(records, walked)
+}
+
+/// True for a path whose text the JS parse of the front end reads as its author wrote it: a
+/// `.js`, `.mjs` or `.cjs` path (case as written; the file table keeps the path of the file).
+fn is_js_path(path: &str) -> bool {
+    [".js", ".mjs", ".cjs"]
+        .iter()
+        .any(|ext| path.ends_with(ext))
 }
 
 /// The node keys of a walk and its deepest level.
@@ -252,6 +278,7 @@ fn join_records(records: &[Record], walked: Walked) -> Result<HintJoin, JoinErro
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct JoinCounts {
     hints: DropCounts,
+    ts_source: u64,
     kind_mismatch: u64,
     not_compiled: u64,
     files: u64,
@@ -269,6 +296,7 @@ impl JoinCounts {
                 self.no_node += u64::from(join.no_node);
             }
             Err(JoinError::Hints(reason)) => self.hints.add(*reason),
+            Err(JoinError::TsSource) => self.ts_source += 1,
             Err(JoinError::KindMismatch { .. }) => self.kind_mismatch += 1,
             Err(JoinError::Compile(_)) => self.not_compiled += 1,
         }
@@ -292,14 +320,15 @@ impl JoinCounts {
     }
 
     /// Every drop reason with its count, by stable name: the 16 reasons of `ep9_hints` (an
-    /// input or a file), then `kind-mismatch` and `not-compiled` (a file), then `no-node` (a
-    /// record).
+    /// input or a file), then `ts-source`, `kind-mismatch` and `not-compiled` (a file), then
+    /// `no-node` (a record).
     #[must_use]
     pub fn per_reason(&self) -> Vec<(&'static str, u64)> {
         let mut rows: Vec<(&'static str, u64)> = DropReason::ALL
             .iter()
             .map(|&r| (r.name(), self.hints.get(r)))
             .collect();
+        rows.push(("ts-source", self.ts_source));
         rows.push(("kind-mismatch", self.kind_mismatch));
         rows.push(("not-compiled", self.not_compiled));
         rows.push(("no-node", self.no_node));
@@ -501,7 +530,8 @@ mod tests {
     use crate::forms::{FORMS, Form};
     use crate::{AST_CAP, DepthLayer, PRESCAN_CAP, RangeErrorKind, Strictness};
 
-    const PATH: &str = "src/a.ts";
+    /// A JS path: the join parses the JS goals only (`JoinError::TsSource`).
+    const PATH: &str = "src/a.js";
 
     fn rec(start: u32, end: u32, kind: NodeKind) -> Record {
         Record {
@@ -523,12 +553,17 @@ mod tests {
     /// A one-file table for the decoded `text` (its hash is of exactly these bytes, as tsrs
     /// writes it), written and read back by `ep9_hints` (so it is canonical).
     fn table(text: &str, records: &[Record]) -> Hints {
+        table_at(PATH, text, records)
+    }
+
+    /// [`table`] with the file at `path`.
+    fn table_at(path: &str, text: &str, records: &[Record]) -> Hints {
         let mut records = records.to_vec();
         records.sort_by_key(Record::key);
         let hints = Hints {
             header: Header::default(),
             files: vec![FileEntry {
-                path: PATH.to_owned(),
+                path: path.to_owned(),
                 text_hash: ep9_bytecode::sha256::sha256(text.as_bytes()),
                 has_type_errors: false,
                 first_record: 0,
@@ -616,6 +651,76 @@ mod tests {
         );
     }
 
+    /// The rows of `counts` that are not 0, by name.
+    fn nonzero(counts: &JoinCounts) -> Vec<(&'static str, u64)> {
+        let mut rows: Vec<(&'static str, u64)> = counts
+            .per_reason()
+            .into_iter()
+            .filter(|r| r.1 > 0)
+            .collect();
+        rows.sort_unstable();
+        rows
+    }
+
+    /// Codex A1H-JOIN r1 F1: the front end parses the JS goals only. In TS,
+    /// `f<number>(1)+2` is the addition of the call `f<number>(1)`; in JS it is the comparison
+    /// `(f<number) > ((1)+2)` on the same root span, with the same kind. So a TS path gives
+    /// `TsSource` and no parse, and is counted once as `ts-source`.
+    #[test]
+    fn a_ts_path_is_not_joined_with_the_js_parse() {
+        let src = "import{f}from\"./g\";f<number>(1)+2";
+        // The TS reading, keys by hand: the call is 19..31, the addition 19..33.
+        assert_eq!(&src[19..31], "f<number>(1)");
+        assert_eq!(&src[19..33], "f<number>(1)+2");
+        let records = [
+            rec(19, 31, NodeKind::CallExpression),
+            rec(19, 33, NodeKind::BinaryExpression),
+        ];
+        let module = SourceOpts::module();
+        let got = join_hints(
+            src,
+            module,
+            "src/a.ts",
+            &table_at("src/a.ts", src, &records),
+        );
+        assert_eq!(got, Err(JoinError::TsSource));
+        let mut counts = JoinCounts::default();
+        counts.add(&got);
+        assert_eq!(nonzero(&counts), [("ts-source", 1)]);
+        assert_eq!((counts.files(), counts.records()), (0, 0));
+        // The hazard, at a .js path (where the JS parse is the right one): the addition record
+        // joins the comparison `>` on 19..33, and no node has the call span 19..31.
+        let js = join_hints(src, module, PATH, &table(src, &records)).unwrap();
+        assert_eq!(js.records(), &[records[1]]);
+        assert_eq!(js.no_node(), 1);
+        // Each path that is not .js, .mjs or .cjs; the file drops of ep9_hints come first.
+        for path in [
+            "src/a.tsx",
+            "src/a.mts",
+            "src/a.cts",
+            "src/a.d.ts",
+            "src/a.jsx",
+        ] {
+            let got = join_hints(src, module, path, &table_at(path, src, &records));
+            assert_eq!(got, Err(JoinError::TsSource), "{path}");
+        }
+        for path in ["src/a.mjs", "src/a.cjs"] {
+            let got = join_hints(src, module, path, &table_at(path, src, &records));
+            assert_eq!(got.map(|j| j.records().len()), Ok(1), "{path}");
+        }
+        let got = join_hints(
+            src,
+            module,
+            "src/b.ts",
+            &table_at("src/a.ts", src, &records),
+        );
+        assert_eq!(got, Err(JoinError::Hints(DropReason::NotInTable)));
+        // A TS text that the JS goal does not parse: TsSource too, not `not-compiled`.
+        let typed = "let a: number = 1;";
+        let got = join_hints(typed, module, "src/a.ts", &table_at("src/a.ts", typed, &[]));
+        assert_eq!(got, Err(JoinError::TsSource));
+    }
+
     /// S3 in `ep9_hints`: another path, type errors, another text: no parse, one reason each.
     #[test]
     fn the_file_drops_of_ep9_hints_are_kept() {
@@ -689,14 +794,9 @@ mod tests {
         let lost = table(src, &[rec(0, 1, NodeKind::StringLiteral)]);
         counts.add(&join_hints(src, script(), PATH, &lost));
         let rows: BTreeMap<&str, u64> = counts.per_reason().into_iter().collect();
-        assert_eq!(rows.len(), DropReason::ALL.len() + 3);
-        let nonzero: Vec<(&str, u64)> = rows
-            .iter()
-            .filter(|r| *r.1 > 0)
-            .map(|(k, v)| (*k, *v))
-            .collect();
+        assert_eq!(rows.len(), DropReason::ALL.len() + 4);
         assert_eq!(
-            nonzero,
+            nonzero(&counts),
             [
                 ("fact-schema-version", 1),
                 ("hash-mismatch", 1),
