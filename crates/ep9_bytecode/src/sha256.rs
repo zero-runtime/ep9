@@ -5,10 +5,10 @@
 //! can check it (`shasum -a 256`, Node `crypto`), and it needs no dependency.
 //!
 //! The block loop has one body slot (ALLOC-SET design 6.2): a process-wide [`BlockBody`] that
-//! [`set_body`] sets once (`ep9_vm` sets it from the SHA256 table of `ep9_platform::simd`: the
-//! SHA-NI or ARMv8 SHA2 body). Unset, [`Sha256::update`] runs the scalar loop of this file. The
-//! slot is read once per `update`, not per block. This crate stays free of `unsafe` and of
-//! dependencies; build scripts and tools that never set the slot keep the scalar body.
+//! [`set_body`] sets once. No product code sets it at this head; the corpus test sets it from
+//! the SHA256 table of `ep9_platform::simd`. Unset, [`Sha256::update`] runs the scalar loop of
+//! this file. The slot is read once per `update`, not per block. This crate stays free of
+//! `unsafe` and of dependencies; build scripts and tools that do not set the slot stay scalar.
 
 use std::sync::OnceLock;
 
@@ -33,7 +33,7 @@ pub fn body_is_set() -> bool {
     BODY.get().is_some()
 }
 
-/// The scalar body: [`compress`] once per block.
+/// The scalar body: `compress` once per block.
 pub fn scalar_blocks(state: &mut [u32; 8], blocks: &[[u8; 64]]) {
     for block in blocks {
         compress(state, block);

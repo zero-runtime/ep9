@@ -498,9 +498,9 @@ pub fn sha256() -> Sha256Body {
     }
 }
 
-/// The value for the SHA-256 body slot of `ep9_bytecode` (set by `ep9_vm`; ALLOC-SET design
-/// 6.2): the block function of the SHA256 pick of this process, or `None` when the pick is the
-/// scalar body, so that the slot stays unset and `ep9_bytecode` runs its own scalar loop.
+/// The value for the SHA-256 body slot of `ep9_bytecode` (ALLOC-SET design 6.2; no product code
+/// sets the slot at this head, the corpus test sets it): the block function of the SHA256 pick,
+/// or `None` when the pick is the scalar body (the slot stays unset and the scalar loop runs).
 pub fn sha256_slot_body() -> Option<Sha256Blocks> {
     match sha256() {
         Sha256Body::Scalar => None,
