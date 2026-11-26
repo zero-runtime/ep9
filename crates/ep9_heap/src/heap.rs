@@ -1821,6 +1821,10 @@ pub(crate) struct Sweeper<'a> {
     /// S1: a kept cell keeps its mark bit ([`HeapConfig::generational`]).
     sticky: bool,
     zap: bool,
+    /// SWEEP-LEAN ([`sweep_lean`]): the walk that is not `CHECK` is [`Sweeper::sweep_page_lean`].
+    lean: bool,
+    /// The SWEEP body of `ep9_platform::simd` (the lean walk; the shadow pass of `CHECK`).
+    bitmaps: ep9_platform::simd::SweepBitmaps,
     /// Cells and bytes this sweeper freed so far.
     pub(crate) freed_cells: u64,
     pub(crate) freed_bytes: u64,
@@ -1834,6 +1838,8 @@ impl<'a> Sweeper<'a> {
             kinds,
             sticky,
             zap,
+            lean: sweep_lean() && !zap,
+            bitmaps: sweep_bitmaps(),
             freed_cells: 0,
             freed_bytes: 0,
         }
@@ -1897,6 +1903,9 @@ impl<'a> Sweeper<'a> {
                 Swept::Full
             };
         }
+        if !CHECK && self.lean {
+            return self.sweep_page_lean(page, kept);
+        }
         // CHECK: the line marks before the walk (they must cover every live cell).
         let mut lines_before = [0u8; LINES_PER_PAGE];
         if CHECK {
@@ -1910,6 +1919,8 @@ impl<'a> Sweeper<'a> {
                 )
             };
         }
+        // CHECK: the bitmaps before the walk and the cells freed so far, for the shadow pass.
+        let shadow = CHECK.then(|| (BitmapCopy::of(self, page), self.freed_cells));
         let unmark = UnmarkPageOnUnwind { page, sticky };
         // Sticky marks: a kept cell keeps its mark bit (old); without them every bit goes.
         let keep_marks = if sticky { u64::MAX } else { 0 };
@@ -1984,6 +1995,7 @@ impl<'a> Sweeper<'a> {
                             None => continue,
                         }
                     } else {
+                        sweep_count::dead_header_read();
                         self.size_at(addr)
                     };
                     if self.zap {
@@ -2006,6 +2018,8 @@ impl<'a> Sweeper<'a> {
         if CHECK && self.any_mark_bit(page, sticky) {
             sweep_error(errors, idx, format_args!("mark bit set outside a GC"));
         }
+        // CHECK: the shadow pass of the bitmap body ([`Sweeper::shadow_check`]).
+        self.shadow_check(shadow, page, idx, errors, live);
         // Not under Miri: there it would double the cost of every walk, and the line-mark test
         // (tests/gc.rs) compares the marks itself.
         #[cfg(all(debug_assertions, not(miri)))]
@@ -3100,5 +3114,385 @@ mod s1_budget_tests {
         assert!(gcs[0].0, "{gcs:?}");
         near(gcs[0].1, want, "the S1 budget GC");
         heap.drop_global(g);
+    }
+}
+
+// ---- SWEEP-LEAN (M14-P1; ALLOC-SET design 1.3) ---------------------------------------------
+
+/// SWEEP-LEAN (ALLOC-SET design 1.3): the heap setting that [`Sweeper::new`] gets. The role
+/// head has the member always on; the set integrator later copies the bit from the arm switch
+/// at `Heap::new` and changes only this body. The `ep9_heap` unit tests turn it on per thread
+/// ([`sweep_lean_test`]): off, their sweeps keep today's walk, whose `freed_bytes` their
+/// checks read. The lean walk adds no bytes for the small cells it frees (it does not read
+/// their size), so `GcStats::freed_bytes` counts the LOS objects and the small cells of the
+/// walks that read a size (zap, `CHECK`, the unit tests). Off with zap: a zap needs the size.
+#[inline(always)]
+fn sweep_lean() -> bool {
+    #[cfg(test)]
+    let on = sweep_lean_test::lean();
+    #[cfg(not(test))]
+    let on = true;
+    on && !sweep_count::lean_off()
+}
+
+/// The sweep bitmap body of a new [`Sweeper`]: the SWEEP pick of the process, or (unit tests)
+/// the body that [`sweep_lean_test::with`] forces on this thread.
+#[inline(always)]
+fn sweep_bitmaps() -> ep9_platform::simd::SweepBitmaps {
+    #[cfg(test)]
+    if let Some(f) = sweep_lean_test::bitmaps() {
+        return f;
+    }
+    ep9_platform::simd::sweep_bitmaps()
+}
+
+impl Sweeper<'_> {
+    /// SWEEP-LEAN: the walk of [`Sweeper::sweep_page_with`] when it is not `CHECK` and the
+    /// sweeper is lean (no zap). One bitmap pass of the SWEEP body (`ep9_platform::simd`: the
+    /// live and dead counts, the store-backs of both bitmaps, the line of each live start and
+    /// the line ends), then the scalar fix of the lines that a live cell may reach
+    /// ([`Sweeper::fix_line_ends`]). A dead cell is freed by its bits only: its header is not
+    /// read (it was read only for `freed_bytes`), so `freed_bytes` gets nothing for it. The
+    /// checked walk keeps every read, the size checks and the "unregistered kind" panic of a
+    /// dead cell.
+    fn sweep_page_lean(&mut self, page: Page, kept: &mut usize) -> Swept {
+        let unmark = UnmarkPageOnUnwind {
+            page,
+            sticky: self.sticky,
+        };
+        let keep_marks = if self.sticky { u64::MAX } else { 0 };
+        let mut ends = [0u8; LINES_PER_PAGE];
+        let vo = self
+            .ptr(page.addr() + VO_BITS_OFFSET)
+            .cast::<u64>()
+            .as_ptr();
+        let mk = self
+            .ptr(page.addr() + MARK_BITS_OFFSET)
+            .cast::<u64>()
+            .as_ptr();
+        // SAFETY: both bitmaps (BITMAP_WORDS words each, 8-aligned) and the line-mark array
+        // (LINES_PER_PAGE bytes) lie in the page's committed metadata area, apart from each
+        // other, with the reservation's provenance; `ends` is a local array of LINES_PER_PAGE
+        // bytes. Only the thread that sweeps the page touches its bitmaps and line marks (the
+        // queue gave the page to this sweep; a concurrent sweep gives each page to one thread,
+        // parallel.rs), so no other access runs during the call. The body came from
+        // `SweepBody::bitmaps`, which checked the CPU.
+        let c = unsafe { (self.bitmaps)(vo, mk, keep_marks, page.line_marks(), ends.as_mut_ptr()) };
+        // SAFETY: as above: the VO bitmap (now the live bits) and the line marks of the page.
+        unsafe {
+            self.fix_line_ends(page.addr(), vo, page.line_marks(), &ends, |a| {
+                Some(self.size_at(a))
+            })
+        };
+        #[cfg(all(debug_assertions, not(miri)))]
+        self.debug_check_line_marks(page);
+        core::mem::forget(unmark);
+        self.freed_cells += u64::from(c.dead);
+        *kept += c.live as usize;
+        if c.live == 0 {
+            return Swept::Free;
+        }
+        if (FIRST_LINE..LINES_PER_PAGE).any(|l| !page.line_used(l)) {
+            Swept::Recyclable
+        } else {
+            Swept::Full
+        }
+    }
+
+    /// The scalar fix after a bitmap pass ([`Sweeper::sweep_page_lean`] and the shadow pass):
+    /// line `l` has a live start and no cell after its last live one (`ends[l]`), and line
+    /// `l + 1` has no live start, so that last live cell may reach into line `l + 1` and past
+    /// it; its size gives the lines it reaches ([`Sweeper::mark_live_lines`] has the rule).
+    /// `alive`: the live bits of the page (the VO bitmap after the pass); `lines`: its line
+    /// marks; `page_addr`: the page; `size`: the size of a live cell (`None`: unknown, the fix
+    /// stops and returns `None`).
+    ///
+    /// # Safety
+    ///
+    /// `alive` points to BITMAP_WORDS words and `lines` to LINES_PER_PAGE bytes, both of the
+    /// pass on page `page_addr`, and no other thread touches them; every bit of `alive` is a
+    /// live cell of that page.
+    unsafe fn fix_line_ends(
+        &self,
+        page_addr: usize,
+        alive: *const u64,
+        lines: *mut u8,
+        ends: &[u8; LINES_PER_PAGE],
+        size: impl Fn(usize) -> Option<usize>,
+    ) -> Option<()> {
+        for (k, chunk) in ends.as_chunks::<8>().0.iter().enumerate() {
+            let mut e = u64::from_le_bytes(*chunk);
+            while e != 0 {
+                let line = k * 8 + e.trailing_zeros() as usize / 8;
+                e &= e - 1;
+                let next = line + 1;
+                // SAFETY: line < LINES_PER_PAGE (a byte of `ends`), so next <= LINES_PER_PAGE
+                // is tested first and the read is inside `lines`.
+                if next == LINES_PER_PAGE || unsafe { lines.add(next).read() } != 0 {
+                    continue; // a cell never crosses the page end; a live start uses next
+                }
+                let w = line / LINES_PER_WORD;
+                let h = line % LINES_PER_WORD;
+                // SAFETY: w < BITMAP_WORDS: inside `alive`.
+                let here = unsafe { alive.add(w).read() } & (LINE_BITS << (h * GRANULES_PER_LINE));
+                debug_assert!(here != 0, "a line end without a live start");
+                let bit = 63 - here.leading_zeros() as usize;
+                let addr = page_addr + (w * 64 + bit) * GRANULE;
+                let last = (addr + size(addr)? - 1 - page_addr) / LINE_SIZE;
+                debug_assert!(last < LINES_PER_PAGE, "cell {addr:#x} crosses the page end");
+                if last > line {
+                    // SAFETY: lines next..=last lie inside `lines` (a cell never crosses the
+                    // page end).
+                    unsafe { lines.add(next).write_bytes(1, last - line) };
+                }
+            }
+        }
+        Some(())
+    }
+
+    /// After a checked walk with no error so far (in the mark or any page): the bitmap body,
+    /// run on the copy taken before the walk (`shadow`: the copy and the cells freed before
+    /// the walk), must leave the bitmaps, the line marks and the counts that the walk left (so
+    /// the GC-stress shards check the forced body on every page of every GC). A difference is
+    /// an error of page `idx`.
+    fn shadow_check(
+        &self,
+        shadow: Option<(Box<BitmapCopy>, u64)>,
+        page: Page,
+        idx: usize,
+        errors: &mut Vec<String>,
+        live: usize,
+    ) {
+        if let Some((mut copy, freed_before)) = shadow
+            && errors.is_empty()
+        {
+            let dead = self.freed_cells - freed_before;
+            if let Some(msg) = self.shadow_differs(page, &mut copy, live, dead) {
+                sweep_error(errors, idx, format_args!("{msg}"));
+            }
+        }
+    }
+
+    /// The shadow pass of a checked walk: the bitmap body on `copy` (the page's bitmaps before
+    /// the walk), then the fix, against what the walk left on `page` (the 2 bitmaps, the line
+    /// marks) and its counts (`live`, `dead`). `None` if all equal, else the first difference.
+    fn shadow_differs(
+        &self,
+        page: Page,
+        copy: &mut BitmapCopy,
+        live: usize,
+        dead: u64,
+    ) -> Option<String> {
+        #[cfg(test)]
+        sweep_lean_test::shadow_ran();
+        let keep_marks = if self.sticky { u64::MAX } else { 0 };
+        let mut lines = [0u8; LINES_PER_PAGE];
+        let mut ends = [0u8; LINES_PER_PAGE];
+        // SAFETY: the 4 arrays are locals of the sizes of the contract, apart from each other.
+        // The body came from `SweepBody::bitmaps`, which checked the CPU.
+        let c = unsafe {
+            (self.bitmaps)(
+                copy.vo.as_mut_ptr(),
+                copy.mk.as_mut_ptr(),
+                keep_marks,
+                lines.as_mut_ptr(),
+                ends.as_mut_ptr(),
+            )
+        };
+        // A size that cannot be known ends the shadow pass with no finding: such a cell is an
+        // error of the walk or of the verify, which they report.
+        let size = |a: usize| {
+            // SAFETY: a live bit marks a cell start whose word0 the allocator wrote.
+            self.kinds
+                .cell_size(unsafe { CellPtr::from_raw(self.ptr(a).cast()) })
+        };
+        // SAFETY: the local copies; their live bits are the page's live cells (the walk kept
+        // exactly the cells with both bits, and no error was found).
+        unsafe {
+            self.fix_line_ends(
+                page.addr(),
+                copy.vo.as_ptr(),
+                lines.as_mut_ptr(),
+                &ends,
+                size,
+            )?
+        };
+        let name = ep9_platform::simd::sweep().name();
+        if c.live as usize != live || u64::from(c.dead) != dead {
+            return Some(format!(
+                "the sweep body {name} counted {} live and {} dead cells, the checked walk {live} \
+                 and {dead}",
+                c.live, c.dead
+            ));
+        }
+        for w in 0..BITMAP_WORDS {
+            let (vo, mk) = (
+                page.vo_word(w).load(Relaxed),
+                page.mark_word(w).load(Relaxed),
+            );
+            if copy.vo[w] != vo || copy.mk[w] != mk {
+                return Some(format!(
+                    "the sweep body {name} left VO/mark word {w} {:#x}/{:#x}, the checked walk \
+                     {vo:#x}/{mk:#x}",
+                    copy.vo[w], copy.mk[w]
+                ));
+            }
+        }
+        (0..LINES_PER_PAGE)
+            .find(|&l| (lines[l] != 0) != page.line_used(l))
+            .map(|l| {
+                format!(
+                    "the sweep body {name} left another line mark of line {l} than the checked walk"
+                )
+            })
+    }
+}
+
+/// The 2 bitmaps of a page before a checked walk (the input of its shadow pass).
+struct BitmapCopy {
+    vo: [u64; BITMAP_WORDS],
+    mk: [u64; BITMAP_WORDS],
+}
+
+const _: () = assert!(
+    BITMAP_WORDS == ep9_platform::simd::SWEEP_WORDS
+        && LINES_PER_PAGE == ep9_platform::simd::SWEEP_LINES
+        && GRANULES_PER_LINE == 32
+);
+
+impl BitmapCopy {
+    fn of(sw: &Sweeper<'_>, page: Page) -> Box<BitmapCopy> {
+        let mut c = Box::new(BitmapCopy {
+            vo: [0; BITMAP_WORDS],
+            mk: [0; BITMAP_WORDS],
+        });
+        let vo = sw.ptr(page.addr() + VO_BITS_OFFSET).cast::<u64>();
+        let mk = sw.ptr(page.addr() + MARK_BITS_OFFSET).cast::<u64>();
+        // SAFETY: both bitmaps (BITMAP_WORDS words each) lie in the page's committed metadata
+        // area, 8-aligned; only the thread that sweeps the page touches them (as in
+        // `any_mark_bit`); the copies go to the arrays of the same size.
+        unsafe {
+            core::ptr::copy_nonoverlapping(vo.as_ptr(), c.vo.as_mut_ptr(), BITMAP_WORDS);
+            core::ptr::copy_nonoverlapping(mk.as_ptr(), c.mk.as_mut_ptr(), BITMAP_WORDS);
+        }
+        c
+    }
+}
+
+/// The count build of SWEEP-LEAN (scratch counts only; never a shipped build):
+/// `RUSTFLAGS="--cfg ep9_sweep_count"` counts the dead-cell header reads of the walk that is
+/// not `CHECK` and prints "ep9: sweep dead_header_reads=<n>" on stderr at exit, and
+/// `EP9_SWEEP_COUNT_LEAN=0` turns SWEEP-LEAN off in that build (today's walk). Every other
+/// build: both functions are empty.
+mod sweep_count {
+    // `cfg(ep9_sweep_count)` is set only by the count build (RUSTFLAGS).
+    #![allow(unexpected_cfgs)]
+
+    #[cfg(ep9_sweep_count)]
+    static READS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+    #[cfg(ep9_sweep_count)]
+    extern "C" fn print() {
+        let n = READS.load(core::sync::atomic::Ordering::Relaxed);
+        eprintln!("ep9: sweep dead_header_reads={n}");
+    }
+
+    /// One dead-cell header read of the walk that is not `CHECK`.
+    #[inline(always)]
+    pub(super) fn dead_header_read() {
+        #[cfg(ep9_sweep_count)]
+        {
+            static AT_EXIT: std::sync::Once = std::sync::Once::new();
+            AT_EXIT.call_once(|| {
+                unsafe extern "C" {
+                    fn atexit(f: extern "C" fn()) -> i32;
+                }
+                // SAFETY: libc `atexit` with a function that only reads an atomic and prints.
+                unsafe { atexit(print) };
+            });
+            READS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// True in the count build under `EP9_SWEEP_COUNT_LEAN=0`.
+    #[inline(always)]
+    pub(super) fn lean_off() -> bool {
+        #[cfg(ep9_sweep_count)]
+        {
+            static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            if *OFF.get_or_init(|| std::env::var("EP9_SWEEP_COUNT_LEAN").as_deref() == Ok("0")) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// The SWEEP-LEAN controls of the unit tests, per thread: the lean walk on or off (off by
+/// default: today's walk, so the `freed_bytes` checks of the other tests keep their value) and
+/// a forced bitmap body (default: the SWEEP pick of the process), and a count of the shadow
+/// passes. Only the sweeps of this thread see them (the lazy sweep; the sweeper thread keeps
+/// the defaults).
+#[cfg(test)]
+pub(crate) mod sweep_lean_test {
+    use ep9_platform::simd::{SweepBitmaps, SweepBody};
+    use std::cell::Cell;
+
+    std::thread_local! {
+        static LEAN: Cell<bool> = const { Cell::new(false) };
+        static BODY: Cell<Option<SweepBody>> = const { Cell::new(None) };
+        static FUNC: Cell<Option<SweepBitmaps>> = const { Cell::new(None) };
+        static SHADOWS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn lean() -> bool {
+        LEAN.with(Cell::get)
+    }
+
+    /// The forced body of this thread: a function of [`with_fn`], else the body of [`with`].
+    pub(crate) fn bitmaps() -> Option<SweepBitmaps> {
+        FUNC.with(Cell::get).or_else(|| {
+            BODY.with(Cell::get)
+                .map(|b| b.bitmaps().expect("a forced sweep body this CPU has"))
+        })
+    }
+
+    /// One shadow pass of a checked walk on this thread.
+    pub(crate) fn shadow_ran() {
+        SHADOWS.with(|c| c.set(c.get() + 1));
+    }
+
+    /// Shadow passes on this thread so far.
+    pub(crate) fn shadows() -> u64 {
+        SHADOWS.with(Cell::get)
+    }
+
+    /// Runs `f` with the lean walk on and the bitmap function `body` (a test body) on this
+    /// thread.
+    pub(crate) fn with_fn<R>(body: SweepBitmaps, f: impl FnOnce() -> R) -> R {
+        struct Restore(Option<SweepBitmaps>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                FUNC.with(|c| c.set(self.0));
+            }
+        }
+        let _restore = Restore(FUNC.with(|c| c.replace(Some(body))));
+        with(true, None, f)
+    }
+
+    /// Runs `f` with the lean walk `lean` and the bitmap body `body` on this thread.
+    pub(crate) fn with<R>(lean: bool, body: Option<SweepBody>, f: impl FnOnce() -> R) -> R {
+        struct Restore(bool, Option<SweepBody>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                LEAN.with(|c| c.set(self.0));
+                BODY.with(|c| c.set(self.1));
+            }
+        }
+        let _restore = Restore(
+            LEAN.with(|c| c.replace(lean)),
+            BODY.with(|c| c.replace(body)),
+        );
+        f()
     }
 }

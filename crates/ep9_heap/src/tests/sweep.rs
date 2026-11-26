@@ -618,3 +618,409 @@ fn field_size_kinds_sweep_as_their_size_functions() {
         assert_eq!(by_fields.freed_cells, dead, "concurrent {concurrent}");
     }
 }
+
+// ---- SWEEP-LEAN (M14-P1; ALLOC-SET design 1.3; plan v19 4.3) --------------------------------
+//
+// | Test | Covers |
+// |---|---|
+// | `every_sweep_bitmap_body_equals_the_scalar_body` | each SWEEP body this CPU has (called by its function), on random pages, both keep values: the same bitmaps, line marks, line ends and counts as the scalar body; the scalar body against a bit-by-bit model |
+// | `the_lean_sweep_with_each_body_leaves_the_free_lists_of_the_walk` | S0, S1 major, S1 minor: the lazy sweep with today's walk, then lean with each body forced: the same cells kept, freed cells, pages and committed bytes, the same addresses for the next allocations (the free lists), no `freed_bytes` from small cells, and a verify (with the shadow pass) passes |
+// | `the_checked_sweep_compares_the_body_on_every_page` | the verify after a GC with each body forced: the shadow pass runs and finds no difference; a wrong body result is an error |
+// | `sweep_simd_report` | the SWEEP pick follows `EP9_SIMD` (a forced body that the CPU has is taken) and prints "SIMD-REPORT-SWEEP" |
+
+use crate::heap::sweep_lean_test;
+use ep9_platform::simd::{SWEEP_LINES, SWEEP_WORDS, SweepBody, SweepCounts, sweep_scalar};
+
+/// The names that `EP9_REQUIRE_SIMD_PATHS` lists (the x86 box: a missing body fails).
+fn required_paths() -> Vec<String> {
+    std::env::var("EP9_REQUIRE_SIMD_PATHS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The SWEEP bodies this CPU and build have, scalar first. A body that
+/// `EP9_REQUIRE_SIMD_PATHS` names must be there.
+fn sweep_bodies() -> Vec<SweepBody> {
+    let have: Vec<SweepBody> = SweepBody::ALL
+        .into_iter()
+        .filter(|b| b.bitmaps().is_some())
+        .collect();
+    for name in required_paths() {
+        if let Some(b) = SweepBody::ALL.into_iter().find(|b| b.name() == name) {
+            assert!(
+                have.contains(&b),
+                "EP9_REQUIRE_SIMD_PATHS names sweep body {name}: missing"
+            );
+        }
+    }
+    assert_eq!(have[0], SweepBody::Scalar);
+    if cfg!(target_arch = "aarch64") {
+        assert!(
+            have.contains(&SweepBody::Neon),
+            "aarch64 without the NEON sweep body"
+        );
+    }
+    if cfg!(target_arch = "x86_64") {
+        assert!(
+            have.contains(&SweepBody::Sse2),
+            "x86-64 without the SSE2 sweep body"
+        );
+    }
+    have
+}
+
+/// One random word of a page bitmap: empty, one half only, sparse, dense or full.
+fn random_word(rng: &mut Rng) -> u64 {
+    let kind = rng.below(8);
+    let mut bits = |n: usize| (0..n).fold(0u64, |w, _| w | 1 << rng.below(64));
+    match kind {
+        0 | 1 => 0,
+        2 => bits(1),
+        3 => bits(3) & 0xffff_ffff,
+        4 => bits(3) & !0xffff_ffff,
+        5 => bits(12),
+        6 => bits(48),
+        _ => u64::MAX,
+    }
+}
+
+/// A random page: VO words, mark words (mostly inside VO; `strays`: some outside it).
+fn random_page(rng: &mut Rng, strays: bool) -> (Vec<u64>, Vec<u64>) {
+    let vo: Vec<u64> = (0..SWEEP_WORDS).map(|_| random_word(rng)).collect();
+    let mk = vo
+        .iter()
+        .map(|&v| {
+            let m = v & random_word(rng);
+            if strays && rng.below(16) == 0 {
+                m | random_word(rng)
+            } else {
+                m
+            }
+        })
+        .collect();
+    (vo, mk)
+}
+
+/// What one body left on a copy of a page.
+#[derive(Debug, PartialEq, Eq)]
+struct BodyOut {
+    vo: Vec<u64>,
+    mk: Vec<u64>,
+    lines: Vec<u8>,
+    ends: Vec<u8>,
+    counts: SweepCounts,
+}
+
+fn run_body(body: SweepBody, vo: &[u64], mk: &[u64], keep: u64) -> BodyOut {
+    let f = body.bitmaps().expect("a body this CPU has");
+    let (mut vo, mut mk) = (vo.to_vec(), mk.to_vec());
+    let (mut lines, mut ends) = (vec![7u8; SWEEP_LINES], vec![7u8; SWEEP_LINES]);
+    // SAFETY: 4 separate vectors of the sizes of the `SweepBitmaps` contract; the body came
+    // from `SweepBody::bitmaps`.
+    let counts = unsafe {
+        f(
+            vo.as_mut_ptr(),
+            mk.as_mut_ptr(),
+            keep,
+            lines.as_mut_ptr(),
+            ends.as_mut_ptr(),
+        )
+    };
+    BodyOut {
+        vo,
+        mk,
+        lines,
+        ends,
+        counts,
+    }
+}
+
+/// The pass of `ep9_platform::simd` (SWEEP section) bit by bit.
+fn model(vo: &[u64], mk: &[u64], keep: u64) -> BodyOut {
+    let mut out = BodyOut {
+        vo: vec![0; SWEEP_WORDS],
+        mk: mk.to_vec(),
+        lines: vec![0; SWEEP_LINES],
+        ends: vec![0; SWEEP_LINES],
+        counts: SweepCounts::default(),
+    };
+    for w in 0..SWEEP_WORDS {
+        let (v, m) = (vo[w], mk[w]);
+        for bit in 0..64 {
+            let (vb, mb) = (v >> bit & 1 != 0, m >> bit & 1 != 0);
+            out.counts.live += u32::from(vb && mb);
+            out.counts.dead += u32::from(vb && !mb);
+        }
+        for h in 0..2 {
+            let has = |x: u64, b: usize| (x >> (32 * h + b)) & 1 != 0;
+            let live: Vec<usize> = (0..32).filter(|&b| has(v & m, b)).collect();
+            let starts: Vec<usize> = (0..32).filter(|&b| has(v, b)).collect();
+            out.lines[2 * w + h] = u8::from(!live.is_empty());
+            out.ends[2 * w + h] = u8::from(!live.is_empty() && live.last() == starts.last());
+        }
+        out.vo[w] = v & m;
+        if v != 0 {
+            out.mk[w] = v & m & keep;
+        }
+    }
+    out
+}
+
+#[test]
+fn every_sweep_bitmap_body_equals_the_scalar_body() {
+    let bodies = sweep_bodies();
+    let mut rng = Rng(0x5EE9_1EA4);
+    let mut pages = 0;
+    for case in 0..300 {
+        let (vo, mk) = random_page(&mut rng, case % 3 == 0);
+        for keep in [0, u64::MAX] {
+            let want = run_body(SweepBody::Scalar, &vo, &mk, keep);
+            if case < 60 {
+                assert_eq!(
+                    want,
+                    model(&vo, &mk, keep),
+                    "case {case} keep {keep:#x}: scalar vs the model"
+                );
+            }
+            for &b in &bodies[1..] {
+                assert_eq!(
+                    run_body(b, &vo, &mk, keep),
+                    want,
+                    "case {case} keep {keep:#x}: {}",
+                    b.name()
+                );
+            }
+            pages += 1;
+        }
+    }
+    // The edge pages: all empty, all full, and every word with only its top or bottom bit.
+    for (vo, mk) in [
+        (vec![0; SWEEP_WORDS], vec![0; SWEEP_WORDS]),
+        (vec![u64::MAX; SWEEP_WORDS], vec![u64::MAX; SWEEP_WORDS]),
+        (vec![u64::MAX; SWEEP_WORDS], vec![0; SWEEP_WORDS]),
+        (
+            vec![1 << 63 | 1 << 31; SWEEP_WORDS],
+            vec![1 << 31; SWEEP_WORDS],
+        ),
+        (vec![1 | 1 << 32; SWEEP_WORDS], vec![1 << 32; SWEEP_WORDS]),
+    ] {
+        for keep in [0, u64::MAX] {
+            let want = run_body(SweepBody::Scalar, &vo, &mk, keep);
+            assert_eq!(
+                want,
+                model(&vo, &mk, keep),
+                "edge page: scalar vs the model"
+            );
+            for &b in &bodies[1..] {
+                assert_eq!(run_body(b, &vo, &mk, keep), want, "edge page: {}", b.name());
+            }
+            pages += 1;
+        }
+    }
+    let names: Vec<&str> = bodies.iter().map(|b| b.name()).collect();
+    eprintln!("SWEEP-BODIES {} pages {pages} each", names.join(","));
+}
+
+/// What one GC and its whole lazy sweep left, and where the next allocations went.
+#[derive(Debug, PartialEq, Eq)]
+struct LeanLeft {
+    live: Vec<bool>,
+    freed_cells: u64,
+    small_pages: usize,
+    committed_bytes: usize,
+    /// The addresses of the next allocations (from the first graph cell): the free lists the
+    /// sweep left.
+    next: Vec<usize>,
+}
+
+/// One GC of a random graph of `n` cells on a heap with no zap, its lazy sweep, then 3000
+/// allocations (no GC among them), with the lean walk off (`body` None: today's walk) or on
+/// with `body` forced. Returns what it left and the small-cell bytes it freed.
+fn lean_gc(
+    seed: u64,
+    n: usize,
+    generational: bool,
+    minor: bool,
+    body: Option<SweepBody>,
+) -> (LeanLeft, u64) {
+    sweep_lean_test::with(body.is_some(), body, || {
+        let heap = test_heap(|c| {
+            c.zap = false;
+            c.generational = generational;
+        });
+        let mut rng = Rng(seed);
+        let mut g = build(&heap, &mut rng, n, false);
+        let live = g.reachable();
+        let before = heap.stats();
+        if minor {
+            heap.collect_minor_with_words(&[]);
+        } else {
+            heap.collect_with_words(&[]);
+        }
+        heap.finish_sweeping();
+        let what = format!("seed {seed:#x} gen {generational} minor {minor} body {body:?}");
+        g.check(&heap, &live, &what);
+        let st = heap.stats();
+        // Each heap has its own cage: the addresses are taken from the first cell of the graph.
+        let origin = g.cells[0].addr();
+        let next = (0..3000u32)
+            .map(|i| {
+                new_node(&heap, i, (i % 9) as usize)
+                    .addr()
+                    .wrapping_sub(origin)
+            })
+            .collect();
+        assert_eq!(
+            heap.stats().collections,
+            st.collections,
+            "{what}: a GC among the allocations"
+        );
+        // A checked GC: the verify and its shadow pass of the body find nothing.
+        heap.set_verify_after_gc(true);
+        heap.collect_with_words(&[]);
+        let left = LeanLeft {
+            live: (0..g.cells.len()).map(|i| live.contains(&i)).collect(),
+            freed_cells: st.freed_cells - before.freed_cells,
+            small_pages: st.small_pages,
+            committed_bytes: st.committed_bytes,
+            next,
+        };
+        g.drop_roots(&heap);
+        (left, st.freed_bytes - before.freed_bytes)
+    })
+}
+
+#[test]
+fn the_lean_sweep_with_each_body_leaves_the_free_lists_of_the_walk() {
+    let bodies = sweep_bodies();
+    let cases = [(false, false), (true, false), (true, true)];
+    for (k, &(generational, minor)) in cases.iter().enumerate() {
+        let seed = 0x5EE9_2000 + k as u64;
+        let (walk, walk_bytes) = lean_gc(seed, 30_000, generational, minor, None);
+        assert!(
+            walk.freed_cells > 0 && walk_bytes > 0,
+            "case {k}: the GC freed nothing"
+        );
+        for &b in &bodies {
+            let (lean, lean_bytes) = lean_gc(seed, 30_000, generational, minor, Some(b));
+            let name = b.name();
+            assert_eq!(
+                lean.live, walk.live,
+                "case {k}: body {name}: other cells kept"
+            );
+            assert_eq!(
+                (lean.freed_cells, lean.small_pages, lean.committed_bytes),
+                (walk.freed_cells, walk.small_pages, walk.committed_bytes),
+                "case {k}: body {name}: freed cells, pages, committed bytes"
+            );
+            let first = (0..walk.next.len()).find(|&i| lean.next[i] != walk.next[i]);
+            assert_eq!(
+                first, None,
+                "case {k}: body {name}: the first allocation at another address"
+            );
+            assert_eq!(lean, walk, "case {k}: body {name}");
+            // The lean walk reads no dead header, so the small cells add no bytes (the graph
+            // has no large object).
+            assert_eq!(lean_bytes, 0, "case {k}: body {}", b.name());
+        }
+    }
+}
+
+/// A wrong body for the shadow test: the scalar pass, then the line of the first live start
+/// is marked free.
+///
+/// # Safety
+///
+/// The contract of `SweepBitmaps`.
+unsafe fn wrong_body(
+    vo: *mut u64,
+    mk: *mut u64,
+    keep: u64,
+    lines: *mut u8,
+    ends: *mut u8,
+) -> SweepCounts {
+    // SAFETY: the caller's contract.
+    unsafe {
+        let c = sweep_scalar(vo, mk, keep, lines, ends);
+        if let Some(l) = (0..SWEEP_LINES).find(|&l| lines.add(l).read() != 0) {
+            lines.add(l).write(0);
+        }
+        c
+    }
+}
+
+/// One checked heap: a random graph, a major and a minor GC (each verified, with the shadow
+/// pass on every page), then a verify. Returns the verify result and the shadow passes.
+fn checked_gcs() -> (Result<(), String>, u64) {
+    let shadows = sweep_lean_test::shadows();
+    let heap = graph_heap(true, true, false);
+    let mut rng = Rng(0x5EE9_3000);
+    let mut g = build(&heap, &mut rng, 20_000, false);
+    let live = g.reachable();
+    let gcs = catch_unwind(AssertUnwindSafe(|| {
+        heap.collect_with_words(&[]);
+        heap.collect_minor_with_words(&[]);
+    }));
+    let r = match gcs {
+        Ok(()) => {
+            g.check(&heap, &live, "checked");
+            heap.verify().map(|_| ()).map_err(|e| e.to_string())
+        }
+        Err(p) => Err(p
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_else(|| "a panic".to_owned())),
+    };
+    g.drop_roots(&heap);
+    (r, sweep_lean_test::shadows() - shadows)
+}
+
+#[test]
+fn the_checked_sweep_compares_the_body_on_every_page() {
+    for b in sweep_bodies() {
+        let (r, shadows) = sweep_lean_test::with(true, Some(b), checked_gcs);
+        assert_eq!(r, Ok(()), "body {}", b.name());
+        assert!(shadows >= 3, "body {}: {shadows} shadow passes", b.name());
+    }
+    let (r, _) = sweep_lean_test::with_fn(wrong_body, checked_gcs);
+    let e = r.expect_err("a wrong body passes the checked sweep");
+    assert!(e.contains("another line mark"), "{e}");
+}
+
+/// The SWEEP pick of the process follows `EP9_SIMD` (`sweep=<body>`, or a bare body name):
+/// a forced body that this CPU has is the pick. Prints the report line.
+#[test]
+fn sweep_simd_report() {
+    let line = ep9_platform::simd::sweep_report();
+    eprintln!("{line}");
+    assert!(line.starts_with(&format!(
+        "SIMD-REPORT-SWEEP target={} sweep=",
+        std::env::consts::ARCH
+    )));
+    let forced = std::env::var("EP9_SIMD").ok().and_then(|s| {
+        s.split(',')
+            .map(str::trim)
+            .find_map(|i| match i.split_once('=') {
+                Some(("sweep", b)) => Some(b.trim().to_owned()),
+                Some(_) => None,
+                None => SweepBody::ALL
+                    .iter()
+                    .any(|b| b.name() == i)
+                    .then(|| i.to_owned()),
+            })
+    });
+    if let Some(name) = forced
+        && let Some(b) = SweepBody::ALL.into_iter().find(|b| b.name() == name)
+        && b.bitmaps().is_some()
+    {
+        assert_eq!(
+            ep9_platform::simd::sweep(),
+            b,
+            "EP9_SIMD forces sweep={name}"
+        );
+    }
+}
