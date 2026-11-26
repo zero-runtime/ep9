@@ -101,6 +101,8 @@ mod string_search;
 // so no cited line above moves.
 mod json_quote;
 mod star_dst; // STAR-DST probe (ABI 7, T3): the fused Star opcodes run as their pairs
+// TO-BOOL (M15-P1): the ToBoolean truth table; after the list, so no cited line above moves.
+mod to_bool;
 
 #[path = "../../../ep9_bytecode/tests/common/mod.rs"]
 pub(crate) mod common;
