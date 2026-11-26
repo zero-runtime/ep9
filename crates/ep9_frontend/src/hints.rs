@@ -8,7 +8,10 @@
 //!  Hints::file_hints(path, hash): not in the table, type errors, another hash (S3)
 //!    | Err ------------------------------------------------> JoinError::Hints      (counted)
 //!    v Ok(records of the file)
-//!  the path is not a .js, .mjs or .cjs path -------------> JoinError::TsSource   (counted)
+//!  the path is not a plain .js, .mjs or .cjs path -------> JoinError::TsSource   (counted)
+//!    v   (plain: no ':', '?' or '#', so no scheme, drive, query or fragment)
+//!  the goal of `opts` is not the goal of the path
+//!  (.mjs: Module, .cjs: Script; .js: none) --------------> JoinError::GoalMismatch (counted)
 //!    v
 //!  the front end on its worker (lib.rs with_front_end): layer 0, the parse with layer 1,
 //!  layer 2 and the budget check of layer 1, oxc_semantic --> JoinError::Compile    (counted)
@@ -29,7 +32,15 @@
 //!   `(f < number) > ((1) + 2)`, with the same root span and kind. So a path that is not a
 //!   `.js`, `.mjs` or `.cjs` path (a `.ts`, `.tsx`, `.mts`, `.cts` or `.jsx` path) gives
 //!   [`JoinError::TsSource`], before the parse. The TS parse needs a language in `SourceOpts`
-//!   (H3).
+//!   (H3). A path with ':', '?' or '#' (a scheme, a drive, a query or a fragment) is not a JS
+//!   path either: `src/a.ts?x.js` can name a TS resource.
+//! - Goal: the two JS goals can also parse as other nodes on the same spans: in a module
+//!   `await(1)+2` is `(await 1) + 2`, in a script the call `await(1)` plus 2, with the same
+//!   root span and kind. So a `.mjs` path needs the module goal and a `.cjs` path the script
+//!   goal, else [`JoinError::GoalMismatch`], before the parse. Limit: a `.js` path fixes no
+//!   goal (package.json `type`), so the join takes the goal of `opts`, and a wrong goal there
+//!   can join. A check needs the goal of the producer in the `.ep9h` file entry (a schema
+//!   change; H37 item 3).
 //! - Offsets: oxc spans of the text after the BOM strip are UTF-8 byte offsets of the decoded
 //!   text, as the records are (S2, H37-Q4). Both sides hash the UTF-8 bytes of that text, never
 //!   an engine string form (MC-w49-6).
@@ -69,7 +80,7 @@ use oxc_span::{GetSpan, Span};
 
 use ep9_hints::{DropCounts, DropReason, Hints, NodeKind, Record, TextHash};
 
-use crate::{CompileError, RangeError, SourceOpts};
+use crate::{CompileError, Goal, RangeError, SourceOpts};
 
 /// One slot per `NodeKind` code (codes 1 to `NodeKind::ALL.len()`). Slot 0 counts the
 /// [`ANY_NODE`] keys; no accessor reads it.
@@ -112,10 +123,15 @@ pub enum JoinError {
     /// `ep9_hints` dropped the file's hints: its path is not in the table, it has type errors,
     /// or its text hash is not the hash of this text (S3).
     Hints(DropReason),
-    /// The path is not a `.js`, `.mjs` or `.cjs` path, so its text may be TS (or JSX): the
-    /// front end parses the JS goals only, and the JS parse of a TS text can put other nodes
-    /// on the record spans (module doc). Every hint of the file is dropped; no parse runs.
+    /// The path is not a plain `.js`, `.mjs` or `.cjs` path (it has another suffix, or a ':',
+    /// '?' or '#'), so its text may be TS (or JSX): the front end parses the JS goals only,
+    /// and the JS parse of a TS text can put other nodes on the record spans (module doc).
+    /// Every hint of the file is dropped; no parse runs.
     TsSource,
+    /// The goal of the `SourceOpts` is not the goal that the path fixes (`.mjs`: Module,
+    /// `.cjs`: Script; a `.js` path fixes none): the other goal can put other nodes on the
+    /// record spans (module doc). Every hint of the file is dropped; no parse runs.
+    GoalMismatch,
     /// S3: the span of this record is a node of another kind (any AST node, also one with no
     /// `NodeKind`), so the two parses do not agree: every hint of the file is dropped.
     KindMismatch {
@@ -135,6 +151,10 @@ impl std::fmt::Display for JoinError {
         match self {
             JoinError::Hints(reason) => write!(f, "hints dropped: {reason}"),
             JoinError::TsSource => write!(f, "hints dropped: ts-source (the join parses JS only)"),
+            JoinError::GoalMismatch => write!(
+                f,
+                "hints dropped: goal-mismatch (the goal is not the goal of the path)"
+            ),
             JoinError::KindMismatch { start, end, kind } => write!(
                 f,
                 "hints dropped: kind-mismatch ({} at {start}..{end})",
@@ -192,9 +212,10 @@ impl HintJoin {
 /// # Errors
 ///
 /// [`JoinError::Hints`] when `ep9_hints` drops the file (S3), [`JoinError::TsSource`] when
-/// `path` is not a `.js`, `.mjs` or `.cjs` path, [`JoinError::Compile`] when the front end
-/// rejects the source, and [`JoinError::KindMismatch`] when a record's span is a node of
-/// another kind (S3).
+/// `path` is not a plain `.js`, `.mjs` or `.cjs` path, [`JoinError::GoalMismatch`] when the
+/// goal of `opts` is not the goal of a `.mjs` or `.cjs` path, [`JoinError::Compile`] when the
+/// front end rejects the source, and [`JoinError::KindMismatch`] when a record's span is a
+/// node of another kind (S3).
 pub fn join_hints(
     source: &str,
     opts: SourceOpts,
@@ -207,6 +228,9 @@ pub fn join_hints(
     if !is_js_path(path) {
         return Err(JoinError::TsSource);
     }
+    if path_goal(path).is_some_and(|goal| goal != opts.goal()) {
+        return Err(JoinError::GoalMismatch);
+    }
     let walked = crate::with_front_end(text, opts, |fe| {
         walk(fe.program)
             .map_err(|at| CompileError::Range(RangeError::stack_limit(fe.source, Some(at))))
@@ -216,11 +240,26 @@ pub fn join_hints(
 }
 
 /// True for a path whose text the JS parse of the front end reads as its author wrote it: a
-/// `.js`, `.mjs` or `.cjs` path (case as written; the file table keeps the path of the file).
+/// plain `.js`, `.mjs` or `.cjs` path (case as written; the file table keeps the path of the
+/// file). Plain: no ':' (a scheme or a drive), no '?' (a query) and no '#' (a fragment), as
+/// such a key can name another resource (`src/a.ts?x.js`).
 fn is_js_path(path: &str) -> bool {
-    [".js", ".mjs", ".cjs"]
-        .iter()
-        .any(|ext| path.ends_with(ext))
+    !path.contains([':', '?', '#'])
+        && [".js", ".mjs", ".cjs"]
+            .iter()
+            .any(|ext| path.ends_with(ext))
+}
+
+/// The goal that the suffix of a JS path fixes: `.mjs` Module, `.cjs` Script. A `.js` path
+/// fixes none (package.json `type` decides; the join does not read it).
+fn path_goal(path: &str) -> Option<Goal> {
+    if path.ends_with(".mjs") {
+        Some(Goal::Module)
+    } else if path.ends_with(".cjs") {
+        Some(Goal::Script)
+    } else {
+        None
+    }
 }
 
 /// The node keys of a walk (a `NodeKind` key and an [`ANY_NODE`] key per node) and its
@@ -290,6 +329,7 @@ fn join_records(records: &[Record], walked: Walked) -> Result<HintJoin, JoinErro
 pub struct JoinCounts {
     hints: DropCounts,
     ts_source: u64,
+    goal_mismatch: u64,
     kind_mismatch: u64,
     not_compiled: u64,
     files: u64,
@@ -308,6 +348,7 @@ impl JoinCounts {
             }
             Err(JoinError::Hints(reason)) => self.hints.add(*reason),
             Err(JoinError::TsSource) => self.ts_source += 1,
+            Err(JoinError::GoalMismatch) => self.goal_mismatch += 1,
             Err(JoinError::KindMismatch { .. }) => self.kind_mismatch += 1,
             Err(JoinError::Compile(_)) => self.not_compiled += 1,
         }
@@ -331,8 +372,8 @@ impl JoinCounts {
     }
 
     /// Every drop reason with its count, by stable name: the 16 reasons of `ep9_hints` (an
-    /// input or a file), then `ts-source`, `kind-mismatch` and `not-compiled` (a file), then
-    /// `no-node` (a record).
+    /// input or a file), then `ts-source`, `goal-mismatch`, `kind-mismatch` and
+    /// `not-compiled` (a file), then `no-node` (a record).
     #[must_use]
     pub fn per_reason(&self) -> Vec<(&'static str, u64)> {
         let mut rows: Vec<(&'static str, u64)> = DropReason::ALL
@@ -340,6 +381,7 @@ impl JoinCounts {
             .map(|&r| (r.name(), self.hints.get(r)))
             .collect();
         rows.push(("ts-source", self.ts_source));
+        rows.push(("goal-mismatch", self.goal_mismatch));
         rows.push(("kind-mismatch", self.kind_mismatch));
         rows.push(("not-compiled", self.not_compiled));
         rows.push(("no-node", self.no_node));
@@ -721,10 +763,14 @@ mod tests {
             let got = join_hints(src, module, path, &table_at(path, src, &records));
             assert_eq!(got, Err(JoinError::TsSource), "{path}");
         }
-        for path in ["src/a.mjs", "src/a.cjs"] {
-            let got = join_hints(src, module, path, &table_at(path, src, &records));
-            assert_eq!(got.map(|j| j.records().len()), Ok(1), "{path}");
-        }
+        // The text has an import, so it needs the module goal: a .mjs path joins as at the .js
+        // path; a .cjs path needs the script goal, so the module goal there is a goal mismatch.
+        let path = "src/a.mjs";
+        let mjs = join_hints(src, module, path, &table_at(path, src, &records)).unwrap();
+        assert_eq!((mjs.records(), mjs.no_node()), (&records[1..], 1));
+        let path = "src/a.cjs";
+        let got = join_hints(src, module, path, &table_at(path, src, &records));
+        assert_eq!(got, Err(JoinError::GoalMismatch));
         let got = join_hints(
             src,
             module,
@@ -736,6 +782,113 @@ mod tests {
         let typed = "let a: number = 1;";
         let got = join_hints(typed, module, "src/a.ts", &table_at("src/a.ts", typed, &[]));
         assert_eq!(got, Err(JoinError::TsSource));
+    }
+
+    /// Codex A1H-JOIN r2: the two JS goals can parse as other nodes on the same spans. In a
+    /// module `await(1)+2` is `(await 1) + 2`; in a script it is the call `await(1)` plus 2.
+    /// The root BinaryExpression is 0..10 in both. So a `.mjs` path with the script goal and a
+    /// `.cjs` path with the module goal give `GoalMismatch` and no parse, each counted as
+    /// `goal-mismatch`; with the goal of the path, each reading joins by its exact keys.
+    #[test]
+    fn a_goal_that_is_not_the_goal_of_the_path_drops_the_file() {
+        let src = "await(1)+2;";
+        // Keys by hand: `await` 0..5, `await(1)` 0..8, the sum 0..10.
+        assert_eq!(
+            (&src[0..5], &src[0..8], &src[0..10]),
+            ("await", "await(1)", "await(1)+2")
+        );
+        let root = [rec(0, 10, NodeKind::BinaryExpression)];
+        let module_keys = [
+            rec(0, 8, NodeKind::AwaitExpression),
+            rec(0, 10, NodeKind::BinaryExpression),
+        ];
+        let script_keys = [
+            rec(0, 5, NodeKind::IdentifierReference),
+            rec(0, 8, NodeKind::CallExpression),
+            rec(0, 10, NodeKind::BinaryExpression),
+        ];
+        let module = SourceOpts::module();
+        let strict = SourceOpts::script(Strictness::Strict);
+        let mut counts = JoinCounts::default();
+        for (path, opts) in [
+            ("src/a.mjs", script()),
+            ("src/a.mjs", strict),
+            ("src/a.cjs", module),
+        ] {
+            let got = join_hints(src, opts, path, &table_at(path, src, &root));
+            assert_eq!(got, Err(JoinError::GoalMismatch), "{path} {opts:?}");
+            counts.add(&got);
+        }
+        assert_eq!(nonzero(&counts), [("goal-mismatch", 3)]);
+        assert_eq!((counts.files(), counts.records()), (0, 0));
+        // The goal of the path: each reading joins by its exact keys.
+        let path = "src/a.mjs";
+        let join = join_hints(src, module, path, &table_at(path, src, &module_keys)).unwrap();
+        assert_eq!((join.records(), join.no_node()), (&module_keys[..], 0));
+        let path = "src/a.cjs";
+        for opts in [script(), strict] {
+            let join = join_hints(src, opts, path, &table_at(path, src, &script_keys)).unwrap();
+            assert_eq!(
+                (join.records(), join.no_node()),
+                (&script_keys[..], 0),
+                "{opts:?}"
+            );
+        }
+        // The two readings differ: under the other goal (at a .js path) the 0..8 key of each
+        // reading is a node of another kind (S3).
+        let got = join_hints(src, script(), PATH, &table(src, &module_keys));
+        let kind = NodeKind::AwaitExpression;
+        assert_eq!(
+            got,
+            Err(JoinError::KindMismatch {
+                start: 0,
+                end: 8,
+                kind
+            })
+        );
+        let got = join_hints(src, module, PATH, &table(src, &script_keys));
+        let kind = NodeKind::CallExpression;
+        assert_eq!(
+            got,
+            Err(JoinError::KindMismatch {
+                start: 0,
+                end: 8,
+                kind
+            })
+        );
+        // Limit (H37 item 3): a .js path fixes no goal, so the root record alone joins under
+        // both goals. A check needs the goal of the producer in the `.ep9h` file entry.
+        for opts in [script(), module] {
+            let join = join_hints(src, opts, PATH, &table(src, &root)).unwrap();
+            assert_eq!(join.records(), &root, "{opts:?}");
+        }
+    }
+
+    /// Codex A1H-JOIN r2: a key with ':', '?' or '#' (a scheme, a drive, a query or a
+    /// fragment) can name a TS resource, so it is not a JS path, also with a `.js`, `.mjs` or
+    /// `.cjs` suffix: `TsSource` and no parse, each counted as `ts-source`.
+    #[test]
+    fn a_url_like_key_is_not_a_js_path() {
+        // The TS hazard of r1 F1: the record of the TS addition joins the JS comparison.
+        let src = "import{f}from\"./g\";f<number>(1)+2";
+        let records = [rec(19, 33, NodeKind::BinaryExpression)];
+        let module = SourceOpts::module();
+        let mut counts = JoinCounts::default();
+        for path in [
+            "file:///src/a.ts?cache=x.js",
+            "src/a.ts?x.js",
+            "src/a.ts#x.mjs",
+            "file:src/a.cjs",
+        ] {
+            let got = join_hints(src, module, path, &table_at(path, src, &records));
+            assert_eq!(got, Err(JoinError::TsSource), "{path}");
+            counts.add(&got);
+        }
+        assert_eq!(nonzero(&counts), [("ts-source", 4)]);
+        assert_eq!((counts.files(), counts.records()), (0, 0));
+        // A plain .js path with the same table joins (the r1 F1 test).
+        let join = join_hints(src, module, PATH, &table(src, &records)).unwrap();
+        assert_eq!(join.records(), &records);
     }
 
     /// Codex A1H-JOIN r1 F2 (S3): a kind mismatch is a record on the span of any AST node of
@@ -851,12 +1004,15 @@ mod tests {
         counts.add(&join_hints("let = ;", script(), PATH, &none));
         let lost = table(src, &[rec(0, 1, NodeKind::StringLiteral)]);
         counts.add(&join_hints(src, script(), PATH, &lost));
+        let mjs = table_at("x.mjs", src, &[rec(4, 5, NodeKind::BindingIdentifier)]);
+        counts.add(&join_hints(src, script(), "x.mjs", &mjs));
         let rows: BTreeMap<&str, u64> = counts.per_reason().into_iter().collect();
-        assert_eq!(rows.len(), DropReason::ALL.len() + 4);
+        assert_eq!(rows.len(), DropReason::ALL.len() + 5);
         assert_eq!(
             nonzero(&counts),
             [
                 ("fact-schema-version", 1),
+                ("goal-mismatch", 1),
                 ("hash-mismatch", 1),
                 ("kind-mismatch", 1),
                 ("no-node", 1),
