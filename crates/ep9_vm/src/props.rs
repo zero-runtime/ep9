@@ -298,20 +298,36 @@ enum Hit {
 }
 
 /// The own property `key` of `o`, with its probe classified once: where it is, its value and
-/// its attributes. Not a GC point.
+/// its attributes. A fast shape is looked up through the shape lookup cache of `rt`
+/// (`shape_cache.rs`). Not a GC point.
 #[inline]
-fn find_own(o: u64, key: u64, how: Probe) -> Option<(Hit, u64, i32)> {
-    find_own_in(o, shape::shape_of(o), key, how)
+fn find_own(rt: &Runtime, o: u64, key: u64, how: Probe) -> Option<(Hit, u64, i32)> {
+    find_own_in(rt, o, shape::shape_of(o), key, how)
 }
 
 /// [`find_own`] with the shape `s` of `o` already loaded.
 #[inline(always)]
-fn find_own_in(o: u64, s: u64, key: u64, how: Probe) -> Option<(Hit, u64, i32)> {
+fn find_own_in(rt: &Runtime, o: u64, s: u64, key: u64, how: Probe) -> Option<(Hit, u64, i32)> {
+    find_own_by(o, s, key, how, |s, key, how| {
+        crate::shape_cache::lookup(rt, s, key, how)
+    })
+}
+
+/// [`find_own_in`] with the fast-shape lookup `look`: the cached lookup, or the scan
+/// (`shape::lookup_with`, for [`own_get`], which has no runtime).
+#[inline(always)]
+fn find_own_by(
+    o: u64,
+    s: u64,
+    key: u64,
+    how: Probe,
+    look: impl FnOnce(u64, u64, Probe) -> Option<shape::Found>,
+) -> Option<(Hit, u64, i32)> {
     if shape::is_dictionary(s) {
         let (p, e) = dict_find(o, key, how)?;
         return Some((Hit::Dict(p, e), rd(p, e + 8), rd_i32(p, e + 16)));
     }
-    let f = shape::lookup_with(s, key, how)?;
+    let f = look(s, key, how)?;
     let v = field_get(o, s, f.index);
     Some((Hit::Fast(s, f.index), v, f.details.attrs()))
 }
@@ -319,8 +335,8 @@ fn find_own_in(o: u64, s: u64, key: u64, how: Probe) -> Option<(Hit, u64, i32)> 
 /// An own property of `o` with a probe the caller classified: (value, attributes). Not a GC
 /// point.
 #[inline]
-pub(crate) fn own_get_with(o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
-    find_own(o, key, how).map(|(_, v, a)| (v, a))
+pub(crate) fn own_get_with(rt: &Runtime, o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
+    find_own(rt, o, key, how).map(|(_, v, a)| (v, a))
 }
 
 /// One step of a `[[Get]]` walk: (value, attributes) of the own property `key` of `o`, or
@@ -328,17 +344,24 @@ pub(crate) fn own_get_with(o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
 /// (`attr::ACCESSOR`) the value is its ACCESSOR_PAIR (`accessor.rs`). Not a GC point. Always
 /// inlined: the `[[Get]]` walk is hot until the ICs.
 #[inline(always)]
-pub(crate) fn own_value_or_proto(o: u64, key: u64, how: Probe) -> Result<(u64, i32), u64> {
+pub(crate) fn own_value_or_proto(
+    rt: &Runtime,
+    o: u64,
+    key: u64,
+    how: Probe,
+) -> Result<(u64, i32), u64> {
     let s = shape::shape_of(o);
-    match find_own_in(o, s, key, how) {
+    match find_own_in(rt, o, s, key, how) {
         Some((_, v, a)) => Ok((v, a)),
         None => Err(shape::proto(s)),
     }
 }
 
-/// An own named property: (value, attributes). Not a GC point.
+/// An own named property: (value, attributes). Not a GC point. The scan (no shape lookup
+/// cache: no runtime here).
 pub(crate) fn own_get(o: u64, key: u64) -> Option<(u64, i32)> {
-    own_get_with(o, key, key::probe(key))
+    let how = key::probe(key);
+    find_own_by(o, shape::shape_of(o), key, how, shape::lookup_with).map(|(_, v, a)| (v, a))
 }
 
 /// Writes an existing own property's value (attributes are not checked). False if `o` has
@@ -359,7 +382,7 @@ pub(crate) fn own_store_if_writable(
     how: Probe,
     v: u64,
 ) -> Option<bool> {
-    let (hit, _, attrs) = find_own(o, key, how)?;
+    let (hit, _, attrs) = find_own(rt, o, key, how)?;
     if attrs & object::attr::WRITABLE == 0 {
         return Some(false);
     }
@@ -373,7 +396,7 @@ pub(crate) fn own_store_if_writable(
 /// [`own_replace`] with a classified probe. The property must be a data property (an
 /// accessor's pair is replaced through [`own_define`]).
 pub(crate) fn own_replace_with(rt: &Runtime, o: u64, key: u64, how: Probe, v: u64) -> bool {
-    let found = find_own(o, key, how);
+    let found = find_own(rt, o, key, how);
     debug_assert!(
         found.is_none_or(|(_, _, a)| a & object::attr::ACCESSOR == 0),
         "own_replace of an accessor"
@@ -403,7 +426,7 @@ pub(crate) fn own_define(rt: &Runtime, o: u64, key: u64, v: u64, attrs: i32) {
     debug_assert!(object::is_object(o));
     let key = key::intern_key(rt, key);
     let how = key::probe(key);
-    match find_own(o, key, how) {
+    match find_own(rt, o, key, how) {
         Some((hit, old_v, old)) if old == attrs => {
             match hit {
                 Hit::Fast(s, f) => field_set(rt, o, s, f, v),
@@ -470,7 +493,7 @@ pub(crate) fn own_add(rt: &Runtime, o: u64, key: u64, v: u64, attrs: i32) {
 /// moves it to dictionary mode first (OM-10). GC point.
 pub(crate) fn own_delete(rt: &Runtime, o: u64, key: u64) -> Option<i32> {
     let how = key::probe(key);
-    let (hit, _, attrs) = find_own(o, key, how)?;
+    let (hit, _, attrs) = find_own(rt, o, key, how)?;
     match hit {
         Hit::Fast(s, f) if f + 1 == shape::count(s) => {
             let unique = shape::flags(s) & shape::flag::UNIQUE != 0;

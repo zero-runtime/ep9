@@ -949,16 +949,19 @@ fn a_proto_load_whose_holder_died_misses() {
 
 // ---- globals -------------------------------------------------------------------------------
 
-/// `f<i>(a)` and the number of scans of the global object's shape it took.
+/// `f<i>(a)` and the number of scans of the global object's shape it took. The shape lookup
+/// cache is off for the call (M14-P1 SHAPE-CACHE: a cache hit is no scan, and its state
+/// depends on GC stress), so the count is the lookups of the IC path.
 fn scans_of_the_global_object(t: &mut T, i: usize, a: u64) -> (u64, u32) {
     let f = t.f(i);
     let gs = shape::shape_of(t.rt().global());
     shape::SCANS.with(|c| c.set((gs, 0)));
-    let r = t
-        .iso
-        .call_raw(f, Value::UNDEFINED, &[val(a)])
-        .unwrap()
-        .to_bits();
+    let r = crate::shape_cache::without(|| {
+        t.iso
+            .call_raw(f, Value::UNDEFINED, &[val(a)])
+            .unwrap()
+            .to_bits()
+    });
     (r, shape::SCANS.with(|c| c.get().1))
 }
 
@@ -1036,12 +1039,13 @@ fn a_global_ic_follows_stores_and_misses_after_a_delete() {
 }
 
 /// `f<i>(a)` (a `StaGlobal` site) and the number of scans of the global object's shape it
-/// took (M2-P5-PLAN-D8).
+/// took (M2-P5-PLAN-D8). The shape lookup cache is off for the call, as in
+/// [`scans_of_the_global_object`].
 fn store_scans_of_the_global_object(t: &mut T, i: usize, a: u64) -> u32 {
     let f = t.f(i);
     let gs = shape::shape_of(t.rt().global());
     shape::SCANS.with(|c| c.set((gs, 0)));
-    t.iso.call_raw(f, Value::UNDEFINED, &[val(a)]).unwrap();
+    crate::shape_cache::without(|| t.iso.call_raw(f, Value::UNDEFINED, &[val(a)]).unwrap());
     shape::SCANS.with(|c| c.get().1)
 }
 
