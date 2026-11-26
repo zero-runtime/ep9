@@ -1261,6 +1261,8 @@ fn construct_native_cold(
 //   5 SLICED, THIN (or a flattened CONS whose first part is not SEQ)
 //     --> char_code_other (the same 5 arguments): string::flat_unit_at
 //   a test fails --> call_property_host1: the old body (above), with no state changed
+//   2 fails: not a FUNCTION with a host function --> call (the old body's exit there);
+//     another host function --> call_property_host1_from: the old body after its host test
 // ```
 //
 // The arm reads registers and string cells and writes the accumulator: no GC point, no
@@ -1302,7 +1304,8 @@ pub(crate) unsafe fn call_property<const N: u32>(
 
 /// The body of [`call_property`] before the `charCodeAt` arm (M9 OXC-W2-HOSTCALL; the block
 /// comment above), with no change of its steps: inline in `call_property::<0>` and
-/// `call_property::<2>`, and in `call_property_host1` for `N` = 1.
+/// `call_property::<2>`, and in `call_property_host1` for `N` = 1. Its steps after the host
+/// test are [`host_call_property_from`].
 ///
 /// # Safety
 /// As [`call_property`].
@@ -1315,7 +1318,7 @@ unsafe fn host_call_property<const N: u32>(
     acc: u64,
 ) -> u64 {
     use crate::interp::dsl::R;
-    use ep9_bytecode::{Opcode as O, OperandScale};
+    use ep9_bytecode::Opcode as O;
 
     const { assert!(N <= 2) };
     // The opcode: CallProperty0 + N (checked below), operand `i` at `pc + 1 + i`.
@@ -1338,6 +1341,41 @@ unsafe fn host_call_property<const N: u32>(
     let Some(h) = fi.host else {
         return call(cx, fp, pc, acc);
     };
+    // SAFETY: caller contract; test 1 held, and `callee` (operand 0) is a FUNCTION whose
+    // FunctionInfo `fi` holds the host function `h`.
+    unsafe { host_call_property_from::<N>(cx, fp, pc, this, acc, callee, fi, h) }
+}
+
+/// The steps of [`host_call_property`] after its host test, with what it read: `callee`, its
+/// FunctionInfo `fi` and its host function `h`. Inline there, and in
+/// `call_property_host1_from` (the arm's way out for another host function, so that a
+/// decline does not read the callee two times).
+///
+/// # Safety
+/// As [`call_property`], and `pc` is unprefixed with no poll due (`cx.budget` > 0); `callee`
+/// is the value of the register of operand 0, a FUNCTION whose FunctionInfo `fi` holds `h`.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn host_call_property_from<const N: u32>(
+    cx: &mut Cx,
+    fp: *mut u64,
+    pc: *const u8,
+    this: u64,
+    acc: u64,
+    callee: u64,
+    fi: &FunctionInfo,
+    h: crate::host::HostFn,
+) -> u64 {
+    use crate::interp::dsl::R;
+    use ep9_bytecode::{Opcode as O, OperandScale};
+
+    const { assert!(N <= 2) };
+    // SAFETY: operand `i` of the unprefixed instruction (`i` < 3 + N); the verifier checked
+    // that the whole instruction lies in the code.
+    let reg = |i: usize| R::from_operand(i32::from(unsafe { *pc.add(1 + i) } as i8)).0;
+    // SAFETY: slots named by register operands of this verified instruction, which lie in the
+    // live frame `fp`.
+    let rd = move |s: isize| unsafe { *fp.offset(s) };
     // A FUNCTION receiver: `forward` may push the frame of `this` (`apply`, `call`). On
     // x86-64 (not spike-native) the cold body sent such a call to `call_receiver_cold`
     // before this call (`interp/ops.rs` `call_property_cold`), so a debug test is enough.
@@ -1407,9 +1445,9 @@ const _: () = {
 // functions below are at the end of the file, so the cited lines keep their places.
 
 /// The `charCodeAt` arm: the first block of `call_property::<1>`, inline there. Every exit is
-/// a return or a tail call with the same 5 arguments, and the taken path calls nothing that
-/// returns into it, so the arm needs no stack frame (the old body has one: it calls the host
-/// function).
+/// a return or a tail call (with the same 5 arguments, with the callee as a 6th, or `call`),
+/// and the taken path calls nothing that returns into it, so the arm needs no stack frame (the
+/// old body has one: it calls the host function).
 ///
 /// # Safety
 /// As `call_property` with `N` = 1.
@@ -1439,9 +1477,20 @@ unsafe fn char_code_arm(cx: &mut Cx, fp: *mut u64, pc: *const u8, this: u64, acc
     // live frame `fp`.
     let rd = move |s: isize| unsafe { *fp.offset(s) };
     // Test 2: the callee runs the builtin itself: its host function pointer, not its name.
-    if !is_char_code_at(rd(reg(0))) {
-        // SAFETY: caller contract.
-        return unsafe { call_property_host1(cx, fp, pc, this, acc) };
+    // The fails take the old body's next step, with what this test read: a callee that is not
+    // a FUNCTION with a host function takes `call`, as the old body does; another host
+    // function takes the old body after its host test, with the callee.
+    let callee = rd(reg(0));
+    if !object::is_function(callee) {
+        return call(cx, fp, pc, acc);
+    }
+    let Some(h) = object::function_info(callee).host else {
+        return call(cx, fp, pc, acc);
+    };
+    if !is_char_code_at(h) {
+        // SAFETY: caller contract; test 1 held, and `callee` (operand 0) is a FUNCTION whose
+        // FunctionInfo holds a host function.
+        return unsafe { call_property_host1_from(cx, fp, pc, this, acc, callee) };
     }
     // Test 3: the human fast paths of the isolate (FASTDIFF) and the seam.
     if !call::human_fast_paths(cx.rt()) || !char_code_arm_on(cx.rt()) {
@@ -1523,8 +1572,8 @@ unsafe fn char_code_other(cx: &mut Cx, fp: *mut u64, pc: *const u8, this: u64, a
 }
 
 /// The old body of `call_property::<1>` (`host_call_property`), out of line: the arm's way
-/// out when a test fails. Same 5 arguments as `call_property`, so the arm's call of it is a
-/// tail call (a jump).
+/// out when test 1, 3, 4, 5 or 6 fails. Same 5 arguments as `call_property`, so the arm's call
+/// of it is a tail call (a jump).
 ///
 /// # Safety
 /// As `call_property` with `N` = 1.
@@ -1540,18 +1589,42 @@ unsafe fn call_property_host1(
     unsafe { host_call_property::<1>(cx, fp, pc, this, acc) }
 }
 
-/// Does the value `f` run the builtin `String.prototype.charCodeAt` (`BuiltinId` 6.2)? True
-/// for a FUNCTION whose FunctionInfo holds the host function `abi::strings::char_code_at`,
-/// under any name and in any realm (one FunctionInfo per isolate). False for every other
-/// value: a bytecode function, a bound function, another host function (also one named
-/// "charCodeAt"), undefined. The function is not generic and never inlined, so it has one
-/// address, and the compare reads equal only for it. Not a GC point.
+/// The old body of `call_property::<1>` after its host test (`host_call_property_from`), out
+/// of line: the arm's way out when test 2 finds another host function. The arm hands over the
+/// callee that it read, so a decline does not run test 1 and the callee tests two times; this
+/// function reads the FunctionInfo and the host function again (2 loads). 6 arguments, so the
+/// arm's call of it is a tail call (a jump) on SysV, Win64 and aarch64: a 7th argument would go
+/// on the stack on x86-64 SysV.
+///
+/// # Safety
+/// As `call_property` with `N` = 1, and `pc` is unprefixed with no poll due (`cx.budget` > 0);
+/// `callee` is the value of the register of operand 0, a FUNCTION whose FunctionInfo holds a
+/// host function.
+#[inline(never)]
+unsafe fn call_property_host1_from(
+    cx: &mut Cx,
+    fp: *mut u64,
+    pc: *const u8,
+    this: u64,
+    acc: u64,
+    callee: u64,
+) -> u64 {
+    let fi = object::function_info(callee);
+    // SAFETY: caller contract: `fi` holds a host function.
+    let h = unsafe { fi.host.unwrap_unchecked() };
+    // SAFETY: caller contract.
+    unsafe { host_call_property_from::<1>(cx, fp, pc, this, acc, callee, fi, h) }
+}
+
+/// Is the host function `h` the builtin `String.prototype.charCodeAt` (`BuiltinId` 6.2), the
+/// host function `abi::strings::char_code_at`? The arm's test 2 reads `h` from the callee's
+/// FunctionInfo, so this holds under any name and in any realm (one FunctionInfo per isolate),
+/// and is false for another host function (also one named "charCodeAt"). The function is not
+/// generic and never inlined, so it has one address, and the compare reads equal only for it.
+/// Not a GC point.
 #[inline(always)]
-fn is_char_code_at(f: u64) -> bool {
-    object::is_function(f)
-        && object::function_info(f).host.is_some_and(|h| {
-            core::ptr::fn_addr_eq(h, crate::abi::strings::char_code_at as crate::host::HostFn)
-        })
+fn is_char_code_at(h: crate::host::HostFn) -> bool {
+    core::ptr::fn_addr_eq(h, crate::abi::strings::char_code_at as crate::host::HostFn)
 }
 
 /// The CHARCODE seam (design 5.2): true = the `charCodeAt` arm runs; false = every call takes
@@ -1589,7 +1662,11 @@ unsafe fn char_code_poll_count(fp: *mut u64, pc: *const u8) {
     }
     // SAFETY: operand 0 of the unprefixed instruction, a register of the live frame `fp`.
     let callee = unsafe { *fp.offset(R::from_operand(i32::from(*pc.add(1) as i8)).0) };
-    if is_char_code_at(callee) {
+    if object::is_function(callee)
+        && object::function_info(callee)
+            .host
+            .is_some_and(is_char_code_at)
+    {
         crate::abi::strings::char_code_count!(Poll);
     }
 }
