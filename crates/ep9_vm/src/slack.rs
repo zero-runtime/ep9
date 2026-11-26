@@ -447,8 +447,17 @@ impl ChainNames {
 /// (1), (2)), or [`None`] when a scan cannot give them (more than [`MAX_NAMES`] names in one
 /// code, a decode fault, more than [`CHAIN_CAP_MAX`] names in all).
 ///
+/// The walk runs only when `this` leaves the frame of `fi` (R-C1, DL M6-ORCH-1755): a
+/// constructor up the chain runs on the new object only when `fi` passes `this` on, as in
+/// `_super.call(this, x)`. With no leave the names are `fi`'s own (`levels` 0, `escaped`
+/// false), so [`chain_capacity`] is the old count of [`own_capacity`] (one constant per name
+/// text, as the builder makes it), and [`first_capacity`] gives the old count. Thus the ES5
+/// form `L.prototype = Object.create(B.prototype); L.prototype.constructor = L`, where `L`
+/// does not call `B`, gets no slot for the names of `B`.
+///
 /// ```text
 ///  fi's code ──scan (escape mode)──> names
+///  stop if `this` does not leave fi's frame      (R-C1: the own names only)
 ///  cur = proto                                   (F.prototype at the first construct)
 ///  while levels < 8 and cur is an object:
 ///    stop at a dictionary-mode cur
@@ -477,6 +486,10 @@ pub(crate) fn chain_names(
     ch.escaped |= esc;
     if !ch.add(fi, &names[..n]) {
         return None;
+    }
+    if !esc {
+        // R-C1: no leave of `this`, so no constructor up the chain stores on it.
+        return Some(ch);
     }
     let ctor_key = rt.atom(crate::runtime::Atom::Constructor);
     let mut cur = proto;
