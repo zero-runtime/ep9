@@ -132,6 +132,8 @@ fn flush(entries: &[Entry], used: &Cell<bool>) {
     if !used.replace(false) {
         return;
     }
+    #[cfg(feature = "ic-stats")]
+    trace::flushed();
     for e in entries {
         e.key.set(0);
     }
@@ -159,6 +161,8 @@ fn index(op: Op, id: u32, name: u64) -> usize {
 pub(crate) fn probe(rt: &Runtime, op: Op, id: u32, name: u64) -> Option<u64> {
     #[cfg(test)]
     count_probe();
+    #[cfg(feature = "ic-stats")]
+    trace::rec(trace::PROBE, op, id, name);
     let e = &rt.stub_cache.entries[index(op, id, name)];
     (e.key.get() == entry_key(op, id) && e.name.get() == name).then(|| e.handler.get())
 }
@@ -169,6 +173,8 @@ pub(crate) fn probe(rt: &Runtime, op: Op, id: u32, name: u64) -> Option<u64> {
 /// allocation. Not a GC point.
 pub(crate) fn insert(rt: &Runtime, op: Op, id: u32, name: u64, handler: u64) {
     debug_assert!(id != 0);
+    #[cfg(feature = "ic-stats")]
+    trace::rec(trace::INSERT, op, id, name);
     let c = &rt.stub_cache;
     let e = &c.entries[index(op, id, name)];
     e.key.set(entry_key(op, id));
@@ -193,6 +199,8 @@ pub(crate) fn index_of(op: Op, id: u32, name: u64) -> usize {
 pub(crate) fn probe_at(rt: &Runtime, i: usize, op: Op, id: u32, name: u64) -> Option<u64> {
     #[cfg(test)]
     count_probe();
+    #[cfg(feature = "ic-stats")]
+    trace::rec(trace::PROBE, op, id, name);
     let mut e: *const Entry = &rt.stub_cache.entries[i];
     // SAFETY: the block has no instructions and gives `e` back unchanged. It reads and writes
     // no memory (`nomem`): it only hides the value of `e` from LLVM.
@@ -216,4 +224,109 @@ thread_local! {
 #[cfg(test)]
 fn count_probe() {
     PROBES.with(|c| c.set(c.get() + 1));
+}
+
+/// NAMED-COUNT count head (never merged; feature `ic-stats`): the key trace of the stub cache
+/// for the table census (`m2/m14/counts/named/census.py`). One 16-byte little-endian record per
+/// event: byte 0 the kind (1 probe, 2 insert, 3 flush), byte 1 the [`Op`], bytes 2-3 zero,
+/// bytes 4-7 the ShapeId, bytes 8-15 the name bits (a flush: op, id and name 0). A probe of the
+/// same (op, id, name) as the record before it, with no insert or flush between, is not written
+/// again: one access probes up to 3 times (fast body, cold body, runtime call) with the same
+/// result. A flush runs in a GC (a weak source, maybe off the isolate thread), so it only bumps
+/// a counter, and the next record of the isolate thread writes the flush record first.
+/// The file: `EP9_STUB_TRACE` if set; else `bench/cg/stub-trace.<arch>.bin` if `bench/cg` is a
+/// dir and the binary is `.../ep9-head` (the bench mode count step, jit build); never two
+/// writers: the file is created new, else no trace.
+#[cfg(feature = "ic-stats")]
+pub(crate) mod trace {
+    use core::cell::RefCell;
+    use core::sync::atomic::{AtomicU64, Ordering};
+    use std::io::{BufWriter, Write};
+
+    use super::Op;
+
+    pub(crate) const PROBE: u8 = 1;
+    pub(crate) const INSERT: u8 = 2;
+    const FLUSH: u8 = 3;
+
+    static FLUSHES: AtomicU64 = AtomicU64::new(0);
+
+    struct Writer {
+        w: Option<BufWriter<std::fs::File>>,
+        last: (u8, u32, u64),
+        seen: u64,
+    }
+
+    impl Drop for Writer {
+        fn drop(&mut self) {
+            if let Some(w) = self.w.as_mut() {
+                let _ = w.flush();
+            }
+        }
+    }
+
+    fn open() -> Option<BufWriter<std::fs::File>> {
+        let path = if let Some(p) = std::env::var_os("EP9_STUB_TRACE") {
+            std::path::PathBuf::from(p)
+        } else {
+            let exe = std::env::args().next()?;
+            if !exe.ends_with("/ep9-head") || !std::path::Path::new("bench/cg").is_dir() {
+                return None;
+            }
+            std::path::PathBuf::from(format!(
+                "bench/cg/stub-trace.{}.bin",
+                std::env::consts::ARCH
+            ))
+        };
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .ok()?;
+        Some(BufWriter::with_capacity(1 << 20, f))
+    }
+
+    thread_local! {
+        static W: RefCell<Writer> = RefCell::new(Writer { w: open(), last: (0, 0, 0), seen: 0 });
+    }
+
+    fn put(w: &mut BufWriter<std::fs::File>, kind: u8, op: u8, id: u32, name: u64) {
+        let mut b = [0u8; 16];
+        b[0] = kind;
+        b[1] = op;
+        b[4..8].copy_from_slice(&id.to_le_bytes());
+        b[8..16].copy_from_slice(&name.to_le_bytes());
+        let _ = w.write_all(&b);
+    }
+
+    /// A flush of the table (in a GC).
+    pub(crate) fn flushed() {
+        FLUSHES.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A probe or an insert of (`op`, `id`, `name`).
+    #[inline(never)]
+    pub(crate) fn rec(kind: u8, op: Op, id: u32, name: u64) {
+        let _ = W.try_with(|c| {
+            let mut c = c.borrow_mut();
+            let c = &mut *c;
+            let Some(w) = c.w.as_mut() else { return };
+            let f = FLUSHES.load(Ordering::Relaxed);
+            if f != c.seen {
+                c.seen = f;
+                c.last = (0, 0, 0);
+                put(w, FLUSH, 0, 0, 0);
+            }
+            let key = (op as u8, id, name);
+            if kind == PROBE {
+                if c.last == key {
+                    return;
+                }
+                c.last = key;
+            } else {
+                c.last = (0, 0, 0);
+            }
+            put(w, kind, op as u8, id, name);
+        });
+    }
 }

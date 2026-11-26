@@ -2022,6 +2022,18 @@ pub(crate) mod stats {
 
     impl Drop for Counters {
         fn drop(&mut self) {
+            // NAMED-COUNT count head (never merged): each line also goes to a text copy, written
+            // below to bench/cg/ (the bench mode's kept dir, uploaded in its artifact), because
+            // bench-set.mjs keeps no stderr of a run that exits 0.
+            let mut copy = String::new();
+            macro_rules! eprintln {
+                ($($t:tt)*) => {{
+                    let line = format!($($t)*);
+                    ::std::eprintln!("{line}");
+                    copy.push_str(&line);
+                    copy.push('\n');
+                }};
+            }
             for (s, row) in self.n.iter().enumerate() {
                 let n: Vec<u64> = row.iter().map(Cell::get).collect();
                 if n.iter().all(|&x| x == 0) {
@@ -2064,7 +2076,29 @@ pub(crate) mod stats {
                     );
                 }
             }
+            write_copy(&copy);
         }
+    }
+
+    /// NAMED-COUNT count head: writes `text` with the run's argv to
+    /// `bench/cg/ic-stats.<arch>.<binary name>.<pid>.txt` when `bench/cg` is a dir of the
+    /// current dir (the bench mode count step); else nothing.
+    fn write_copy(text: &str) {
+        let dir = std::path::Path::new("bench/cg");
+        if !dir.is_dir() {
+            return;
+        }
+        let args: Vec<String> = std::env::args().collect();
+        let exe = args
+            .first()
+            .and_then(|a| std::path::Path::new(a).file_name())
+            .map_or_else(|| "ep9".into(), |n| n.to_string_lossy().into_owned());
+        let file = dir.join(format!(
+            "ic-stats.{}.{exe}.{}.txt",
+            std::env::consts::ARCH,
+            std::process::id()
+        ));
+        let _ = std::fs::write(file, format!("argv {}\n{text}", args.join(" ")));
     }
 
     thread_local! {
