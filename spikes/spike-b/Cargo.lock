@@ -154,6 +154,7 @@ name = "ep9_frontend"
 version = "0.0.0"
 dependencies = [
  "ep9_bytecode",
+ "ep9_hints",
  "oxc_allocator",
  "oxc_ast",
  "oxc_ast_visit",
@@ -171,6 +172,10 @@ dependencies = [
  "ep9_platform",
  "ep9_value",
 ]
+
+[[package]]
+name = "ep9_hints"
+version = "0.0.0"
 
 [[package]]
 name = "ep9_math"
