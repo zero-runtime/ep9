@@ -1562,12 +1562,11 @@ fn is_char_code_at(f: u64) -> bool {
 /// per thread with `call::CHAR_CODE_ARM_OFF`.
 #[inline(always)]
 pub(crate) fn char_code_arm_on(rt: &crate::runtime::Runtime) -> bool {
-    let _ = rt;
     #[cfg(test)]
     if call::CHAR_CODE_ARM_OFF.get() {
         return false;
     }
-    true
+    crate::set_arm_init::on(rt, ep9_platform::set_arm::CHARCODE)
 }
 
 /// The `poll=` count of the `ic-stats` line (`abi::strings` `char_code_stats`): a call of the

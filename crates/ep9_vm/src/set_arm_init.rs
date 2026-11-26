@@ -6,7 +6,8 @@
 //!                    │                       sha_slot: the SHA-256 slot, SRC_HASH on only
 //!                    ── Heap::new
 //!                    ── Runtime::new ── Runtime::set = runtime_bits()               once per isolate
-//!  a seam (slack::ctor_fit, shape_cache::on) ── on(rt, its bit) = Runtime::set & the bit
+//!  a seam (slack::ctor_fit, shape_cache::on, slow::call::char_code_arm_on,
+//!          ops::to_bool_arm) ── on(rt, its bit) = Runtime::set & the bit
 //! ```
 //!
 //! SRC-HASH (design 6.2; plan v20 4.2: the set switch sets the body slot in arm S): in an arm
@@ -64,34 +65,40 @@ pub(crate) fn on(rt: &crate::runtime::Runtime, bit: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use ep9_bytecode::VerifiedUnit;
     use ep9_platform::set_arm::{
         ARM_0, ARM_A, ARM_P, ARM_S, CHARCODE, CTOR_FIT, MEMBERS, SHAPE_CACHE, SRC_HASH, SWEEP_LEAN,
         TO_BOOL,
     };
 
-    use crate::tests::{config, isolate, on_big_stack};
+    use crate::call::{CHAR_CODE_ARM_HITS, HOST_PROPERTY_HITS};
+    use crate::interp::ops::{TO_BOOL_ARM_HITS, to_bool_arm};
+    use crate::tests::{Asm, config, isolate, on_big_stack, take_output, unit};
     use crate::{Dispatch, atoms, kinds, object::attr, runtime::val, shape, shape_cache, slack};
 
-    /// Each arm and the `Runtime` members it turns on: (bits, CTOR-FIT, SHAPE-CACHE). The last
-    /// 4 rows are not arms: each member reads its own bit and no other.
-    const ARMS: [(u8, bool, bool); 8] = [
-        (ARM_0, false, false),
-        (ARM_P, true, true),
-        (ARM_A, true, true),
-        (ARM_S, true, true),
-        (CTOR_FIT, true, false),
-        (SHAPE_CACHE, false, true),
-        (MEMBERS & !(CTOR_FIT | SHAPE_CACHE), false, false),
-        (!MEMBERS, false, false),
-    ];
-
-    /// The process members and the reserved bits of each arm: (bits, SWEEP-LEAN, SRC-HASH,
-    /// CHARCODE, TO-BOOL). P: the month-14 members; S (= A): every member.
-    const PROCESS_ARMS: [(u8, bool, bool, bool, bool); 4] = [
+    /// Each arm and the `Runtime` members it turns on: (bits, CTOR-FIT, SHAPE-CACHE, CHARCODE,
+    /// TO-BOOL). The last 6 rows are not arms: each member reads its own bit and no other, and
+    /// the reserved SWEEP-LEAN bit turns nothing on.
+    const ARMS: [(u8, bool, bool, bool, bool); 10] = [
         (ARM_0, false, false, false, false),
         (ARM_P, true, true, false, false),
         (ARM_A, true, true, true, true),
         (ARM_S, true, true, true, true),
+        (CTOR_FIT, true, false, false, false),
+        (SHAPE_CACHE, false, true, false, false),
+        (CHARCODE, false, false, true, false),
+        (TO_BOOL, false, false, false, true),
+        (SWEEP_LEAN | SRC_HASH, false, false, false, false),
+        (!MEMBERS, false, false, false, false),
+    ];
+
+    /// The process member and the reserved bit of each arm: (bits, SWEEP-LEAN, SRC-HASH).
+    /// SWEEP-LEAN is out of the set: its bit is off in every arm. SRC-HASH: P, S and A.
+    const PROCESS_ARMS: [(u8, bool, bool); 4] = [
+        (ARM_0, false, false),
+        (ARM_P, false, true),
+        (ARM_A, false, true),
+        (ARM_S, false, true),
     ];
 
     #[test]
@@ -99,20 +106,24 @@ mod tests {
         on_big_stack(|| {
             let iso = isolate(config(Dispatch::DEFAULT, false));
             assert_eq!(iso.rt.set.get(), ARM_S);
-            assert_eq!(ARM_S, MEMBERS);
+            assert_eq!(ARM_S, MEMBERS & !SWEEP_LEAN);
             assert!(slack::ctor_fit(&iso.rt));
             assert!(shape_cache::on(&iso.rt));
+            assert!(to_bool_arm(&iso.rt));
         });
     }
 
+    /// The seams that this module can name (`slow::call` is private: CHARCODE is read through
+    /// a run, [`the_new_members_take_their_arm_only_with_their_bit`]).
     #[test]
     fn each_arm_turns_on_its_members_only() {
         on_big_stack(|| {
-            for (bits, ctor, cache) in ARMS {
+            for (bits, ctor, cache, _, to_bool) in ARMS {
                 let iso = isolate(config(Dispatch::DEFAULT, false));
                 iso.rt.set_arm_for_test(bits);
                 assert_eq!(slack::ctor_fit(&iso.rt), ctor, "arm bits {bits:#x}");
                 assert_eq!(shape_cache::on(&iso.rt), cache, "arm bits {bits:#x}");
+                assert_eq!(to_bool_arm(&iso.rt), to_bool, "arm bits {bits:#x}");
             }
         });
     }
@@ -123,16 +134,76 @@ mod tests {
             let a = isolate(config(Dispatch::DEFAULT, false));
             let b = isolate(config(Dispatch::DEFAULT, false));
             a.rt.set_arm_for_test(ARM_0);
-            assert!(!slack::ctor_fit(&a.rt) && !shape_cache::on(&a.rt));
-            assert!(slack::ctor_fit(&b.rt) && shape_cache::on(&b.rt));
+            assert!(!slack::ctor_fit(&a.rt) && !shape_cache::on(&a.rt) && !to_bool_arm(&a.rt));
+            assert!(slack::ctor_fit(&b.rt) && shape_cache::on(&b.rt) && to_bool_arm(&b.rt));
         });
+    }
+
+    /// `"R".cc(0)` with `cc` = the host function of `charCodeAt` (a `CallProperty1`), then
+    /// `ToBoolean(cc)` (a function: a cell that is always true): prints 82, then true.
+    fn new_members_unit() -> VerifiedUnit {
+        let mut s = Asm::script(0);
+        let l = s.b.new_register_list(2);
+        let (f, slot) = (s.f, s.call);
+        s.lda_str("R");
+        s.b.star(l.get(0)).lda_smi(0).star(l.get(1));
+        s.lda_global("cc");
+        s.b.star(f).call_property1(f, l.get(0), l.get(1), slot);
+        s.print_acc();
+        s.lda_global("cc");
+        s.b.to_boolean();
+        s.print_acc();
+        s.b.lda_undefined().return_();
+        unit("", vec![s.finish()])
+    }
+
+    /// CHARCODE and TO-BOOL by the arm byte only (no test override): with its bit the arm
+    /// answers (the `charCodeAt` arm, no host call; the cell arm of `ToBoolean`); without it
+    /// the old path runs (the host call of `call_property`'s old body; the cold `ToBoolean`
+    /// body), with the same output. Arm 0 is today's path for both.
+    #[test]
+    fn the_new_members_take_their_arm_only_with_their_bit() {
+        for &d in Dispatch::ALL {
+            for (bits, _, _, charcode, to_bool) in ARMS {
+                let label = format!("{} arm bits {bits:#x}", d.name());
+                let (out, arm, host, cell) = on_big_stack(move || {
+                    let mut iso = isolate(config(d, false));
+                    iso.rt.set_arm_for_test(bits);
+                    iso.register_host_function("cc", 1, crate::abi::strings::char_code_at);
+                    take_output();
+                    CHAR_CODE_ARM_HITS.with(|h| h.set(0));
+                    HOST_PROPERTY_HITS.with(|h| h.set(0));
+                    TO_BOOL_ARM_HITS.with(|h| h.set(0));
+                    // Below the call record window of the isolate start (x86-64: a call in
+                    // the window takes `slow::call`, not `call_property`).
+                    iso.cx.budget = crate::interp::BUDGET / 2;
+                    let r = iso.with_cx_checkpoint(|cx| {
+                        cx.run_script(new_members_unit(), "set_arm.js").map(|_| ())
+                    });
+                    assert!(r.is_ok(), "{:?}", r.err());
+                    (
+                        take_output(),
+                        CHAR_CODE_ARM_HITS.with(|h| h.get()),
+                        HOST_PROPERTY_HITS.with(|h| h.get()),
+                        TO_BOOL_ARM_HITS.with(|h| h.get()),
+                    )
+                });
+                assert_eq!(out, ["82", "true"], "{label}");
+                assert_eq!(
+                    (arm, host),
+                    if charcode { (1, 0) } else { (0, 1) },
+                    "{label}"
+                );
+                assert_eq!(cell, u64::from(to_bool), "{label}");
+            }
+        }
     }
 
     /// Arm 0 runs today's lookup: the scan, and no entry in the cache. P and S cache.
     #[test]
     fn only_an_arm_with_shape_cache_fills_the_cache() {
         on_big_stack(|| {
-            for (bits, _, cache) in ARMS {
+            for (bits, _, cache, ..) in ARMS {
                 let iso = isolate(config(Dispatch::DEFAULT, false));
                 let rt = &*iso.rt;
                 rt.set_arm_for_test(bits);
@@ -156,18 +227,15 @@ mod tests {
         });
     }
 
-    /// SRC-HASH reads the process value, not `Runtime::set`, and the 3 members with no seam body
-    /// here have their bit only: each arm has a bit only where the member is on. The SHA body of
-    /// the slot: the pick in an arm with SRC-HASH (P, S, A), none (the scalar loop) in arm 0. No
-    /// test sets the slot or the process variable.
+    /// SRC-HASH reads the process value, not `Runtime::set`, and the reserved SWEEP-LEAN bit
+    /// is in no arm. The SHA body of the slot: the pick in an arm with SRC-HASH (P, S, A), none
+    /// (the scalar loop) in arm 0. No test sets the slot or the process variable.
     #[test]
     fn each_arm_has_its_process_members_only() {
         let pick = ep9_platform::simd::sha256_slot_body().map(|f| f as usize);
-        for (bits, sweep, sha, charcode, to_bool) in PROCESS_ARMS {
+        for (bits, sweep, sha) in PROCESS_ARMS {
             assert_eq!(bits & SWEEP_LEAN != 0, sweep, "arm bits {bits:#x}");
             assert_eq!(bits & SRC_HASH != 0, sha, "arm bits {bits:#x}");
-            assert_eq!(bits & CHARCODE != 0, charcode, "arm bits {bits:#x}");
-            assert_eq!(bits & TO_BOOL != 0, to_bool, "arm bits {bits:#x}");
             let body = super::sha_body(bits).map(|f| f as usize);
             assert_eq!(body, if sha { pick } else { None }, "arm bits {bits:#x}");
         }

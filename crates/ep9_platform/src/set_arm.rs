@@ -6,8 +6,8 @@
 //!  0, not set,   0     none (today's path)                         ARM_0 = 0
 //!  other text          (C is gone: P replaces C and A)
 //!  P             P     the month-14 members: CTOR-FIT,             ARM_P = CTOR_FIT | SHAPE_CACHE
-//!                      SHAPE-CACHE, SRC-HASH (+ SWEEP-LEAN)                | SRC_HASH | SWEEP_LEAN
-//!  S             S     every member (the decision arm)             ARM_S = ARM_P | CHARCODE | TO_BOOL
+//!                      SHAPE-CACHE, SRC-HASH (0x0B)                        | SRC_HASH
+//!  S             S     every member (the decision arm; 0x3B)       ARM_S = ARM_P | CHARCODE | TO_BOOL
 //!  A             S     A = S (no member is jit only)               ARM_A = ARM_S
 //!  0 again       0'    none: the A/A arm, the same binary and the same value as 0; the box
 //!                      runner tells the 2 runs apart by its own arm label (a0 / a0p), never
@@ -19,9 +19,9 @@
 //!    └─ Runtime::new copies the byte into Runtime::set; a seam tests one bit of it
 //! ```
 //!
-//! The bit of each member is fixed here, the 3 that have no seam body yet too (SWEEP-LEAN,
-//! CHARCODE, TO-BOOL: their bit is in the arms and nothing reads it), so a member that joins
-//! the set adds only its seam body, and one that is out at the cut has a bit that does nothing.
+//! The bit of each member is fixed here. SWEEP-LEAN is out of the set (its x86 line was not
+//! read): its bit stays reserved, in no arm, and nothing reads it. A member that is out at the
+//! cut has a bit that does nothing; every member of the set has its seam body.
 //! The value never reaches `ExecOptions`, `ExecPolicy`, a fact, a unit or a bytecode stream
 //! (M-R9). Tests never set the variable: a test of `ep9_vm` sets the byte of its own `Runtime`.
 
@@ -36,28 +36,27 @@ pub const CTOR_FIT: u8 = 1 << 0;
 /// SHAPE-CACHE: the shape lookup cache in front of the descriptor scan
 /// (`ep9_vm` `shape_cache::on`).
 pub const SHAPE_CACHE: u8 = 1 << 1;
-/// SWEEP-LEAN: no dead-cell header read and the SIMD bitmap pass of the sweep. The bit is
-/// kept for its seam body (`ep9_heap`, if the member joins the set); nothing reads it yet.
+/// SWEEP-LEAN: no dead-cell header read and the SIMD bitmap pass of the sweep. Out of the set
+/// (its x86 line was not read): the bit is reserved, off in every arm, and nothing reads it.
 pub const SWEEP_LEAN: u8 = 1 << 2;
 /// SRC-HASH: the SHA-256 body slot of `ep9_bytecode` gets the SHA256 pick of
 /// `ep9_platform::simd` (set once per process by `ep9_vm` `set_arm_init`); off, the slot stays
 /// unset and every hash runs the scalar loop of today.
 pub const SRC_HASH: u8 = 1 << 3;
-/// CHARCODE: the `charCodeAt` arm of the 1-argument method call path. The bit is kept for its
-/// seam body (`ep9_vm`, if the member joins the set); nothing reads it yet.
+/// CHARCODE: the `charCodeAt` arm of the 1-argument method call path (`ep9_vm`
+/// `interp::slow::call::char_code_arm_on`).
 pub const CHARCODE: u8 = 1 << 4;
-/// TO-BOOL: the cell arm of the ToBoolean jumps. The bit is kept for its seam body (`ep9_vm`,
-/// if the member joins the set); nothing reads it yet.
+/// TO-BOOL: the cell arm of the ToBoolean jumps (`ep9_vm` `interp::ops::to_bool_arm`).
 pub const TO_BOOL: u8 = 1 << 5;
 
-/// Every member bit.
+/// Every member bit (SWEEP-LEAN too: a reserved bit, in no arm).
 pub const MEMBERS: u8 = CTOR_FIT | SHAPE_CACHE | SWEEP_LEAN | SRC_HASH | CHARCODE | TO_BOOL;
 
 /// Arm 0: no member on (arm 0' is a second run of it).
 pub const ARM_0: u8 = 0;
-/// Arm P: the month-14 members on, the new members off.
-pub const ARM_P: u8 = CTOR_FIT | SHAPE_CACHE | SRC_HASH | SWEEP_LEAN;
-/// Arm S: every member on (the decision arm).
+/// Arm P: the month-14 members of the set on (SWEEP-LEAN is out), the new members off: 0x0B.
+pub const ARM_P: u8 = CTOR_FIT | SHAPE_CACHE | SRC_HASH;
+/// Arm S: every member of the set on (the decision arm): 0x3B.
 pub const ARM_S: u8 = ARM_P | CHARCODE | TO_BOOL;
 /// Arm A: no member is jit only, so A = S (plan v20 4.2).
 pub const ARM_A: u8 = ARM_S;
@@ -98,8 +97,10 @@ mod tests {
         let v = |s: &str| bits_of(Some(OsString::from(s).as_os_str()));
         assert_eq!(bits_of(None), ARM_0);
         assert_eq!(v("0"), ARM_0);
-        assert_eq!(v("P"), CTOR_FIT | SHAPE_CACHE | SRC_HASH | SWEEP_LEAN);
-        assert_eq!(v("S"), MEMBERS);
+        assert_eq!(v("P"), CTOR_FIT | SHAPE_CACHE | SRC_HASH);
+        assert_eq!(v("P"), 0x0B);
+        assert_eq!(v("S"), MEMBERS & !SWEEP_LEAN);
+        assert_eq!(v("S"), 0x3B);
         // No member is jit only: A = S.
         assert_eq!(v("A"), v("S"));
         // C is gone (P replaces C and A); 0' is the value 0 again, never a value of its own.
@@ -113,13 +114,18 @@ mod tests {
     #[test]
     fn the_arms_differ_only_in_their_members() {
         assert_eq!(ARM_0 & MEMBERS, 0);
-        // P: the month-14 members (CTOR-FIT, SHAPE-CACHE, SRC-HASH, SWEEP-LEAN), no new one.
-        assert_eq!(ARM_P, CTOR_FIT | SHAPE_CACHE | SRC_HASH | SWEEP_LEAN);
+        // P: the month-14 members of the set (CTOR-FIT, SHAPE-CACHE, SRC-HASH), no new one.
+        assert_eq!(ARM_P, CTOR_FIT | SHAPE_CACHE | SRC_HASH);
         assert_eq!(ARM_P & (CHARCODE | TO_BOOL), 0);
-        // S: every member; S / P = the 2 new members.
-        assert_eq!(ARM_S, MEMBERS);
+        // S: every member of the set; S / P = the 2 new members.
+        assert_eq!(ARM_S, MEMBERS & !SWEEP_LEAN);
         assert_eq!(ARM_S & !ARM_P, CHARCODE | TO_BOOL);
         assert_eq!(ARM_A, ARM_S);
+        // SWEEP-LEAN is out: its bit is reserved and off in every arm.
+        for arm in [ARM_0, ARM_P, ARM_S, ARM_A] {
+            assert_eq!(arm & SWEEP_LEAN, 0, "{arm:#x}");
+        }
+        assert_eq!((ARM_0, ARM_P, ARM_S, ARM_A), (0x00, 0x0B, 0x3B, 0x3B));
         // One bit per member, and the layout that the members' seam bodies read.
         let bits = [
             CTOR_FIT,

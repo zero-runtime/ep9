@@ -3429,12 +3429,11 @@ fn cell_arm(v: u64, arm: bool) -> Option<bool> {
 /// module `to_bool_arm_override`; the thread must be the one that runs the isolate.
 #[inline(always)]
 pub(crate) fn to_bool_arm(rt: &Runtime) -> bool {
-    let _ = rt;
     #[cfg(test)]
     if let Some(on) = to_bool_arm_override::ON.get() {
         return on;
     }
-    true
+    crate::set_arm_init::on(rt, ep9_platform::set_arm::TO_BOOL)
 }
 
 #[cfg(test)]

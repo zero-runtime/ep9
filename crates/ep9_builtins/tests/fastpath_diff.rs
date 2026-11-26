@@ -108,7 +108,7 @@ const INVENTORY: &[FastPath] = &[
         off: Off::Switch,
         what: "a host callee of an unprefixed CallProperty0, CallProperty1 or CallProperty2 \
                whose receiver is not a function: the host call with the argument count and \
-               the operand places known, no opcode decode",
+               the operand places known, no opcode decode; `charCodeAt` on a flat string with an int32 index in range: the code unit with no host call (M15-P1 CHARCODE)",
     },
     // ---- B0, the switch ----
     FastPath {
@@ -262,7 +262,7 @@ const INVENTORY: &[FastPath] = &[
     // ---- OXC-PERF a CHARCODE-FAST, a guard form ----
     FastPath {
         id: "char-code-at",
-        site: "crates/ep9_builtins/src/string.rs char_code_at (the int32 fast path)",
+        site: "crates/ep9_vm/src/abi/strings.rs char_code_at (the int32 fast path)",
         off: Off::Guard,
         what: "String.prototype.charCodeAt on a String value with an int32 pos: the code unit \
                or NaN, with no ToString or ToIntegerOrInfinity call",
