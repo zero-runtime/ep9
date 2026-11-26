@@ -3146,6 +3146,17 @@ fn sweep_bitmaps() -> ep9_platform::simd::SweepBitmaps {
     ep9_platform::simd::sweep_bitmaps()
 }
 
+/// The check-all mode of the checked walk (`ep9_platform::simd::sweep_check_all`), or (unit
+/// tests) the mode that [`sweep_lean_test::with_check_all`] sets on this thread. Only
+/// [`Sweeper::shadow_check`] reads it.
+fn sweep_check_all() -> bool {
+    #[cfg(test)]
+    if let Some(on) = sweep_lean_test::check_all() {
+        return on;
+    }
+    ep9_platform::simd::sweep_check_all()
+}
+
 impl Sweeper<'_> {
     /// SWEEP-LEAN: the walk of [`Sweeper::sweep_page_with`] when it is not `CHECK` and the
     /// sweeper is lean (no zap). One bitmap pass of the SWEEP body (`ep9_platform::simd`: the
@@ -3253,8 +3264,9 @@ impl Sweeper<'_> {
     /// After a checked walk with no error so far (in the mark or any page): the bitmap body,
     /// run on the copy taken before the walk (`shadow`: the copy and the cells freed before
     /// the walk), must leave the bitmaps, the line marks and the counts that the walk left (so
-    /// the GC-stress shards check the forced body on every page of every GC). A difference is
-    /// an error of page `idx`.
+    /// the GC-stress shards check the forced body on every page of every GC). In the check-all
+    /// mode ([`sweep_check_all`]) every SWEEP body of this CPU runs, each on its own copy (a
+    /// shard checks them all at once). A difference is an error of page `idx`.
     fn shadow_check(
         &self,
         shadow: Option<(Box<BitmapCopy>, u64)>,
@@ -3267,31 +3279,51 @@ impl Sweeper<'_> {
             && errors.is_empty()
         {
             let dead = self.freed_cells - freed_before;
-            if let Some(msg) = self.shadow_differs(page, &mut copy, live, dead) {
+            let mut ran = 0u32;
+            let msg = if sweep_check_all() {
+                ep9_platform::simd::sweep_check_bodies(true).find_map(|(b, f)| {
+                    ran += 1;
+                    #[cfg(test)]
+                    sweep_lean_test::body_ran(b);
+                    #[cfg(test)]
+                    let f = sweep_lean_test::swapped(b).unwrap_or(f);
+                    let mut own = copy.clone();
+                    self.shadow_differs(page, &mut own, live, dead, f, b.name())
+                })
+            } else {
+                ran += 1;
+                let name = ep9_platform::simd::sweep().name();
+                self.shadow_differs(page, &mut copy, live, dead, self.bitmaps, name)
+            };
+            #[cfg(test)]
+            sweep_lean_test::shadow_ran(ran);
+            let _ = ran;
+            if let Some(msg) = msg {
                 sweep_error(errors, idx, format_args!("{msg}"));
             }
         }
     }
 
-    /// The shadow pass of a checked walk: the bitmap body on `copy` (the page's bitmaps before
-    /// the walk), then the fix, against what the walk left on `page` (the 2 bitmaps, the line
-    /// marks) and its counts (`live`, `dead`). `None` if all equal, else the first difference.
+    /// The shadow pass of a checked walk: the bitmap body `body` (named `name`) on `copy` (the
+    /// page's bitmaps before the walk), then the fix, against what the walk left on `page`
+    /// (the 2 bitmaps, the line marks) and its counts (`live`, `dead`). `None` if all equal,
+    /// else the first difference.
     fn shadow_differs(
         &self,
         page: Page,
         copy: &mut BitmapCopy,
         live: usize,
         dead: u64,
+        body: ep9_platform::simd::SweepBitmaps,
+        name: &str,
     ) -> Option<String> {
-        #[cfg(test)]
-        sweep_lean_test::shadow_ran();
         let keep_marks = if self.sticky { u64::MAX } else { 0 };
         let mut lines = [0u8; LINES_PER_PAGE];
         let mut ends = [0u8; LINES_PER_PAGE];
         // SAFETY: the 4 arrays are locals of the sizes of the contract, apart from each other.
         // The body came from `SweepBody::bitmaps`, which checked the CPU.
         let c = unsafe {
-            (self.bitmaps)(
+            body(
                 copy.vo.as_mut_ptr(),
                 copy.mk.as_mut_ptr(),
                 keep_marks,
@@ -3317,7 +3349,6 @@ impl Sweeper<'_> {
                 size,
             )?
         };
-        let name = ep9_platform::simd::sweep().name();
         if c.live as usize != live || u64::from(c.dead) != dead {
             return Some(format!(
                 "the sweep body {name} counted {} live and {} dead cells, the checked walk {live} \
@@ -3349,6 +3380,7 @@ impl Sweeper<'_> {
 }
 
 /// The 2 bitmaps of a page before a checked walk (the input of its shadow pass).
+#[derive(Clone)]
 struct BitmapCopy {
     vo: [u64; BITMAP_WORDS],
     mk: [u64; BITMAP_WORDS],
@@ -3443,6 +3475,56 @@ pub(crate) mod sweep_lean_test {
         static BODY: Cell<Option<SweepBody>> = const { Cell::new(None) };
         static FUNC: Cell<Option<SweepBitmaps>> = const { Cell::new(None) };
         static SHADOWS: Cell<u64> = const { Cell::new(0) };
+        static CHECK_ALL: Cell<Option<bool>> = const { Cell::new(None) };
+        static SWAP: Cell<Option<(SweepBody, SweepBitmaps)>> = const { Cell::new(None) };
+        /// Bit n: a checked page of this thread ran n bodies (n >= 63 sets bit 63).
+        static PER_PAGE: Cell<u64> = const { Cell::new(0) };
+        /// Bit `b as u8`: body b ran in a check-all pass of this thread.
+        static RAN: Cell<u8> = const { Cell::new(0) };
+    }
+
+    /// The check-all mode of this thread ([`with_check_all`]), `None`: the process mode.
+    pub(crate) fn check_all() -> Option<bool> {
+        CHECK_ALL.with(Cell::get)
+    }
+
+    /// The test pass that takes the place of body `b` in a check-all pass ([`with_check_all`]).
+    pub(crate) fn swapped(b: SweepBody) -> Option<SweepBitmaps> {
+        SWAP.with(Cell::get)
+            .and_then(|(s, f)| (s == b).then_some(f))
+    }
+
+    /// Body `b` ran in a check-all pass on this thread.
+    pub(crate) fn body_ran(b: SweepBody) {
+        RAN.with(|c| c.set(c.get() | 1 << b as u8));
+    }
+
+    /// The counts of the check passes of this thread since the last call: the mask of the
+    /// bodies run per checked page (bit n: a page ran n) and the mask of the bodies run in a
+    /// check-all pass (bit `b as u8`). Resets both.
+    pub(crate) fn take_check_counts() -> (u64, u8) {
+        (PER_PAGE.with(|c| c.replace(0)), RAN.with(|c| c.replace(0)))
+    }
+
+    /// Runs `f` with the check-all mode `on` on this thread and, if `swap` is set, its pass in
+    /// the place of its body in each check-all pass.
+    pub(crate) fn with_check_all<R>(
+        on: bool,
+        swap: Option<(SweepBody, SweepBitmaps)>,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        struct Restore(Option<bool>, Option<(SweepBody, SweepBitmaps)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                CHECK_ALL.with(|c| c.set(self.0));
+                SWAP.with(|c| c.set(self.1));
+            }
+        }
+        let _restore = Restore(
+            CHECK_ALL.with(|c| c.replace(Some(on))),
+            SWAP.with(|c| c.replace(swap)),
+        );
+        f()
     }
 
     pub(crate) fn lean() -> bool {
@@ -3457,9 +3539,10 @@ pub(crate) mod sweep_lean_test {
         })
     }
 
-    /// One shadow pass of a checked walk on this thread.
-    pub(crate) fn shadow_ran() {
+    /// One shadow pass of a checked walk on this thread, with `bodies` bodies run.
+    pub(crate) fn shadow_ran(bodies: u32) {
         SHADOWS.with(|c| c.set(c.get() + 1));
+        PER_PAGE.with(|c| c.set(c.get() | 1 << bodies.min(63)));
     }
 
     /// Shadow passes on this thread so far.

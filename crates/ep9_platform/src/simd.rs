@@ -784,7 +784,10 @@ mod arm {
 //           ep9_heap heap.rs Sweeper::sweep_page_with (the lean walk: no zap, no CHECK)
 // sweep()   the pick of this table: once per process, from the bitset and EP9_SIMD (the forms of
 //           the module doc; this table has no old name)
-// sweep_report()   "SIMD-REPORT-SWEEP target=<arch> sweep=<body>"
+// sweep_report()   "SIMD-REPORT-SWEEP target=<arch> sweep=<body> check_all=<yes|no>
+//                  bodies=<list>"
+// sweep_check_all()      EP9_SWEEP_CHECK_ALL=1: the checked sweep runs every body this CPU has
+// sweep_check_bodies()   the bodies of one checked page sweep (the pick, or every body)
 // ```
 //
 // One call is one small page of `ep9_heap`: SWEEP_WORDS words of the VO bitmap and of the mark
@@ -963,14 +966,48 @@ pub fn sweep_bitmaps() -> SweepBitmaps {
     sweep().bitmaps().unwrap_or(sweep_scalar)
 }
 
-/// One line: the target and the SWEEP body of this process (`SIMD-REPORT-SWEEP target=aarch64
-/// sweep=neon`). A run that forces the body prints it (never inside a timed run).
+/// One line: the target, the SWEEP body of this process, the check-all mode and the bodies a
+/// checked page sweep runs (`SIMD-REPORT-SWEEP target=aarch64 sweep=neon check_all=yes
+/// bodies=scalar,neon`). A run that forces the body prints it (never inside a timed run).
 pub fn sweep_report() -> String {
+    let all = sweep_check_all();
+    let bodies: Vec<&str> = sweep_check_bodies(all).map(|(b, _)| b.name()).collect();
     format!(
-        "SIMD-REPORT-SWEEP target={} sweep={}",
+        "SIMD-REPORT-SWEEP target={} sweep={} check_all={} bodies={}",
         std::env::consts::ARCH,
-        sweep().name()
+        sweep().name(),
+        if all { "yes" } else { "no" },
+        bodies.join(",")
     )
+}
+
+/// The check-all mode of the checked sweep: `EP9_SWEEP_CHECK_ALL=1` (read once per process).
+/// Then each checked page sweep of `ep9_heap` runs every SWEEP body that this CPU and build
+/// have ([`sweep_check_bodies`]), each on its own copy of the page bitmaps, and not only the
+/// pick. Only the checked sweep reads it; the sweep that is not checked never does.
+pub fn sweep_check_all() -> bool {
+    // 0: not read yet, 1: off, 2: on.
+    static CHECK_ALL: AtomicU8 = AtomicU8::new(0);
+    match CHECK_ALL.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let on = std::env::var("EP9_SWEEP_CHECK_ALL").as_deref() == Ok("1");
+            CHECK_ALL.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+            on
+        }
+    }
+}
+
+/// The SWEEP bodies of one checked page sweep and their passes, in [`SweepBody::ALL`] order:
+/// with `check_all` every body this CPU and build have (never one they lack: the pass comes
+/// from [`SweepBody::bitmaps`]), else the pick of this process.
+pub fn sweep_check_bodies(check_all: bool) -> impl Iterator<Item = (SweepBody, SweepBitmaps)> {
+    let pick = sweep();
+    SweepBody::ALL
+        .into_iter()
+        .filter(move |&b| check_all || b == pick)
+        .filter_map(|b| b.bitmaps().map(|f| (b, f)))
 }
 
 /// The scalar body (the reference of every other body).

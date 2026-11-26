@@ -626,7 +626,9 @@ fn field_size_kinds_sweep_as_their_size_functions() {
 // | `every_sweep_bitmap_body_equals_the_scalar_body` | each SWEEP body this CPU has (called by its function), on random pages, both keep values: the same bitmaps, line marks, line ends and counts as the scalar body; the scalar body against a bit-by-bit model |
 // | `the_lean_sweep_with_each_body_leaves_the_free_lists_of_the_walk` | S0, S1 major, S1 minor: the lazy sweep with today's walk, then lean with each body forced: the same cells kept, freed cells, pages and committed bytes, the same addresses for the next allocations (the free lists), no `freed_bytes` from small cells, and a verify (with the shadow pass) passes |
 // | `the_checked_sweep_compares_the_body_on_every_page` | the verify after a GC with each body forced: the shadow pass runs and finds no difference; a wrong body result is an error |
-// | `sweep_simd_report` | the SWEEP pick follows `EP9_SIMD` (a forced body that the CPU has is taken) and prints "SIMD-REPORT-SWEEP" |
+// | `sweep_simd_report` | the SWEEP pick follows `EP9_SIMD` (a forced body that the CPU has is taken) and prints "SIMD-REPORT-SWEEP"; `check_all` follows `EP9_SWEEP_CHECK_ALL` and `bodies` lists every body of this CPU in that mode (a body that `EP9_REQUIRE_SIMD_PATHS` names among them), else the pick |
+// | `check_all_runs_every_body_on_each_checked_page` | the check-all mode: each checked page runs every SWEEP body of this CPU (a counter of the bodies per page and of the bodies run); off: one body a page |
+// | `check_all_catches_a_wrong_body_in_each_place` | the check-all mode with a wrong pass in the place of each body in turn: the checked GC reports that body |
 
 use crate::heap::sweep_lean_test;
 use ep9_platform::simd::{SWEEP_LINES, SWEEP_WORDS, SweepBody, SweepCounts, sweep_scalar};
@@ -981,14 +983,64 @@ fn checked_gcs() -> (Result<(), String>, u64) {
 
 #[test]
 fn the_checked_sweep_compares_the_body_on_every_page() {
+    // The check of the forced body only (not the check-all mode of `EP9_SWEEP_CHECK_ALL`).
+    sweep_lean_test::with_check_all(false, None, || {
+        for b in sweep_bodies() {
+            let (r, shadows) = sweep_lean_test::with(true, Some(b), checked_gcs);
+            assert_eq!(r, Ok(()), "body {}", b.name());
+            assert!(shadows >= 3, "body {}: {shadows} shadow passes", b.name());
+        }
+        let (r, _) = sweep_lean_test::with_fn(wrong_body, checked_gcs);
+        let e = r.expect_err("a wrong body passes the checked sweep");
+        assert!(e.contains("another line mark"), "{e}");
+    });
+}
+
+/// The check-all mode: each checked page runs every SWEEP body of this CPU (scalar first),
+/// each once; off, one body a page and no check-all pass.
+#[test]
+fn check_all_runs_every_body_on_each_checked_page() {
+    let bodies = sweep_bodies();
+    let all = bodies.iter().fold(0u8, |m, &b| m | 1 << b as u8);
+    sweep_lean_test::take_check_counts();
+    let (r, shadows) = sweep_lean_test::with_check_all(true, None, || {
+        sweep_lean_test::with(true, None, checked_gcs)
+    });
+    assert_eq!(r, Ok(()));
+    assert!(shadows >= 3, "{shadows} checked pages");
+    let (per_page, ran) = sweep_lean_test::take_check_counts();
+    assert_eq!(
+        per_page,
+        1 << bodies.len(),
+        "bodies per checked page (bit n: a page ran n); {} bodies",
+        bodies.len()
+    );
+    assert_eq!(ran, all, "the bodies run (bit `b as u8`)");
+    let names: Vec<&str> = bodies.iter().map(|b| b.name()).collect();
+    eprintln!(
+        "SWEEP-CHECK-ALL bodies={} pages {shadows} each",
+        names.join(",")
+    );
+    let (r, shadows) = sweep_lean_test::with_check_all(false, None, || {
+        sweep_lean_test::with(true, None, checked_gcs)
+    });
+    assert_eq!(r, Ok(()));
+    assert!(shadows >= 3, "{shadows} checked pages");
+    assert_eq!(sweep_lean_test::take_check_counts(), (1 << 1, 0));
+}
+
+/// The check-all mode with a wrong pass in the place of each SWEEP body in turn: the checked
+/// GC reports that body (so each body of the list is compared, not only the first).
+#[test]
+fn check_all_catches_a_wrong_body_in_each_place() {
     for b in sweep_bodies() {
-        let (r, shadows) = sweep_lean_test::with(true, Some(b), checked_gcs);
-        assert_eq!(r, Ok(()), "body {}", b.name());
-        assert!(shadows >= 3, "body {}: {shadows} shadow passes", b.name());
+        let (r, _) = sweep_lean_test::with_check_all(true, Some((b, wrong_body)), || {
+            sweep_lean_test::with(true, None, checked_gcs)
+        });
+        let e = r.expect_err("a wrong body passes the check-all sweep");
+        let want = format!("the sweep body {} left another line mark", b.name());
+        assert!(e.contains(&want), "{want}: {e}");
     }
-    let (r, _) = sweep_lean_test::with_fn(wrong_body, checked_gcs);
-    let e = r.expect_err("a wrong body passes the checked sweep");
-    assert!(e.contains("another line mark"), "{e}");
 }
 
 /// The SWEEP pick of the process follows `EP9_SIMD` (`sweep=<body>`, or a bare body name):
@@ -1023,4 +1075,19 @@ fn sweep_simd_report() {
             "EP9_SIMD forces sweep={name}"
         );
     }
+    // check_all=<yes|no> bodies=<the bodies of a checked page sweep>.
+    let all = std::env::var("EP9_SWEEP_CHECK_ALL").as_deref() == Ok("1");
+    assert_eq!(ep9_platform::simd::sweep_check_all(), all);
+    let bodies: Vec<&str> = if all {
+        sweep_bodies().iter().map(|b| b.name()).collect()
+    } else {
+        vec![ep9_platform::simd::sweep().name()]
+    };
+    let tail = format!(
+        " sweep={} check_all={} bodies={}",
+        ep9_platform::simd::sweep().name(),
+        if all { "yes" } else { "no" },
+        bodies.join(",")
+    );
+    assert!(line.ends_with(&tail), "{line}: {tail}");
 }
