@@ -1747,7 +1747,7 @@ pub(crate) fn cold_load(rt: &Runtime, v: u64, i: u32, o: u64, name: u64) -> Opti
             #[cfg(debug_assertions)]
             cross_check(rt, o, name, c);
             debug_assert!(shape::is_dictionary(shape::shape_of(holder)));
-            let (x, a) = crate::props::own_get_with(holder, name, key::probe(name))?;
+            let (x, a) = crate::props::own_get_with(rt, holder, name, key::probe(name))?;
             (a & attr::ACCESSOR == 0).then_some(ColdLoad::Value(x))
         }
         _ => None,

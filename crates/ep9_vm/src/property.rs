@@ -106,7 +106,7 @@ pub(crate) fn get_with_receiver(cx: &mut Cx, mut o: u64, key: u64, receiver: u64
                 return accessor::call_getter(cx, v, receiver);
             }
         }
-        match props::own_value_or_proto(o, key, how) {
+        match props::own_value_or_proto(cx.rt(), o, key, how) {
             // HOLE: a lazy namespace key not installed yet (INTL-I1-D8) swaps on this read.
             Ok((v, a)) if a & attr::ACCESSOR == 0 => {
                 if v == HOLE {
@@ -150,7 +150,7 @@ pub(crate) fn get_data_from(cx: &mut Cx, mut o: u64, key: u64) -> Option<u64> {
                 return (a & attr::ACCESSOR == 0).then_some(v);
             }
         }
-        match props::own_value_or_proto(o, key, how) {
+        match props::own_value_or_proto(cx.rt(), o, key, how) {
             // HOLE: a lazy namespace key swaps on this read (INTL-I1-D8; no JS runs).
             Ok((HOLE, a)) if a & attr::ACCESSOR == 0 => {
                 return Some(crate::realm::resolve_global(cx.rt(), o, key));
@@ -431,10 +431,10 @@ fn ordinary_set_walk(cx: &mut Cx, o: u64, key: u64, v: u64, receiver: u64) -> Re
             // (no WRITABLE bit) is looked up again.
             None if cur == receiver => match props::own_store_if_writable(rt, cur, key, how, v) {
                 Some(true) => return Ok(true),
-                Some(false) => props::own_get_with(cur, key, how),
+                Some(false) => props::own_get_with(rt, cur, key, how),
                 None => None,
             },
-            None => props::own_get_with(cur, key, how),
+            None => props::own_get_with(rt, cur, key, how),
         };
         if let Some((pv, a)) = found {
             if a & attr::ACCESSOR != 0 {
@@ -738,8 +738,8 @@ fn first_attrs_on_chain(rt: &Runtime, mut o: u64, key: u64) -> Option<i32> {
                 return None;
             }
         }
-        if let Some(a) =
-            own_attrs(rt, o, key, how).or_else(|| props::own_get_with(o, key, how).map(|(_, a)| a))
+        if let Some(a) = own_attrs(rt, o, key, how)
+            .or_else(|| props::own_get_with(rt, o, key, how).map(|(_, a)| a))
         {
             return Some(a);
         }
@@ -818,7 +818,7 @@ pub(crate) fn define(cx: &mut Cx, o: u64, key: u64, v: u64) -> Res<()> {
         && object::has_elements_cell(o)
         && let Some(i) = array_index_of(key)
         && (object::element_get(o, i).is_some()
-            || (is_extensible(o) && props::own_get_with(o, key, how).is_none()))
+            || (is_extensible(o) && props::own_get_with(rt, o, key, how).is_none()))
         && object::element_set(rt, o, i, v)
     {
         return Ok(());
@@ -829,7 +829,7 @@ pub(crate) fn define(cx: &mut Cx, o: u64, key: u64, v: u64) -> Res<()> {
         return define_routed(cx, o, key, v);
     }
     let exotic = own_attrs(rt, o, key, how);
-    let stored = props::own_get_with(o, key, how);
+    let stored = props::own_get_with(rt, o, key, how);
     if exotic.is_none() {
         match stored {
             None if is_extensible(o) => {
@@ -865,8 +865,8 @@ fn define_routed(cx: &mut Cx, o: u64, key: u64, v: u64) -> Res<()> {
         };
     }
     let how = key::probe(key);
-    let exists =
-        own_attrs(cx.rt(), o, key, how).is_some() || props::own_get_with(o, key, how).is_some();
+    let exists = own_attrs(cx.rt(), o, key, how).is_some()
+        || props::own_get_with(cx.rt(), o, key, how).is_some();
     define_slow(cx, o, key, v, exists)
 }
 
@@ -981,7 +981,7 @@ pub(crate) fn ordinary_delete(rt: &Runtime, o: u64, key: u64) -> bool {
         debug_assert!(a & attr::CONFIGURABLE == 0);
         return false;
     }
-    match props::own_get_with(o, key, how) {
+    match props::own_get_with(rt, o, key, how) {
         Some((_, a)) if a & attr::CONFIGURABLE == 0 => false,
         Some(_) => {
             object::own_delete(rt, o, key);
@@ -1127,7 +1127,7 @@ fn has_own_with(rt: &Runtime, o: u64, key: u64, how: Probe) -> bool {
         !crate::proxy::is_proxy_kind(kind::cell_kind(o)),
         "the ordinary HasProperty met a proxy: use try_has_property"
     );
-    props::own_get_with(o, key, how).is_some() || own_attrs(rt, o, key, how).is_some()
+    props::own_get_with(rt, o, key, how).is_some() || own_attrs(rt, o, key, how).is_some()
 }
 
 /// InstanceofOperator(V, target) (§13.10.2) for `v instanceof f`:
@@ -1473,7 +1473,7 @@ fn own_property(cx: &mut Cx, o: u64, key: u64) -> Res<Option<(u64, i32, OwnSlot)
         let (v, a, e) = r?;
         return Ok(Some((v, a, OwnSlot::Exotic(e))));
     }
-    match props::own_get_with(o, key, how) {
+    match props::own_get_with(cx.rt(), o, key, how) {
         // HOLE: a lazy namespace key swaps on this read (INTL-I1-D8), so [[GetOwnProperty]],
         // [[DefineOwnProperty]] and a proxy's target form see the installed value.
         Some((HOLE, a)) if a & attr::ACCESSOR == 0 => {

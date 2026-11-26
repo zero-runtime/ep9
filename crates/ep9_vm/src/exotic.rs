@@ -83,7 +83,7 @@ pub(crate) fn is_key(rt: &Runtime, key: u64, how: Probe, a: Atom) -> bool {
 pub(crate) fn is_lazy_prototype(rt: &Runtime, f: u64, key: u64, how: Probe) -> bool {
     generator::lazy_prototype_kind(object::function_info(f)).is_some()
         && is_key(rt, key, how, Atom::Prototype)
-        && props::own_get_with(f, key, how).is_none()
+        && props::own_get_with(rt, f, key, how).is_none()
         && !is_proxy_constructor(rt, f)
 }
 

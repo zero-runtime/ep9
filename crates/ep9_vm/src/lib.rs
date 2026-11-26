@@ -113,6 +113,7 @@ mod realm;
 mod regexp;
 mod runtime;
 mod shape;
+mod shape_cache;
 mod slack;
 mod string;
 mod stub_cache;

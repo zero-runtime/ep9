@@ -296,7 +296,7 @@ pub(crate) fn join_fields(rt: &Runtime, from: u64, to: u64) {
 pub(crate) fn generalize(rt: &Runtime, s: u64, f: usize, r: i32, clear_const: bool) {
     let want = (r << rep::SHIFT) | if clear_const { 0 } else { DETAILS_CONST };
     let owner = shape::field_owner(s, f);
-    let changed = shape::set_field_bits_in_family(owner, f, |d: Details| {
+    let changed = shape::set_field_bits_in_family(rt, owner, f, |d: Details| {
         d.with_field_bits(join_bits(d.field_bits(), want) & FIELD_BITS)
     });
     debug_assert!(

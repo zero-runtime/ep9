@@ -296,6 +296,9 @@ pub(crate) struct Runtime {
     /// The megamorphic stub cache (`stub_cache.rs`, M4-P3 IC2): empty until IC2 fills it.
     #[allow(dead_code)] // read by its owner module from M4-P1 on
     pub stub_cache: crate::stub_cache::StubCache,
+    /// The shape lookup cache (`shape_cache.rs`, M14-P1 SHAPE-CACHE): (shape, key) -> the
+    /// descriptor index or absent, flushed at every GC. Rust memory, no root slot.
+    pub shape_cache: crate::shape_cache::ShapeCache,
     /// The xorshift128+ state of `Math.random` (`Cx::math_random`; M4-P1 MATH1, V9-D16),
     /// seeded per isolate from the process hash key and [`Runtime::id`] ([`rng_seed`]). Never
     /// both words 0.
@@ -378,6 +381,7 @@ impl Runtime {
             // The fields that register a heap source come before `heap` moves in.
             jobs: crate::jobs::JobState::new(&heap),
             stub_cache: crate::stub_cache::StubCache::new(&heap),
+            shape_cache: crate::shape_cache::ShapeCache::new(&heap),
             rng: Cell::new(rng_seed(id)),
             kept_objects: crate::weakref::KeptObjects::new(&heap),
             regexp_programs: crate::regexp::ProgramTable::new(&heap),

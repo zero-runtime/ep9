@@ -735,3 +735,310 @@ fn keys_with_one_hash_are_told_apart_across_the_holes_between_them() {
         shape::check(rt, kept(&roots, base)).unwrap();
     });
 }
+
+// ---- the shape lookup cache (M14-P1 SHAPE-CACHE; shape_cache.rs) ---------------------------
+//
+// A hit equals the scan, the flush in every collection (minor and major), the flushes at the 2
+// details sites (A1 `set_field_bits_in_family`, A2 the re-share in `descriptors_for_child`),
+// and no read of the execution mode. The debug shadow test (every hit against the scan) runs
+// inside the cache in every debug test; these tests also compare by hand, so they hold in the
+// release profile.
+
+use crate::shape_cache::{self, stats};
+
+/// Runs `f` with the runtime of a new isolate (no GC stress, a generational heap, the
+/// verifier after each collection), on a big stack. Verifies the heap after `f`.
+fn plain(f: fn(&Runtime)) {
+    on_big_stack(move || {
+        let mut c = config(Dispatch::DEFAULT, false);
+        c.heap.record_conservative_roots = true;
+        c.heap.verify_after_gc = true;
+        c.heap.generational = true;
+        let mut iso = isolate(c);
+        f(&iso.rt);
+        iso.collect_garbage();
+        iso.verify_heap().unwrap();
+    });
+}
+
+/// The cached lookup of `key` in `s` (a `Bits` probe), checked against the scan.
+fn cached(rt: &Runtime, s: u64, key: u64) -> Option<shape::Found> {
+    let how = crate::key::probe(key);
+    let r = shape_cache::lookup(rt, s, key, how);
+    assert_eq!(
+        r,
+        shape::lookup_with(s, key, how),
+        "the cache against the scan"
+    );
+    r
+}
+
+/// Counters of this thread: (hits, misses).
+fn hits_and_misses() -> (u64, u64) {
+    (
+        stats::get(stats::FOUND) + stats::get(stats::ABSENT),
+        stats::get(stats::MISS),
+    )
+}
+
+/// (flushes that emptied entries, flushes asked for) of `cause` on this thread.
+fn flushes(cause: shape_cache::Cause) -> (u64, u64) {
+    (
+        stats::get(stats::DONE + cause as usize),
+        stats::get(stats::ASKED + cause as usize),
+    )
+}
+
+#[test]
+fn a_cache_hit_equals_the_scan() {
+    plain(|rt| {
+        let roots = rt.heap.scratch_roots();
+        // A short shape (the linear scan) and a long one (the DESC_INDEX hash index), and a
+        // prefix of the long one that shares its array (the prefix rule).
+        let mut s = null_root(rt);
+        let mut short = 0;
+        let mut prefix = 0;
+        for i in 0..20 {
+            s = add(rt, s, &format!("c{i}"));
+            if i == 3 {
+                short = keep(&roots, s);
+            }
+            if i == 11 {
+                prefix = keep(&roots, s);
+            }
+        }
+        let long = keep(&roots, s);
+        let sym = crate::symbol::new_symbol(rt, UNDEFINED);
+        let sym_shape = keep(&roots, child(shape::add(rt, kept(&roots, long), sym, 0)));
+        let keys: Vec<u64> = (0..24).map(|i| k(rt, &format!("c{i}"))).collect();
+        let (h0, m0) = hits_and_misses();
+        let mut probes = 0;
+        for round in 0..2 {
+            for (si, n) in [(short, 4), (prefix, 12), (long, 20)] {
+                let sh = kept(&roots, si);
+                for (i, &key) in keys.iter().enumerate() {
+                    let want = (i < n).then_some(i);
+                    assert_eq!(
+                        cached(rt, sh, key).map(|f| f.index),
+                        want,
+                        "round {round} shape of {n} c{i}"
+                    );
+                    probes += 1;
+                }
+            }
+            let ss = kept(&roots, sym_shape);
+            assert_eq!(cached(rt, ss, sym).map(|f| f.index), Some(20));
+            assert_eq!(cached(rt, kept(&roots, long), sym), None);
+            probes += 2;
+        }
+        let (h1, m1) = hits_and_misses();
+        // Each (shape, key) is a miss once and a hit once: the 98 pairs fit in 1,024 entries
+        // unless 2 share an entry, which only turns a hit into a miss.
+        assert_eq!((h1 - h0) + (m1 - m0), probes);
+        assert!(h1 - h0 >= 90, "hits {}", h1 - h0);
+        assert!(rt.shape_cache.len() > 0);
+        // `shape::lookup` takes the cache too (an empty shape: no probe).
+        assert_eq!(index_of(rt, kept(&roots, long), "c7"), Some(7));
+        assert_eq!(index_of(rt, null_root(rt), "c7"), None);
+        // A content probe (a string that is not an atom) scans and is not cached.
+        let text = string::new_string(rt, "c5");
+        assert!(!string::is_atom(text));
+        let content = stats::get(stats::CONTENT);
+        let r = shape_cache::lookup(rt, kept(&roots, long), text, crate::key::probe(text));
+        assert_eq!(r.map(|f| f.index), Some(5));
+        assert_eq!(stats::get(stats::CONTENT), content + 1);
+    });
+}
+
+#[test]
+fn a_cache_hit_equals_the_scan_under_gc_stress() {
+    stressed(|rt| {
+        let roots = rt.heap.scratch_roots();
+        let mut s = null_root(rt);
+        for i in 0..12 {
+            s = add(rt, s, &format!("g{i}"));
+        }
+        let s = keep(&roots, s);
+        for _ in 0..3 {
+            for i in 0..14 {
+                let key = k(rt, &format!("g{i}"));
+                let want = (i < 12).then_some(i);
+                assert_eq!(cached(rt, kept(&roots, s), key).map(|f| f.index), want);
+            }
+        }
+    });
+}
+
+#[test]
+fn the_cache_is_flushed_in_every_collection() {
+    plain(|rt| {
+        let roots = rt.heap.scratch_roots();
+        let s = keep(&roots, add(rt, add(rt, null_root(rt), "fa"), "fb"));
+        let (fa, fb) = (k(rt, "fa"), k(rt, "fb"));
+        let fill = || {
+            assert_eq!(cached(rt, kept(&roots, s), fa).map(|f| f.index), Some(0));
+            assert_eq!(cached(rt, kept(&roots, s), fb).map(|f| f.index), Some(1));
+            assert_eq!(cached(rt, kept(&roots, s), k(rt, "fz")), None);
+            assert!(rt.shape_cache.len() >= 2);
+        };
+        let gc = shape_cache::Cause::Gc;
+        for minor in [true, false] {
+            fill();
+            let (done, asked) = flushes(gc);
+            if minor {
+                rt.heap.collect_minor();
+            } else {
+                rt.heap.collect();
+            }
+            assert_eq!(rt.shape_cache.len(), 0, "minor {minor}");
+            assert_eq!(flushes(gc), (done + 1, asked + 1), "minor {minor}");
+            // A collection with nothing inserted since: one flag test, nothing emptied.
+            rt.heap.collect();
+            assert_eq!(flushes(gc), (done + 1, asked + 2), "minor {minor}");
+            // After the flush the first lookup misses, the second hits.
+            let (h, m) = hits_and_misses();
+            assert_eq!(cached(rt, kept(&roots, s), fb).map(|f| f.index), Some(1));
+            assert_eq!(hits_and_misses(), (h, m + 1));
+            assert_eq!(cached(rt, kept(&roots, s), fb).map(|f| f.index), Some(1));
+            assert_eq!(hits_and_misses(), (h + 1, m + 1));
+        }
+    });
+}
+
+#[test]
+fn a_family_widening_flushes_the_cache_and_a_hit_reads_the_new_details() {
+    plain(|rt| {
+        let roots = rt.heap.scratch_roots();
+        let fa = k(rt, "wa");
+        let int32 = crate::field_rep::initial(crate::frame::int32_bits(1));
+        let s1 = keep(
+            &roots,
+            child(shape::add_with(rt, null_root(rt), fa, attr::DEFAULT, int32)),
+        );
+        let s2 = keep(&roots, add(rt, kept(&roots, s1), "wb"));
+        let before = cached(rt, kept(&roots, s2), fa).unwrap();
+        assert_eq!(before.details.rep(), shape::rep::INT32);
+        assert!(before.details.is_const());
+        assert_eq!(cached(rt, kept(&roots, s2), fa), Some(before), "a hit");
+        let a1 = shape_cache::Cause::FieldFamily;
+        let (done, asked) = flushes(a1);
+        // Site A1: the widening writes the details word in place and flushes once.
+        crate::field_rep::generalize(rt, kept(&roots, s2), 0, shape::rep::DOUBLE, true);
+        assert_eq!(flushes(a1), (done + 1, asked + 1));
+        assert_eq!(rt.shape_cache.len(), 0);
+        let after = cached(rt, kept(&roots, s2), fa).unwrap();
+        assert_eq!(after.index, before.index);
+        assert_eq!(after.details.rep(), shape::rep::DOUBLE);
+        assert!(!after.details.is_const());
+        assert_eq!(
+            cached(rt, kept(&roots, s1), fa),
+            Some(after),
+            "the owner too"
+        );
+        // The same widening again changes no cell: no flush.
+        crate::field_rep::generalize(rt, kept(&roots, s2), 0, shape::rep::DOUBLE, true);
+        assert_eq!(flushes(a1), (done + 1, asked + 1));
+        assert!(rt.shape_cache.len() > 0);
+    });
+}
+
+/// Adds `name` with the field bits `bits` to `s` in a frame of its own and drops the child.
+/// Run it [`below_a_pad`]. Returns the child's address XOR [`MASK`].
+#[inline(never)]
+fn made_a_dropped_child_with_bits(rt: &Runtime, s: u64, name: &str, bits: i32) -> usize {
+    let c = child(shape::add_with(rt, s, k(rt, name), attr::DEFAULT, bits));
+    black_box(c as usize) ^ MASK
+}
+
+#[test]
+fn a_reshare_that_widens_flushes_the_cache() {
+    plain(|rt| {
+        let roots = rt.heap.scratch_roots();
+        let a = keep(&roots, add(rt, null_root(rt), "ra"));
+        let int32 = crate::field_rep::initial(crate::frame::int32_bits(1));
+        // {ra} -> {ra, rb} with an int32 field, then the child dies; its entry stays in
+        // {ra}'s array past {ra}'s count.
+        let s = kept(&roots, a);
+        let (dead, pad_low) = below_a_pad(|| made_a_dropped_child_with_bits(rt, s, "rb", int32));
+        collect_after_a_pad(rt, pad_low, &[dead]);
+        assert_eq!(shape::transition_count(kept(&roots, a)), 0);
+        let (ra, rb) = (k(rt, "ra"), k(rt, "rb"));
+        assert_eq!(cached(rt, kept(&roots, a), ra).map(|f| f.index), Some(0));
+        // The prefix rule: rb sits past the count of {ra}, so it is absent there.
+        assert_eq!(cached(rt, kept(&roots, a), rb), None);
+        assert!(rt.shape_cache.len() >= 2);
+        let a2 = shape_cache::Cause::Reshare;
+        let (done, asked) = flushes(a2);
+        // Site A2: the new child of rb (any value) shares the array again and widens the
+        // entry in place.
+        let ab = keep(&roots, add(rt, kept(&roots, a), "rb"));
+        assert_eq!(
+            shape::descriptors(kept(&roots, ab)),
+            shape::descriptors(kept(&roots, a))
+        );
+        assert_eq!(flushes(a2), (done + 1, asked + 1));
+        let f = cached(rt, kept(&roots, ab), rb).unwrap();
+        assert_eq!((f.index, f.details.rep()), (1, shape::rep::ANY));
+        assert_eq!(cached(rt, kept(&roots, a), rb), None);
+    });
+}
+
+#[test]
+fn with_the_seam_off_nothing_is_cached() {
+    plain(|rt| {
+        let roots = rt.heap.scratch_roots();
+        let s = keep(&roots, add(rt, null_root(rt), "oa"));
+        rt.heap.collect();
+        assert_eq!(rt.shape_cache.len(), 0);
+        let off = stats::get(stats::OFF);
+        shape_cache::without(|| {
+            assert!(!shape_cache::on(rt));
+            for _ in 0..2 {
+                assert_eq!(
+                    cached(rt, kept(&roots, s), k(rt, "oa")).map(|f| f.index),
+                    Some(0)
+                );
+            }
+        });
+        assert_eq!(stats::get(stats::OFF), off + 2);
+        assert_eq!(rt.shape_cache.len(), 0);
+        assert!(shape_cache::on(rt));
+    });
+}
+
+#[test]
+fn the_cache_table_is_1024_entries_of_16_bytes() {
+    assert_eq!(shape_cache::ENTRIES, 1024);
+    assert_eq!(shape_cache::TABLE_BYTES, 16384);
+}
+
+/// M-R9 (plan v19 §4.2): the cache reads no execution mode, no feedback and no unit state.
+/// Its code (comments left out) names none of them.
+#[test]
+fn the_cache_reads_no_execution_mode() {
+    let src = include_str!("../shape_cache.rs");
+    let code: String = src
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for word in [
+        "ExecPolicy",
+        "ExecOptions",
+        "exec",
+        "ics_only",
+        "Feedback",
+        "feedback",
+        "units",
+        "unit_loader",
+        "profile",
+    ] {
+        assert!(!code.contains(word), "shape_cache.rs reads {word}");
+    }
+    // Its only runtime field is its own table.
+    let fields: Vec<&str> = code.match_indices("rt.").map(|(i, _)| &code[i..]).collect();
+    assert!(
+        fields.iter().all(|f| f.starts_with("rt.shape_cache")),
+        "{fields:?}"
+    );
+}

@@ -95,7 +95,7 @@ pub(crate) fn global_value(cx: &mut Cx, name: u64, in_typeof: bool) -> u64 {
         {
             break;
         }
-        match props::own_get_with(o, name, how) {
+        match props::own_get_with(rt, o, name, how) {
             // HOLE: a lazy namespace key swaps on this read (INTL-I1-D8).
             Some((HOLE, a)) if a & attr::ACCESSOR == 0 => {
                 return crate::realm::resolve_global(rt, o, name);
