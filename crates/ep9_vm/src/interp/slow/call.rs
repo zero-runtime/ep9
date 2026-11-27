@@ -1251,10 +1251,11 @@ fn construct_native_cold(
 //
 // ```text
 // call_property::<1>   no stack frame on this path: each exit is a return or a tail call
+//   0 the seam char_code_arm_on (first: off --> call_property_host1, with no read before it)
 //   1 unprefixed CallProperty1, budget > 0
 //   2 the callee is a FUNCTION whose FunctionInfo holds the host function
 //     abi::strings::char_code_at (the builtin itself, under any name; not its name)
-//   3 the human fast paths of the isolate are on, and the seam char_code_arm_on
+//   3 the human fast paths of the isolate are on
 //   4 the argument is an int32            5 the receiver is a SEQ string or a flattened CONS
 //   6 index < length (one unsigned compare: a negative index fails too)
 //     --> acc = int32(code unit), out_fp/out_pc   (no enter, no host frame, no realm switch)
@@ -1460,6 +1461,18 @@ unsafe fn char_code_arm(cx: &mut Cx, fp: *mut u64, pc: *const u8, this: u64, acc
     use ep9_bytecode::Opcode as O;
     use ep9_value::encoding::NUMBER_TAG;
 
+    // Test 0: the seam, first. Off: the old body, with no read of the instruction, the callee,
+    // its FunctionInfo or the receiver before it (in an arm without the CHARCODE bit a call
+    // pays one byte test and a jump).
+    if !char_code_arm_on(cx.rt()) {
+        #[cfg(feature = "ic-stats")]
+        // SAFETY: caller contract.
+        unsafe {
+            char_code_off_count(cx, fp, pc)
+        };
+        // SAFETY: caller contract.
+        return unsafe { call_property_host1(cx, fp, pc, this, acc) };
+    }
     // Test 1: an unprefixed `CallProperty1` with no poll due (the first test of the old body).
     // SAFETY: caller contract: `pc` is a byte of verified code.
     if unsafe { *pc } != O::CallProperty1 as u8 || cx.budget <= 0 {
@@ -1493,8 +1506,8 @@ unsafe fn char_code_arm(cx: &mut Cx, fp: *mut u64, pc: *const u8, this: u64, acc
         // FunctionInfo holds a host function.
         return unsafe { call_property_host1_from(cx, fp, pc, this, acc, callee) };
     }
-    // Test 3: the human fast paths of the isolate (FASTDIFF) and the seam.
-    if !call::human_fast_paths(cx.rt()) || !char_code_arm_on(cx.rt()) {
+    // Test 3: the human fast paths of the isolate (FASTDIFF).
+    if !call::human_fast_paths(cx.rt()) {
         crate::abi::strings::char_code_count!(Off);
         // SAFETY: caller contract.
         return unsafe { call_property_host1(cx, fp, pc, this, acc) };
@@ -1573,8 +1586,8 @@ unsafe fn char_code_other(cx: &mut Cx, fp: *mut u64, pc: *const u8, this: u64, a
 }
 
 /// The old body of `call_property::<1>` (`host_call_property`), out of line: the arm's way
-/// out when test 1, 3, 4, 5 or 6 fails. Same 5 arguments as `call_property`, so the arm's call
-/// of it is a tail call (a jump).
+/// out when the seam is off or test 1, 3, 4, 5 or 6 fails. Same 5 arguments as
+/// `call_property`, so the arm's call of it is a tail call (a jump).
 ///
 /// # Safety
 /// As `call_property` with `N` = 1.
@@ -1633,10 +1646,10 @@ fn is_char_code_at(h: crate::host::HostFn) -> bool {
 }
 
 /// The CHARCODE seam (design 5.2): true = the `charCodeAt` arm runs; false = every call takes
-/// the old body. This role head: always true, so the test is a constant and the compiler
-/// removes it. The SET-15 integrator changes only this body (its bit of the arm byte of `rt`,
-/// `ep9_platform::set_arm`); the merge head deletes the seam and keeps the arm. It reads no
-/// execution policy (no preset, no feedback mode, no unit: rule 40, M-R9). Tests turn it off
+/// the old body. The SET-15 set branch: the CHARCODE bit of the arm byte of `rt`
+/// (`ep9_platform::set_arm`), the arm's test 0, so with the bit off a call reads this byte
+/// only and then runs the old body; the merge head deletes the seam and keeps the arm. It reads
+/// no execution policy (no preset, no feedback mode, no unit: rule 40, M-R9). Tests turn it off
 /// per thread with `call::CHAR_CODE_ARM_OFF`.
 #[inline(always)]
 pub(crate) fn char_code_arm_on(rt: &crate::runtime::Runtime) -> bool {
@@ -1645,6 +1658,35 @@ pub(crate) fn char_code_arm_on(rt: &crate::runtime::Runtime) -> bool {
         return false;
     }
     crate::set_arm_init::on(rt, ep9_platform::set_arm::CHARCODE)
+}
+
+/// The `off=` and `poll=` counts of the `ic-stats` line (`abi::strings` `char_code_stats`) for
+/// a call that the seam (test 0) sent to the old body: the column that tests 1-3 give, as when
+/// the seam was a part of test 3. Only the count build has this code: it reads the instruction
+/// and the callee register, and changes no state.
+///
+/// # Safety
+/// As `call_property` with `N` = 1.
+#[cfg(feature = "ic-stats")]
+#[cold]
+#[inline(never)]
+unsafe fn char_code_off_count(cx: &Cx, fp: *mut u64, pc: *const u8) {
+    use crate::interp::dsl::R;
+    use ep9_bytecode::Opcode as O;
+    // SAFETY: caller contract: `pc` is a byte of verified code.
+    if unsafe { *pc } != O::CallProperty1 as u8 || cx.budget <= 0 {
+        // SAFETY: caller contract.
+        return unsafe { char_code_poll_count(fp, pc) };
+    }
+    // SAFETY: operand 0 of the unprefixed instruction, a register of the live frame `fp`.
+    let callee = unsafe { *fp.offset(R::from_operand(i32::from(*pc.add(1) as i8)).0) };
+    if object::is_function(callee)
+        && object::function_info(callee)
+            .host
+            .is_some_and(is_char_code_at)
+    {
+        crate::abi::strings::char_code_count!(Off);
+    }
 }
 
 /// The `poll=` count of the `ic-stats` line (`abi::strings` `char_code_stats`): a call of the

@@ -274,7 +274,7 @@ fn a2_to_boolean_and_fast_truthy_agree_on_every_row() {
             assert_eq!(conv::to_boolean(v), want, "{name}: to_boolean");
             assert_eq!(old_to_boolean(v), want, "{name}: the old body");
             for arm in [true, false] {
-                let got = fast_truthy(v, arm);
+                let got = fast_truthy(v, || arm);
                 assert!(
                     got.is_none_or(|b| b == want),
                     "{name}: fast_truthy(arm {arm}) = {got:?}"
@@ -527,4 +527,33 @@ fn a3_the_handlers_give_the_row_answer_with_the_arm_on_and_off() {
             }
         }
     }
+}
+
+/// The seam of the cell arm (the `arm` closure of `fast_truthy`) is the first test after the
+/// tests of the immediates and the int32s (rows 1-5 of the table): it runs one time for each
+/// value of rows 6-16 (a double, a cell, the hole) and never for rows 1-5, with the arm on and
+/// off. With it off the answer of rows 6-16 is the cold body (`None`), with no cell test, as
+/// before the arm. So in arm 0 of the SET-15 switch a value pays the seam test only.
+#[test]
+fn fast_truthy_reads_the_seam_first_after_the_immediates() {
+    with_cx(|cx| {
+        for (i, &(row, name, _)) in SWEEP.iter().enumerate() {
+            let v = make(cx, i);
+            for arm in [true, false] {
+                let reads = Cell::new(0u32);
+                let got = fast_truthy(v, || {
+                    reads.set(reads.get() + 1);
+                    arm
+                });
+                assert_eq!(
+                    reads.get(),
+                    u32::from(row >= 6),
+                    "{name}: the seam reads, arm {arm}"
+                );
+                if !arm && row >= 6 {
+                    assert_eq!(got, None, "{name}: arm off gives the cold body");
+                }
+            }
+        }
+    });
 }
