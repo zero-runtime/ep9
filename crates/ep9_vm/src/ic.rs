@@ -1732,7 +1732,7 @@ fn cached_pair(rt: &Runtime, o: u64, c: CellPtr, name: u64) -> Option<u64> {
 /// before the generic load: the `GETTER` or `PROTO_DICT_LOAD` case of slot `i` of the vector
 /// `v` for `o`, if it applies. `name` is the site's name (an atom). `None`: take the generic
 /// path. No allocation, no JS, not a GC point.
-fn cold_load_c<const C: bool>(rt: &Runtime, v: u64, i: u32, o: u64, name: u64) -> Option<ColdLoad> {
+pub(crate) fn cold_load(rt: &Runtime, v: u64, i: u32, o: u64, name: u64) -> Option<ColdLoad> {
     let (c, k) = cold_handler(v, i, o)?;
     let r = match k {
         hk::GETTER => cached_pair(rt, o, c, name).map(ColdLoad::Getter),
@@ -1747,7 +1747,7 @@ fn cold_load_c<const C: bool>(rt: &Runtime, v: u64, i: u32, o: u64, name: u64) -
             #[cfg(debug_assertions)]
             cross_check(rt, o, name, c);
             debug_assert!(shape::is_dictionary(shape::shape_of(holder)));
-            let (x, a) = crate::props::own_get_c::<C>(rt, holder, name, key::probe(name))?;
+            let (x, a) = crate::props::own_get_with(rt, holder, name, key::probe(name))?;
             (a & attr::ACCESSOR == 0).then_some(ColdLoad::Value(x))
         }
         _ => None,
@@ -2929,17 +2929,4 @@ unsafe fn mega_store_fast<const CHECK_EPOCH: bool>(
     // SAFETY: the block has no instructions.
     unsafe { core::arch::asm!("/* {0} */", in(reg) i, options(nostack, preserves_flags)) };
     stub_cache::probe_at(cx.rt(), i, op, id, k)
-}
-
-// ---- SET-15 (M15-P1, phase 2f): the seams of the functions with 2 copies --------------------
-// At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan). Each
-// function below is the seam of a body that stays in place as `<name>_c::<C>`
-// (`set_arm_init::two_copies`): copy true is the merge-head function (the shape lookup cache
-// inline), copy false the base function.
-
-crate::set_arm_init::two_copies! {
-    /// The cold hit of a named load before the generic load ([`cold_load_c`]). No allocation, no
-    /// JS, not a GC point.
-    pub(crate) fn cold_load(rt: &Runtime, v: u64, i: u32, o: u64, name: u64) -> Option<ColdLoad>
-        = cold_load_c(rt)
 }

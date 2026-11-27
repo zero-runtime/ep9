@@ -992,7 +992,6 @@ fn with_the_seam_off_nothing_is_cached() {
         assert_eq!(rt.shape_cache.len(), 0);
         let off = stats::get(stats::OFF);
         shape_cache::without(|| {
-            assert!(!shape_cache::on(rt));
             for _ in 0..2 {
                 assert_eq!(
                     cached(rt, kept(&roots, s), k(rt, "oa")).map(|f| f.index),
@@ -1002,7 +1001,12 @@ fn with_the_seam_off_nothing_is_cached() {
         });
         assert_eq!(stats::get(stats::OFF), off + 2);
         assert_eq!(rt.shape_cache.len(), 0);
-        assert!(shape_cache::on(rt));
+        // Outside `without` the cache serves the lookup again.
+        assert_eq!(
+            cached(rt, kept(&roots, s), k(rt, "oa")).map(|f| f.index),
+            Some(0)
+        );
+        assert_ne!(rt.shape_cache.len(), 0);
     });
 }
 

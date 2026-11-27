@@ -179,7 +179,7 @@ pub(crate) fn store_global_with(
 }
 
 /// SetMutableBinding of the global environment (v0): `v`, or 0 with a pending exception.
-fn set_global_c<const C: bool>(cx: &mut Cx, fp: *mut u64, name: u64, v: u64) -> u64 {
+fn set_global(cx: &mut Cx, fp: *mut u64, name: u64, v: u64) -> u64 {
     let rt = cx.rt();
     let lexical = rt.root(Root::Lexical);
     if let Some((old, a)) = own_get(lexical, name) {
@@ -197,7 +197,7 @@ fn set_global_c<const C: bool>(cx: &mut Cx, fp: *mut u64, name: u64, v: u64) -> 
     let g = rt.global();
     // One scan for the common case: a writable own data property of the global object
     // (what `[[Set]]` does first, property::set_with_receiver).
-    if props::own_store_c::<C>(rt, g, name, key::probe(name), v) == Some(true) {
+    if props::own_store_if_writable(rt, g, name, key::probe(name), v) == Some(true) {
         return v;
     }
     let s = strict(fp);
@@ -496,16 +496,4 @@ pub(super) fn define_checked(cx: &mut Cx, o: u64, k: u64, v: u64, keyed: bool) -
     } else {
         property::define(cx, o, k, v)
     }
-}
-
-// ---- SET-15 (M15-P1, phase 2f): the seams of the functions with 2 copies --------------------
-// At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan). Each
-// function below is the seam of a body that stays in place as `<name>_c::<C>`
-// (`set_arm_init::two_copies`): copy true is the merge-head function (the shape lookup cache
-// inline), copy false the base function.
-
-crate::set_arm_init::two_copies! {
-    /// SetMutableBinding of the global environment (v0, [`set_global_c`]): `v`, or 0 with a
-    /// pending exception.
-    fn set_global(cx: &mut Cx, fp: *mut u64, name: u64, v: u64) -> u64 = set_global_c(cx.rt())
 }

@@ -17,9 +17,7 @@
 //!      0.9 x N <= hits <= N for the cases that call the builtin on flat strings, where N is
 //!      the number of calls with an int32 index in range; 0 with them off; exactly 0 for the
 //!      cases whose calls must never take the arm (a new rope at each call, the index forms,
-//!      the other receivers, a changed method). The bound follows the SET-15 arm of the
-//!      process (`EP9_SET_ARM`, read here, never set): with the CHARCODE bit (arms S and A)
-//!      as above; without it (arm 0, the variable not set, arm P) exactly 0 in every case
+//!      the other receivers, a changed method)
 //! ```
 //!
 //! Each case first runs 300 empty loop iterations, so its calls are outside the call record
@@ -34,18 +32,6 @@ use ep9_vm::{Args, Cx, Isolate, IsolateConfig, JsResult, Local};
 
 /// The FASTDIFF hit counter of the arm (`fast_hits::NAMES` in `ep9_vm/src/call.rs`).
 const HIT: &str = "charcode-arm";
-
-/// Does the SET-15 arm of this process have the CHARCODE bit? The value of `EP9_SET_ARM` is
-/// `S` or `A` (`ep9_platform::set_arm::bits_of`; every other value, or none, is an arm without
-/// it). The test reads the variable and never sets it; `ep9_vm` reads it once per process.
-fn arm_has_charcode() -> bool {
-    matches!(
-        std::env::var_os("EP9_SET_ARM")
-            .as_deref()
-            .map(std::ffi::OsStr::as_encoded_bytes),
-        Some(b"S" | b"A")
-    )
-}
 
 /// The prelude of each case: the warm-up loop (see the module doc).
 const WARM: &str = "for (var warm_ = 0; warm_ < 300; warm_++) {}\n";
@@ -333,15 +319,6 @@ fn check(c: &Case) -> Vec<String> {
         ));
     }
     match c.hits {
-        // An arm without the CHARCODE bit: the seam sends every call to the old body.
-        _ if !arm_has_charcode() => {
-            if hits_on != 0 {
-                bad.push(format!(
-                    "{}: {hits_on} hits, want 0 (an arm without CHARCODE)",
-                    c.name
-                ));
-            }
-        }
         Hits::InRange => {
             let n = in_range_calls(&on);
             if !(hits_on * 10 >= n * 9 && hits_on <= n) {
@@ -353,11 +330,7 @@ fn check(c: &Case) -> Vec<String> {
         }
         Hits::Never | Hits::Any => {}
     }
-    eprintln!(
-        "{}: hits on {hits_on}, off {hits_off} (CHARCODE bit {})",
-        c.name,
-        arm_has_charcode()
-    );
+    eprintln!("{}: hits on {hits_on}, off {hits_off}", c.name);
     bad
 }
 

@@ -2096,8 +2096,8 @@ thread_local! {
     /// The calls that the `charCodeAt` arm of `interp/slow/call.rs` `call_property` answered on
     /// this thread, with no host call (M15-P1 CHARCODE).
     pub(crate) static CHAR_CODE_ARM_HITS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
-    /// True turns the CHARCODE seam (`interp/slow/call.rs` `char_code_arm_on`) off on this
-    /// thread.
+    /// True turns the `charCodeAt` arm (`interp/slow/call.rs` `char_code_arm`, its test 3) off
+    /// on this thread.
     pub(crate) static CHAR_CODE_ARM_OFF: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
 

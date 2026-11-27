@@ -24,7 +24,6 @@
 #[cfg(any(feature = "jit", test))]
 pub mod jit;
 pub mod linked;
-pub mod set_arm;
 pub mod shared_mem;
 pub mod simd;
 pub mod spill;

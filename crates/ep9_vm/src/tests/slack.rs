@@ -157,13 +157,13 @@ struct Seen {
 }
 
 /// Runs `make()` in every dispatch expansion, with and without GC stress, with eager
-/// vectors and with none; checks the output and returns what each run saw. The CTOR-FIT seam
-/// has its role-head value (on; `slack::ctor_fit`).
+/// vectors and with none; checks the output and returns what each run saw. CTOR-FIT is on (the
+/// one form).
 fn run_each(make: fn() -> VerifiedUnit, want: &'static [&'static str]) -> Vec<(String, Seen)> {
     run_each_on(None, make, want)
 }
 
-/// [`run_each`] with the CTOR-FIT seam set to `on` on each run thread (`None`: not set).
+/// [`run_each`] with the CTOR-FIT test knob set to `on` on each run thread (`None`: not set).
 fn run_each_on(
     on: Option<bool>,
     make: fn() -> VerifiedUnit,
@@ -618,16 +618,8 @@ fn a_fused_named_load_scans_as_its_pair() {
 #[test]
 fn ctor_fit_is_on_with_escape_slack_1() {
     assert_eq!(slack::ESCAPE_SLACK, 1);
-    on_big_stack(|| {
-        let iso = isolate(config(Dispatch::ALL[0], false));
-        // The role head: on, with no setting (no switch, no environment read).
-        assert!(slack::ctor_fit(&iso.rt));
-        // The per-thread test value wins; `None` is the role-head value again.
-        for on in [Some(false), Some(true), None] {
-            slack::ctor_fit_override::ON.set(on);
-            assert_eq!(slack::ctor_fit(&iso.rt), on.unwrap_or(true), "{on:?}");
-        }
-    });
+    // The one form: on, with no setting (no seam, no switch, no environment read).
+    assert_eq!(slack::ctor_fit_override::ON.get(), None);
 }
 
 /// The escape-mode scan of `code`: (names, escaped).
@@ -1206,15 +1198,13 @@ fn ctor_fit_uses_a_chain_count_only_above_8() {
 /// R-C1: an ES5 subclass `L` of `B` (10 names) in the form `L.prototype =
 /// Object.create(B.prototype); L.prototype.constructor = L`. The VM tests have no built-ins,
 /// so the prototype is `new __()` with `__.prototype = B.prototype` and `this.constructor = L`
-/// in `__`. An `L` that does not call `B` (`this.l0 = a`) gets the old count with the CTOR_FIT
-/// bit on and off: 1 slot, no SLOTS cell (before R-C1, on: 1 + 10 = 11 slots). An `L` that
-/// calls it (`B.call(this, a); this.l0 = a`) gets the chain count with the bit on: l0, b0..b9
-/// = 11 + ESCAPE_SLACK = 12 slots, no SLOTS cell; with the bit off, GENEROUS and a SLOTS cell.
-/// The bit is the arm byte of the `Runtime` of each run (`set_arm_for_test`), not the test knob
-/// and not the process variable.
+/// in `__`. An `L` that does not call `B` (`this.l0 = a`) gets the old count with CTOR-FIT and
+/// with the old count only: 1 slot, no SLOTS cell (before R-C1, CTOR-FIT: 1 + 10 = 11 slots). An
+/// `L` that calls it (`B.call(this, a); this.l0 = a`) gets the chain count: l0, b0..b9
+/// = 11 + ESCAPE_SLACK = 12 slots, no SLOTS cell; with the old count (the test knob
+/// `ctor_fit_override` at `Some(false)`), GENEROUS and a SLOTS cell.
 #[test]
 fn ctor_fit_walks_the_chain_only_when_this_leaves() {
-    use ep9_platform::set_arm::{ARM_0, CTOR_FIT};
     /// `B` (10 stores), `L` (`_super.call(this, a)` first if `call`; `_super = B`), `callB`
     /// (`B.call`), `__`; `L.prototype = new __()`; then 10 times `o = new L(1, 2)` (`o0` = the
     /// first), and `print(o.l0)`.
@@ -1304,22 +1294,28 @@ fn ctor_fit_walks_the_chain_only_when_this_leaves() {
     fn calls() -> VerifiedUnit {
         es5_sub(true)
     }
-    // A row: its name, the unit, the arm bits, (capacity, property count) of `o0` and of
+    // A row: its name, the unit, the test knob, (capacity, property count) of `o0` and of
     // `o`, and their SLOTS cells.
-    type Row = (&'static str, fn() -> VerifiedUnit, u8, (usize, usize), bool);
+    type Row = (
+        &'static str,
+        fn() -> VerifiedUnit,
+        Option<bool>,
+        (usize, usize),
+        bool,
+    );
     let rows: [Row; 4] = [
-        ("no call, on", no_call, CTOR_FIT, (1, 1), false),
-        ("no call, off", no_call, ARM_0, (1, 1), false),
-        ("calls, on", calls, CTOR_FIT, (12, 11), false),
+        ("no call, on", no_call, None, (1, 1), false),
+        ("no call, off", no_call, Some(false), (1, 1), false),
+        ("calls, on", calls, None, (12, 11), false),
         (
             "calls, off",
             calls,
-            ARM_0,
+            Some(false),
             (usize::from(GENEROUS), 11),
             true,
         ),
     ];
-    for (name, make, bits, want, slots) in rows {
+    for (name, make, on, want, slots) in rows {
         for &d in Dispatch::ALL {
             for stress in [false, true] {
                 for threshold in [0, u32::MAX] {
@@ -1331,10 +1327,8 @@ fn ctor_fit_walks_the_chain_only_when_this_leaves() {
                         format!("{name}: {} stress={stress} threshold={threshold}", d.name());
                     let l = label.clone();
                     let s = on_big_stack(move || {
-                        slack::ctor_fit_override::ON.set(None);
+                        slack::ctor_fit_override::ON.set(on);
                         let mut iso = isolate(c);
-                        iso.rt.set_arm_for_test(bits);
-                        assert_eq!(slack::ctor_fit(&iso.rt), bits & CTOR_FIT != 0, "{l}");
                         take_output();
                         let r = iso
                             .with_cx_checkpoint(|cx| cx.run_script(make(), "slack.js").map(|_| ()));

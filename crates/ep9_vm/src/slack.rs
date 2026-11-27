@@ -45,8 +45,8 @@
 //! - CTOR-FIT (f-design L1, ESCAPE_SLACK 1; always on): the first construct also counts the
 //!   names of the constructor chain (`_super.call(this, x)` in ES5 class code) and keeps going
 //!   past a leave of `this` ([`chain_capacity`]); that count is used only when it is above
-//!   [`GENEROUS`]. The seam [`ctor_fit`] picks it; the old count ([`own_capacity`]) stays
-//!   beside it. The scan is a run-time read, so no bytecode, unit or layout changes.
+//!   [`GENEROUS`]; else the old count ([`own_capacity`]). The scan is a run-time read, so no
+//!   bytecode, unit or layout changes.
 
 use ep9_bytecode::{Instructions, Opcode, OperandKind, Register, RuntimeId};
 
@@ -320,9 +320,8 @@ pub(crate) fn instance_capacity(rt: &Runtime, f: u64, proto: u64) -> Option<usiz
 }
 
 /// [`instance_capacity`] at the first construct of `fi`: the scan and the prototype count.
-/// With CTOR-FIT on ([`ctor_fit`]), the chain count of [`chain_capacity`] at
-/// [`ESCAPE_SLACK`] when it is above [`GENEROUS`]; else the old count ([`own_capacity`]).
-/// Not a GC point.
+/// CTOR-FIT: the chain count of [`chain_capacity`] at [`ESCAPE_SLACK`] when it is above
+/// [`GENEROUS`]; else the old count ([`own_capacity`]). Not a GC point.
 fn first_capacity(
     rt: &Runtime,
     fi: &crate::function_info::FunctionInfo,
@@ -333,28 +332,15 @@ fn first_capacity(
     // SAFETY: a bytecode FunctionInfo's code is its unit function's bytecode, which the unit
     // keeps at this address while the info lives (`FunctionInfo::bytecode`).
     let code = unsafe { core::slice::from_raw_parts(fi.code, fi.code_len as usize) };
-    // SET-15: the chain path is out of line ([`chain_fit`], file end), with its name table.
-    if ctor_fit(rt)
-        && let Some(n) = chain_fit(rt, fi, code, proto)
-    {
+    #[cfg(test)]
+    if ctor_fit_override::ON.get() == Some(false) {
+        return own_capacity(rt, fi, code, proto);
+    }
+    // The chain path is out of line ([`chain_fit`], file end), with its name table.
+    if let Some(n) = chain_fit(rt, fi, code, proto) {
         return Some(n);
     }
     own_capacity(rt, fi, code, proto)
-}
-
-/// The CTOR-FIT seam (ALLOC-SET design 1.3, contract rules 1-3): true = [`first_capacity`]
-/// tries the chain count first; false = the old count only. The set branch: the CTOR-FIT bit
-/// of the arm byte of `rt` (`ep9_platform::set_arm`; arms P, S and A). The set integrator
-/// changed only this body; the merge head deletes the seam and keeps the chain path.
-/// It reads no execution policy (no preset, no feedback mode, no unit: rule 40, M-R9). Tests
-/// turn it off per thread with `ctor_fit_override`.
-#[inline(always)]
-pub(crate) fn ctor_fit(rt: &Runtime) -> bool {
-    #[cfg(test)]
-    if let Some(on) = ctor_fit_override::ON.get() {
-        return on;
-    }
-    crate::set_arm_init::on(rt, ep9_platform::set_arm::CTOR_FIT)
 }
 
 /// The old count (CTOR-FIT off): the scan of `code` (the code of `fi`) and the prototype
@@ -553,14 +539,13 @@ pub(crate) fn chain_capacity(
     Some((ch.keys().len() + extra.min(usize::from(GENEROUS)) + slack).min(CHAIN_CAP_MAX))
 }
 
-// ---- SET-15 (M15-P1): the CTOR-FIT chain path out of line ----------------------------------
+// ---- the CTOR-FIT chain path out of line -------------------------------------------------------
 
-/// [`first_capacity`] with CTOR-FIT on: the chain count of [`chain_capacity`] at
-/// [`ESCAPE_SLACK`] when it is above [`GENEROUS`], else [`None`] (then the old count). Out of
-/// line, so that its name table ([`ChainNames`], about 2 KiB) and its registers are not in the
-/// frame of `call::ordinary_create_from_constructor`, which inlines [`first_capacity`]: in arm 0
-/// that frame and its entry saves are the base ones. It runs at a first construct only. Not a
-/// GC point.
+/// [`first_capacity`]: the chain count of [`chain_capacity`] at [`ESCAPE_SLACK`] when it is
+/// above [`GENEROUS`], else [`None`] (then the old count). Out of line, so that its name table
+/// ([`ChainNames`], about 2 KiB) and its registers are not in the frame of
+/// `call::ordinary_create_from_constructor`, which inlines [`first_capacity`]. It runs at a
+/// first construct only. Not a GC point.
 #[inline(never)]
 fn chain_fit(
     rt: &Runtime,
@@ -571,8 +556,9 @@ fn chain_fit(
     chain_capacity(rt, fi, code, proto, ESCAPE_SLACK).filter(|&n| n > usize::from(GENEROUS))
 }
 
-/// Tests only: the value of the seam [`ctor_fit`] on this thread (`None`: the role-head value,
-/// true).
+/// Tests only: `Some(false)` on this thread makes [`first_capacity`] give the old count
+/// ([`own_capacity`]), for the tests that compare the 2 counts; `None` and `Some(true)`: the
+/// chain path. It reads no execution policy (rule 40, M-R9).
 #[cfg(test)]
 pub(crate) mod ctor_fit_override {
     use core::cell::Cell;

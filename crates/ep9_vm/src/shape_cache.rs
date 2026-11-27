@@ -5,7 +5,7 @@
 //!
 //! ```text
 //!  caller (has rt) ──► lookup(rt, shape, key, how)
-//!                        │ seam off, or how = Content ─────────────────► scan (shape::lookup_with)
+//!                        │ how = Content (tests: without) ─────────────► scan (shape::lookup_with)
 //!                        │ e = table[index(ShapeId, key)]
 //!                        ├─ e.key == key and e.shape == ShapeId: HIT
 //!                        │     res = ABSENT ─► None                  (no load of the shape)
@@ -41,8 +41,8 @@
 //!   field representation, reads no feedback and no execution mode, holds no Value across a
 //!   GC point (the probe and the insert do not allocate; the scan is not a GC point), adds no
 //!   root slot and is in no export (facts, layout), as the stub cache (`stub_cache.rs`).
-//! - The seam ([`on`], ALLOC-SET design 1.3) is the one switch of the member; the role head
-//!   has it always on.
+//! - It is always on: the merge head has no switch (ALLOC-SET design 3.1). Tests can bypass it
+//!   on one thread (`without`).
 //!
 //! Counters (tests, debug builds and feature `ic-stats`; none in a release build): calls,
 //! hits (found, absent), misses, `Content` probes, scans, inserts, flushes by cause, shadow
@@ -135,25 +135,13 @@ impl ShapeCache {
     }
 }
 
-/// The seam of the member (ALLOC-SET design 1.3): true if lookups go through the cache. The
-/// set branch: the SHAPE-CACHE bit of the arm byte of `rt` (arms P, S and A; tests: unless
-/// `without` runs). Read by [`lookup`] (test 0), `shape::lookup_in` and the 2-copy seams.
-#[inline(always)]
-pub(crate) fn on(rt: &Runtime) -> bool {
-    #[cfg(test)]
-    if OFF.with(Cell::get) {
-        return false;
-    }
-    crate::set_arm_init::on(rt, ep9_platform::set_arm::SHAPE_CACHE)
-}
-
 #[cfg(test)]
 thread_local! {
     /// Tests: true while [`without`] runs on this thread.
     static OFF: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Tests: runs `f` with the seam off on this thread (every lookup scans), so a test that
+/// Tests: runs `f` with the cache bypassed on this thread (every lookup scans), so a test that
 /// counts the scans of an IC path (`shape::SCANS`) reads that path, not the cache state.
 #[cfg(test)]
 pub(crate) fn without<R>(f: impl FnOnce() -> R) -> R {
@@ -195,25 +183,14 @@ fn index(id: u32, key: u64) -> usize {
 }
 
 /// `shape::lookup_with(shape, key, how)` through the cache of `rt`: the own property `key` of
-/// objects with the fast shape `shape`. Not a GC point. SET-15: test 0 is the seam ([`on`]).
-/// On: a call of the cache body out of line ([`cached_on`], file end). Off: the call of the
-/// scan, as in the base form, so the callers that inline this (`props.rs` `find_own_in`) have
-/// the frame and the entry saves of the base form in arm 0.
+/// objects with the fast shape `shape`. Not a GC point.
 #[inline(always)]
 pub(crate) fn lookup(rt: &Runtime, shape: u64, key: u64, how: Probe) -> Option<Found> {
-    if on(rt) {
-        core::hint::cold_path();
-        return cached_on(rt, shape, key, how);
+    #[cfg(test)]
+    if OFF.with(Cell::get) {
+        stats::bump(stats::OFF);
+        return shape::lookup_with(shape, key, how);
     }
-    #[cfg(any(test, debug_assertions, feature = "ic-stats"))]
-    stats::bump(stats::OFF);
-    shape::lookup_with(shape, key, how)
-}
-
-/// [`lookup`] with the seam on (the body of `cached_out`, out of line; SET-15): a `Content`
-/// probe takes the scan; else the hit or the miss.
-#[inline(always)]
-fn cached(rt: &Runtime, shape: u64, key: u64, how: Probe) -> Option<Found> {
     if matches!(how, Probe::Content) {
         #[cfg(any(test, debug_assertions, feature = "ic-stats"))]
         stats::bump(stats::CONTENT);
@@ -280,6 +257,8 @@ pub(crate) mod stats {
     pub(crate) const ABSENT: usize = 1;
     pub(crate) const MISS: usize = 2;
     pub(crate) const CONTENT: usize = 3;
+    /// Lookups that `without` sent to the scan (tests); 0 in an ic-stats build.
+    #[cfg(any(test, feature = "ic-stats"))]
     pub(crate) const OFF: usize = 4;
     pub(crate) const SCAN: usize = 5;
     pub(crate) const SHADOW: usize = 6;
@@ -349,51 +328,4 @@ pub(crate) mod stats {
     pub(crate) fn get(i: usize) -> u64 {
         C.with(|c| c.n[i].get())
     }
-}
-
-// ---- SET-15 (M15-P1): the cache body of `lookup` out of line ---------------------------------
-
-/// [`lookup`] with the SHAPE-CACHE seam on (the inline seam): the call of the cache body
-/// out of line ([`cached_out`]); its answer as an `Option` again (inlined in the caller). Not a
-/// GC point.
-#[inline(always)]
-pub(crate) fn cached_on(rt: &Runtime, shape: u64, key: u64, how: Probe) -> Option<Found> {
-    let f = cached_out(rt, shape, key, how);
-    (f.index != NO_INDEX).then_some(f)
-}
-
-/// The index of a [`cached_out`] answer for `None`.
-const NO_INDEX: usize = usize::MAX;
-
-/// The cache body ([`cached`]) out of line, so that the seam adds no inlined cache code, frame
-/// or entry save to the callers of [`lookup`] and `shape::lookup`. Its answer is a `Found` in 2
-/// registers ([`NO_INDEX`] for `None`): an `Option<Found>` (24 bytes) goes back through a stack
-/// slot, and a caller that joins it with the answer of the scan then keeps every `None` there,
-/// in arm 0 too (`ic::walk`: a store and a load for a shape with no properties). Not a GC point.
-#[inline(never)]
-fn cached_out(rt: &Runtime, shape: u64, key: u64, how: Probe) -> Found {
-    cached(rt, shape, key, how).unwrap_or(Found {
-        index: NO_INDEX,
-        details: shape::Details::new(0, 0),
-    })
-}
-
-/// The lookup of a function with 2 copies (SET-15: `props::own_define`, `shape::lookup_mh`,
-/// the `set_arm_init::two_copies` functions; the seam is the first test of a function, then it
-/// jumps to one copy): copy `C` = true, the member body ([`cached`] inline, as at the role
-/// head); copy false, the scan of the base form. So the copy of arm 0 is the base function and
-/// the copy of arm S is the merge-head function. Not a GC point.
-#[inline(always)]
-pub(crate) fn lookup_c<const C: bool>(
-    rt: &Runtime,
-    shape: u64,
-    key: u64,
-    how: Probe,
-) -> Option<Found> {
-    if C {
-        return cached(rt, shape, key, how);
-    }
-    #[cfg(any(test, debug_assertions, feature = "ic-stats"))]
-    stats::bump(stats::OFF);
-    shape::lookup_with(shape, key, how)
 }

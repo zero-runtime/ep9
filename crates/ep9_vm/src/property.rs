@@ -84,11 +84,11 @@ pub(crate) fn get_from(cx: &mut Cx, o: u64, key: u64) -> Res<u64> {
     get_with_receiver(cx, o, key, o)
 }
 
-/// [`get_with_receiver`] (file end: the SET-15 seam), copy `C`. Copy false is the base body (the
-/// scan), copy true the merge-head body (the cache inline, `props::own_value_or_proto_c`). GC
-/// point (a lazy `prototype`, a getter).
-#[inline(never)]
-fn get_receiver_c<const C: bool>(cx: &mut Cx, mut o: u64, key: u64, receiver: u64) -> Res<u64> {
+/// `o.[[Get]](key, receiver)` (§10.1.8.1 OrdinaryGet) up the prototype chain from the
+/// object `o`. The probe is classified once. An accessor found on the chain calls its getter
+/// with `receiver` as `this` (any value: a primitive base passes itself). GC point (a lazy
+/// `prototype`, a getter).
+pub(crate) fn get_with_receiver(cx: &mut Cx, mut o: u64, key: u64, receiver: u64) -> Res<u64> {
     debug_assert!(is_object(o) && is_property_key(key));
     let how = key::probe(key);
     loop {
@@ -106,7 +106,7 @@ fn get_receiver_c<const C: bool>(cx: &mut Cx, mut o: u64, key: u64, receiver: u6
                 return accessor::call_getter(cx, v, receiver);
             }
         }
-        match props::own_value_or_proto_c::<C>(cx.rt(), o, key, how) {
+        match props::own_value_or_proto(cx.rt(), o, key, how) {
             // HOLE: a lazy namespace key not installed yet (INTL-I1-D8) swaps on this read.
             Ok((v, a)) if a & attr::ACCESSOR == 0 => {
                 if v == HOLE {
@@ -298,11 +298,11 @@ pub(crate) fn get_int(cx: &mut Cx, o: u64, i: u32) -> Res<u64> {
 
 /// PutValue on a property reference (§6.2.5.6): `base[key] = v` with receiver `base`. A
 /// failed assignment throws a TypeError in strict code. GC point (a setter runs JS).
-fn set_c<const C: bool>(cx: &mut Cx, base: u64, key: u64, v: u64, strict: bool) -> Res<()> {
+pub(crate) fn set(cx: &mut Cx, base: u64, key: u64, v: u64, strict: bool) -> Res<()> {
     debug_assert!(is_property_key(key));
     if is_object(base) {
         // OrdinarySet with the walk inlined: `set` is hot until the ICs.
-        if set_walk(cx, base, key, v, base, Some(C))? {
+        if set_walk(cx, base, key, v, base)? {
             return Ok(());
         }
         return fail(cx, base, base, key, strict);
@@ -348,13 +348,13 @@ pub(crate) fn ordinary_set(cx: &mut Cx, o: u64, key: u64, v: u64) -> Res<bool> {
     set_with_receiver(cx, o, key, v, o)
 }
 
-/// `o.[[Set]](key, v, receiver)` (§10.1.9.1 OrdinarySet, §10.1.9.2 OrdinarySetWithOwnDescriptor)
-/// on the object `o`. `Ok(false)` when the assignment fails: a non-writable data property or an
-/// accessor without a setter on the chain, a receiver that is not an object, or a new property
-/// on a non-extensible receiver. A setter gets `receiver` as `this`. GC point. SET-15: a seam.
-#[inline(never)]
+/// `o.[[Set]](key, v, receiver)` (§10.1.9.1 OrdinarySet and §10.1.9.2
+/// OrdinarySetWithOwnDescriptor) on the object `o`. `Ok(false)` when the assignment fails: a
+/// non-writable data property or an accessor without a setter on the chain, a receiver that
+/// is not an object, or a new property on a non-extensible receiver. An accessor calls its
+/// setter with `receiver` as `this`. GC point.
 pub(crate) fn set_with_receiver(cx: &mut Cx, o: u64, key: u64, v: u64, receiver: u64) -> Res<bool> {
-    crate::set_arm_init::seam!(cx.rt(), set_with_receiver_c(cx, o, key, v, receiver))
+    set_walk(cx, o, key, v, receiver)
 }
 
 /// OrdinarySet (§10.1.9.1) on the object `o`, past the `[[Set]]` hook of `o` (`exotic::set`):
@@ -367,23 +367,23 @@ pub(crate) fn ordinary_set_with_receiver(
     v: u64,
     receiver: u64,
 ) -> Res<bool> {
-    ordinary_set_walk(cx, o, key, v, receiver, None)
+    ordinary_set_walk(cx, o, key, v, receiver)
 }
 
 /// The body of [`set_with_receiver`], inlined into [`set`]: the `[[Set]]` hook of a routed
 /// kind (`exotic::set`), then OrdinarySet.
 #[inline(always)]
-fn set_walk(cx: &mut Cx, o: u64, key: u64, v: u64, receiver: u64, c: Side) -> Res<bool> {
+fn set_walk(cx: &mut Cx, o: u64, key: u64, v: u64, receiver: u64) -> Res<bool> {
     debug_assert!(is_object(o) && is_property_key(key));
     if let Some(r) = exotic::set(cx, o, key, v, receiver) {
         return r;
     }
-    ordinary_set_walk(cx, o, key, v, receiver, c)
+    ordinary_set_walk(cx, o, key, v, receiver)
 }
 
 /// OrdinarySet (§10.1.9.1-2) on the object `o`.
 #[inline(always)]
-fn ordinary_set_walk(cx: &mut Cx, o: u64, key: u64, v: u64, receiver: u64, c: Side) -> Res<bool> {
+fn ordinary_set_walk(cx: &mut Cx, o: u64, key: u64, v: u64, receiver: u64) -> Res<bool> {
     debug_assert!(is_object(o) && is_property_key(key));
     let rt = cx.rt();
     let how = key::probe(key);
@@ -429,12 +429,12 @@ fn ordinary_set_walk(cx: &mut Cx, o: u64, key: u64, v: u64, receiver: u64, c: Si
             // value in place if it is writable (array `length` and elements returned above;
             // a lazy `prototype` is made, so it is stored). A read-only one or an accessor
             // (no WRITABLE bit) is looked up again.
-            None if cur == receiver => match props::own_store_b(c, rt, cur, key, how, v) {
+            None if cur == receiver => match props::own_store_if_writable(rt, cur, key, how, v) {
                 Some(true) => return Ok(true),
-                Some(false) => props::own_get_b(c, rt, cur, key, how),
+                Some(false) => props::own_get_with(rt, cur, key, how),
                 None => None,
             },
-            None => props::own_get_b(c, rt, cur, key, how),
+            None => props::own_get_with(rt, cur, key, how),
         };
         if let Some((pv, a)) = found {
             if a & attr::ACCESSOR != 0 {
@@ -653,7 +653,7 @@ fn dict_delete(rt: &Runtime, a: u64, i: u32) -> bool {
 /// primitive `base`), or the proxy `set` trap that said false, as V8 does. GC point.
 #[cold]
 #[inline(never)]
-fn fail_c<const C: bool>(cx: &mut Cx, base: u64, start: u64, key: u64, strict: bool) -> Res<()> {
+fn fail(cx: &mut Cx, base: u64, start: u64, key: u64, strict: bool) -> Res<()> {
     if !strict {
         return Ok(());
     }
@@ -670,7 +670,7 @@ fn fail_c<const C: bool>(cx: &mut Cx, base: u64, start: u64, key: u64, strict: b
     let found = if own_string {
         Some(0)
     } else {
-        first_attrs_on_chain::<C>(rt, start, key)
+        first_attrs_on_chain(rt, start, key)
     };
     let ([w0, w1, w2], k) = (what, Key(key));
     let msg = match found {
@@ -723,7 +723,7 @@ fn fail_c<const C: bool>(cx: &mut Cx, base: u64, start: u64, key: u64, strict: b
 /// data `set` trap gives [`SET_TRAP`] (`proxy::has_data_trap`, a GC point); one with none is
 /// not asked: the walk goes on at its target, as the no-trap step does (a revoked proxy ends
 /// it). Past [`MAX_PROXY_HOPS`] proxies (a cycle) it gives `None` (Codex PROXY1 P-2).
-fn first_attrs_on_chain<const C: bool>(rt: &Runtime, mut o: u64, key: u64) -> Option<i32> {
+fn first_attrs_on_chain(rt: &Runtime, mut o: u64, key: u64) -> Option<i32> {
     let how = key::probe(key);
     let mut hops = 0;
     loop {
@@ -739,7 +739,7 @@ fn first_attrs_on_chain<const C: bool>(rt: &Runtime, mut o: u64, key: u64) -> Op
             }
         }
         if let Some(a) = own_attrs(rt, o, key, how)
-            .or_else(|| props::own_get_c::<C>(rt, o, key, how).map(|(_, a)| a))
+            .or_else(|| props::own_get_with(rt, o, key, how).map(|(_, a)| a))
         {
             return Some(a);
         }
@@ -1122,12 +1122,12 @@ fn is_proxy_or_view(k: u8) -> bool {
     k.wrapping_sub(kind::PROXY.get()) <= kind::FLOAT64_VIEW.get() - kind::PROXY.get()
 }
 
-fn has_own_with_c<const C: bool>(rt: &Runtime, o: u64, key: u64, how: Probe) -> bool {
+fn has_own_with(rt: &Runtime, o: u64, key: u64, how: Probe) -> bool {
     debug_assert!(
         !crate::proxy::is_proxy_kind(kind::cell_kind(o)),
         "the ordinary HasProperty met a proxy: use try_has_property"
     );
-    props::own_get_c::<C>(rt, o, key, how).is_some() || own_attrs(rt, o, key, how).is_some()
+    props::own_get_with(rt, o, key, how).is_some() || own_attrs(rt, o, key, how).is_some()
 }
 
 /// InstanceofOperator(V, target) (§13.10.2) for `v instanceof f`:
@@ -2471,70 +2471,4 @@ pub(crate) fn for_in_seen(atoms: &[u64], other: &[u64], k: u64, atom: bool) -> b
         ..ForInSeen::default()
     };
     seen.has_string(k, atom)
-}
-
-// ---- SET-15 (M15-P1): the SHAPE-CACHE seam of `get_with_receiver` ----------------------------
-// At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan).
-
-/// `o.[[Get]](key, receiver)` (§10.1.8.1 OrdinaryGet) up the prototype chain from the
-/// object `o`. The probe is classified once. An accessor found on the chain calls its getter
-/// with `receiver` as `this` (any value: a primitive base passes itself). GC point (a lazy
-/// `prototype`, a getter). SET-15: the SHAPE-CACHE seam is test 0, and each side jumps to a
-/// copy of the body ([`get_receiver_c`]): copy false, the base function (the scan, with
-/// its inlining, frame and registers), in arm 0; copy true, the merge-head function, in arms P
-/// and S. Both sides are a jump (`set_arm_init::side`), so the 2 arms pay the same seam (x86-64:
-/// the runtime load, the bit test, a branch and a jump; no frame). The merge head deletes this
-/// seam and copy false: copy true is this function again.
-#[inline(never)]
-pub(crate) fn get_with_receiver(cx: &mut Cx, o: u64, key: u64, receiver: u64) -> Res<u64> {
-    if crate::shape_cache::on(cx.rt()) {
-        crate::set_arm_init::side(true);
-        return get_receiver_c::<true>(cx, o, key, receiver);
-    }
-    crate::set_arm_init::side(false);
-    get_receiver_c::<false>(cx, o, key, receiver)
-}
-
-// ---- SET-15 (M15-P1, phase 2f): the seams of the functions with 2 copies --------------------
-// At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan). Each
-// function below is the seam of a body that stays in place as `<name>_c::<C>`
-// (`set_arm_init::two_copies`): copy true is the merge-head function (the shape lookup cache
-// inline), copy false the base function.
-
-/// The copy that the body of a `[[Set]]` walk runs in ([`set_walk`], [`ordinary_set_walk`]):
-/// `Some(C)` in copy `C` of [`set`] or [`set_with_receiver`], `None` in the other callers (the
-/// inline seam of `shape_cache::lookup`). Those functions are always inlined, so it is a
-/// constant there.
-type Side = Option<bool>;
-
-crate::set_arm_init::two_copies! {
-    /// PutValue on a property reference (§6.2.5.6): `base[key] = v` with receiver `base`. A
-    /// failed assignment throws a TypeError in strict code. GC point (a setter runs JS).
-    pub(crate) fn set(cx: &mut Cx, base: u64, key: u64, v: u64, strict: bool) -> Res<()>
-        = set_c(cx.rt())
-}
-
-/// [`set_with_receiver`], copy `C`, out of line (the seam jumps here). GC point.
-#[inline(never)]
-fn set_with_receiver_c<const C: bool>(
-    cx: &mut Cx,
-    o: u64,
-    key: u64,
-    v: u64,
-    receiver: u64,
-) -> Res<bool> {
-    set_walk(cx, o, key, v, receiver, Some(C))
-}
-
-crate::set_arm_init::two_copies! {
-    /// A failed `base[key] = v` ([`fail_c`]): nothing in sloppy code, a TypeError in strict
-    /// code. GC point.
-    #[cold]
-    fn fail(cx: &mut Cx, base: u64, start: u64, key: u64, strict: bool) -> Res<()>
-        = never fail_c(cx.rt())
-}
-
-crate::set_arm_init::two_copies! {
-    /// The ordinary HasOwnProperty of `o` with a classified probe ([`has_own_with_c`]).
-    fn has_own_with(rt: &Runtime, o: u64, key: u64, how: Probe) -> bool = has_own_with_c(rt)
 }

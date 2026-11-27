@@ -333,10 +333,10 @@ fn find_own_by(
 }
 
 /// An own property of `o` with a probe the caller classified: (value, attributes). Not a GC
-/// point. SET-15: the seam at test 0, then a jump to its copy (`own_get_with_s`, file end).
-#[inline(never)]
+/// point.
+#[inline]
 pub(crate) fn own_get_with(rt: &Runtime, o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
-    crate::set_arm_init::seam!(rt, own_get_with_s(rt, o, key, how))
+    find_own(rt, o, key, how).map(|(_, v, a)| (v, a))
 }
 
 /// One step of a `[[Get]]` walk: (value, attributes) of the own property `key` of `o`, or
@@ -422,16 +422,31 @@ pub(crate) fn own_replace_with(rt: &Runtime, o: u64, key: u64, how: Probe, v: u6
 /// key move a fast object to dictionary mode (OM-10). A new pair in place of an accessor's
 /// old one is a structural change (`accessor.rs`): it bumps the epoch of a prototype. GC
 /// point.
-#[inline(never)]
 pub(crate) fn own_define(rt: &Runtime, o: u64, key: u64, v: u64, attrs: i32) {
-    // SET-15: the SHAPE-CACHE seam is test 0, and each side jumps to its copy (file end): arm 0
-    // runs the base function, arm S the merge-head function (`shape_cache::lookup_c`).
-    if crate::shape_cache::on(rt) {
-        crate::set_arm_init::side(true);
-        return own_define_c::<true>(rt, o, key, v, attrs);
+    debug_assert!(object::is_object(o));
+    let key = key::intern_key(rt, key);
+    let how = key::probe(key);
+    match find_own(rt, o, key, how) {
+        Some((hit, old_v, old)) if old == attrs => {
+            match hit {
+                Hit::Fast(s, f) => field_set(rt, o, s, f, v),
+                Hit::Dict(p, e) => wr(&rt.heap, p, e + 8, v),
+            }
+            if attrs & object::attr::ACCESSOR != 0 && old_v != v {
+                shape::note_change(rt, o);
+            }
+        }
+        Some((hit, _, _)) => {
+            if let Hit::Fast(..) = hit {
+                to_dictionary(rt, o);
+            }
+            let (p, e) = dict_find(o, key, how).expect("the key after dictionary mode");
+            wr(&rt.heap, p, e + 8, v);
+            init(p, e + 16, int32_bits(attrs));
+            shape::note_change(rt, o);
+        }
+        None => own_add(rt, o, key, v, attrs),
     }
-    crate::set_arm_init::side(false);
-    own_define_c::<false>(rt, o, key, v, attrs)
 }
 
 /// Adds the new own property `key` (an atom or a symbol that `o` does not have): a raw
@@ -598,160 +613,4 @@ const PROPS_SIZE: CellSize = CellSize::Field(ep9_heap::FieldSize::int32(
 #[cfg(test)]
 pub(crate) fn size_forms() -> Vec<(&'static str, CellSize, ep9_heap::SizeFn)> {
     vec![("property-table", PROPS_SIZE, props_size)]
-}
-
-// ---- SET-15 (M15-P1): the functions with 2 copies --------------------------------------------
-// A seam at the first test of a function, then a jump to a copy (`shape_cache::lookup_c`): copy
-// false is the base function (the scan), copy true the merge-head function (the cache inline).
-
-/// [`find_own`] in copy `C` of a function with 2 copies.
-#[inline(always)]
-fn find_own_c<const C: bool>(
-    rt: &Runtime,
-    o: u64,
-    key: u64,
-    how: Probe,
-) -> Option<(Hit, u64, i32)> {
-    find_own_by(o, shape::shape_of(o), key, how, |s, key, how| {
-        crate::shape_cache::lookup_c::<C>(rt, s, key, how)
-    })
-}
-
-/// [`own_value_or_proto`] in copy `C` of a function with 2 copies (`property::get_with_receiver`).
-#[inline(always)]
-pub(crate) fn own_value_or_proto_c<const C: bool>(
-    rt: &Runtime,
-    o: u64,
-    key: u64,
-    how: Probe,
-) -> Result<(u64, i32), u64> {
-    let s = shape::shape_of(o);
-    match find_own_by(o, s, key, how, |s, key, how| {
-        crate::shape_cache::lookup_c::<C>(rt, s, key, how)
-    }) {
-        Some((_, v, a)) => Ok((v, a)),
-        None => Err(shape::proto(s)),
-    }
-}
-
-/// [`own_define`], copy `C`. GC point.
-#[inline(never)]
-fn own_define_c<const C: bool>(rt: &Runtime, o: u64, key: u64, v: u64, attrs: i32) {
-    debug_assert!(object::is_object(o));
-    let key = key::intern_key(rt, key);
-    let how = key::probe(key);
-    match find_own_c::<C>(rt, o, key, how) {
-        Some((hit, old_v, old)) if old == attrs => {
-            match hit {
-                Hit::Fast(s, f) => field_set(rt, o, s, f, v),
-                Hit::Dict(p, e) => wr(&rt.heap, p, e + 8, v),
-            }
-            if attrs & object::attr::ACCESSOR != 0 && old_v != v {
-                shape::note_change(rt, o);
-            }
-        }
-        Some((hit, _, _)) => {
-            if let Hit::Fast(..) = hit {
-                to_dictionary(rt, o);
-            }
-            let (p, e) = dict_find(o, key, how).expect("the key after dictionary mode");
-            wr(&rt.heap, p, e + 8, v);
-            init(p, e + 16, int32_bits(attrs));
-            shape::note_change(rt, o);
-        }
-        None => own_add(rt, o, key, v, attrs),
-    }
-}
-
-/// [`own_get_with`] in the copy `c` of a function with 2 copies where the base calls it out of
-/// line: `Some(C)` calls [`own_get_with_c`] (no seam: the base form takes no runtime, so the
-/// callers of copy false pass none), `None` the seam. Always inlined. Not a GC point.
-#[inline(always)]
-pub(crate) fn own_get_b(
-    c: Option<bool>,
-    rt: &Runtime,
-    o: u64,
-    key: u64,
-    how: Probe,
-) -> Option<(u64, i32)> {
-    match c {
-        Some(true) => own_get_with_c::<true>(rt, o, key, how),
-        Some(false) => own_get_with_c::<false>(rt, o, key, how),
-        None => own_get_with(rt, o, key, how),
-    }
-}
-
-/// [`own_get_with`], copy `C`, out of line: the seam jumps here. Its address is taken
-/// ([`OWN_GET_WITH_SIDES`]), so it keeps the runtime argument that copy false does not read,
-/// and the seam passes the arguments as they come. Not a GC point.
-#[inline(never)]
-fn own_get_with_s<const C: bool>(rt: &Runtime, o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
-    own_get_c::<C>(rt, o, key, how)
-}
-
-/// The copies of [`own_get_with`] that its seam jumps to, address taken: their signatures stay
-/// whole.
-#[used]
-static OWN_GET_WITH_SIDES: [OwnGetWith; 2] = [own_get_with_s::<false>, own_get_with_s::<true>];
-
-/// The type of [`own_get_with`].
-type OwnGetWith = fn(&Runtime, u64, u64, Probe) -> Option<(u64, i32)>;
-
-/// [`own_get_with`], copy `C`, out of line, for a copy of a function with 2 copies that calls it
-/// where the base calls `own_get_with` (no seam; copy false takes no runtime, as the base form).
-/// Not a GC point.
-#[inline(never)]
-fn own_get_with_c<const C: bool>(rt: &Runtime, o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
-    own_get_c::<C>(rt, o, key, how)
-}
-
-/// The body of [`own_get_with`] in copy `C` of a function with 2 copies (where the base inlines
-/// `own_get_with`). Not a GC point.
-#[inline]
-pub(crate) fn own_get_c<const C: bool>(
-    rt: &Runtime,
-    o: u64,
-    key: u64,
-    how: Probe,
-) -> Option<(u64, i32)> {
-    find_own_c::<C>(rt, o, key, how).map(|(_, v, a)| (v, a))
-}
-
-/// [`own_store_if_writable`] in the copy `c` of a function with 2 copies: `Some(C)` in copy `C`
-/// ([`own_store_c`]), `None` outside one (the inline seam of `shape_cache::lookup`). Always
-/// inlined: `c` is a constant at each call. Not a GC point.
-#[inline(always)]
-pub(crate) fn own_store_b(
-    c: Option<bool>,
-    rt: &Runtime,
-    o: u64,
-    key: u64,
-    how: Probe,
-    v: u64,
-) -> Option<bool> {
-    match c {
-        Some(true) => own_store_c::<true>(rt, o, key, how, v),
-        Some(false) => own_store_c::<false>(rt, o, key, how, v),
-        None => own_store_if_writable(rt, o, key, how, v),
-    }
-}
-
-/// [`own_store_if_writable`] in copy `C` of a function with 2 copies. Not a GC point.
-#[inline(always)]
-pub(crate) fn own_store_c<const C: bool>(
-    rt: &Runtime,
-    o: u64,
-    key: u64,
-    how: Probe,
-    v: u64,
-) -> Option<bool> {
-    let (hit, _, attrs) = find_own_c::<C>(rt, o, key, how)?;
-    if attrs & object::attr::WRITABLE == 0 {
-        return Some(false);
-    }
-    match hit {
-        Hit::Fast(s, f) => field_set(rt, o, s, f, v),
-        Hit::Dict(p, e) => wr(&rt.heap, p, e + 8, v),
-    }
-    Some(true)
 }

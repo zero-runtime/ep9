@@ -5,10 +5,10 @@
 //! can check it (`shasum -a 256`, Node `crypto`), and it needs no dependency.
 //!
 //! The block loop has one body slot (ALLOC-SET design 6.2): a process-wide [`BlockBody`] that
-//! [`set_body`] sets once. The SET-15 arm switch of `ep9_vm` sets it from the SHA256 table of
-//! `ep9_platform::simd` at the first isolate of a process whose arm has the SRC-HASH bit; the
-//! corpus test sets it too. Unset, [`Sha256::update`] runs the scalar loop of this file. The slot
-//! is read once per `update`. No `unsafe`, no dependency; build scripts and tools stay scalar.
+//! [`set_body`] sets once. `ep9_vm` sets it from the SHA256 table of `ep9_platform::simd` at the
+//! first isolate of a process; the corpus test sets it too. Unset, [`Sha256::update`] runs the
+//! scalar loop of this file. The slot is read once per `update`, not per block. No `unsafe`, no
+//! dependency; build scripts and tools stay scalar.
 
 use std::sync::OnceLock;
 

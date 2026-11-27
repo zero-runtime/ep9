@@ -840,14 +840,14 @@ pub(crate) fn set_field_bits_in_family(
 // ---- lookup ---------------------------------------------------------------------------------
 
 /// The own property `key` of objects with `shape`: its descriptor index and details. Not a GC
-/// point. A dictionary shape has no descriptors (the object's PROPS table holds them). SET-15:
-/// the body is [`lookup_in`] (file end): the SHAPE-CACHE seam first; on, a call of the lookup
-/// of the merge head (`lookup_mh`, out of line); off, the base body (`lookup_base`), with its
-/// inlining, frame and registers (LLVM drops the unused runtime argument of the base form:
-/// `lookup_in` takes it last). The merge head deletes the seam: the count test, then the cache.
-#[inline(always)]
+/// point. A dictionary shape has no descriptors (the object's PROPS table holds them). Goes
+/// through the isolate's shape lookup cache (`shape_cache.rs`, M14-P1 SHAPE-CACHE).
 pub(crate) fn lookup(rt: &Runtime, shape: u64, key: u64) -> Option<Found> {
-    lookup_in(shape, key, rt)
+    debug_assert!(is_shape(shape));
+    if count_of(cell(shape)) == 0 {
+        return None;
+    }
+    crate::shape_cache::lookup(rt, shape, key, classify(rt, key))
 }
 
 /// The answer of a shape lookup cache hit (`shape_cache.rs`): descriptor `i` of the fast shape
@@ -2288,47 +2288,7 @@ pub(crate) fn install_keep(rt: &Runtime, o: u64, shape: u64) {
     crate::interp::keepcall::set_shape(unsafe { cell(o).header() }, id, rt.heap.barrier());
 }
 
-// ---- SET-15 (M15-P1): the SHAPE-CACHE seam of `lookup` -------------------------------------
-// At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan).
-
-/// [`lookup`] (the arguments in the order of the base form): the SHAPE-CACHE seam
-/// (`shape_cache::on`) is test 0 (phase 2f). On: a call of [`lookup_mh`], the lookup of the
-/// merge head out of line (the merge head calls `lookup` out of line at each of its 12 sites).
-/// Off: [`lookup_base`], the base body, which LLVM inlines or calls as at the base (it called
-/// `lookup` out of line at 2 of its 11 sites, `construct_ic::miss` and `set_named_miss`). So
-/// each arm pays the bit test and one branch at a site. Always inlined. Not a GC point.
-#[inline(always)]
-fn lookup_in(shape: u64, key: u64, rt: &Runtime) -> Option<Found> {
-    if crate::shape_cache::on(rt) {
-        core::hint::cold_path();
-        return lookup_mh(rt, shape, key);
-    }
-    lookup_base(rt, shape, key)
-}
-
-/// [`lookup`] in arm 0: the body of the base form (the count test, the probe, the scan). Not a
-/// GC point.
-fn lookup_base(rt: &Runtime, shape: u64, key: u64) -> Option<Found> {
-    debug_assert!(is_shape(shape));
-    if count_of(cell(shape)) == 0 {
-        return None;
-    }
-    #[cfg(any(test, debug_assertions, feature = "ic-stats"))]
-    crate::shape_cache::stats::bump(crate::shape_cache::stats::OFF);
-    lookup_with(shape, key, classify(rt, key))
-}
-
-/// [`lookup`] in arm S: the body of the merge head (the count test, the probe, the shape
-/// lookup cache inline: `shape_cache::lookup_c`), out of line as the merge head has it. Not a
-/// GC point.
-#[inline(never)]
-fn lookup_mh(rt: &Runtime, shape: u64, key: u64) -> Option<Found> {
-    debug_assert!(is_shape(shape));
-    if count_of(cell(shape)) == 0 {
-        return None;
-    }
-    crate::shape_cache::lookup_c::<true>(rt, shape, key, classify(rt, key))
-}
+// ---- the scan copy of the shadow test ------------------------------------------------------
 
 /// The descriptor scan of [`lookup_with`] with no counter, for the shadow test of the shape
 /// lookup cache (`shape_cache.rs`, debug builds), which compares each hit with it: a copy of
