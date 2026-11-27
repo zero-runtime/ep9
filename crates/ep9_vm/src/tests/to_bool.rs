@@ -274,7 +274,7 @@ fn a2_to_boolean_and_fast_truthy_agree_on_every_row() {
             assert_eq!(conv::to_boolean(v), want, "{name}: to_boolean");
             assert_eq!(old_to_boolean(v), want, "{name}: the old body");
             for arm in [true, false] {
-                let got = fast_truthy(v, || arm);
+                let got = fast_truthy(v, arm);
                 assert!(
                     got.is_none_or(|b| b == want),
                     "{name}: fast_truthy(arm {arm}) = {got:?}"
@@ -529,31 +529,44 @@ fn a3_the_handlers_give_the_row_answer_with_the_arm_on_and_off() {
     }
 }
 
-/// The seam of the cell arm (the `arm` closure of `fast_truthy`) is the first test after the
-/// tests of the immediates and the int32s (rows 1-5 of the table): it runs one time for each
-/// value of rows 6-16 (a double, a cell, the hole) and never for rows 1-5, with the arm on and
-/// off. With it off the answer of rows 6-16 is the cold body (`None`), with no cell test, as
-/// before the arm. So in arm 0 of the SET-15 switch a value pays the seam test only.
+/// SET-15 (phase 2f): the isolate copies the handler side of the TO-BOOL bit into its table
+/// once (`ops::cx_table`). With the bit off every entry is the base table of its dispatch and
+/// feedback mode (`Dispatch::table`), so arm 0 runs the base handlers and no handler reads the
+/// bit; with it on, the 6 entries of the TO-BOOL side (the 4 ToBoolean opcodes, `Wide` and
+/// `ExtraWide`) differ, and no other entry. Every dispatch and preset.
 #[test]
-fn fast_truthy_reads_the_seam_first_after_the_immediates() {
-    with_cx(|cx| {
-        for (i, &(row, name, _)) in SWEEP.iter().enumerate() {
-            let v = make(cx, i);
-            for arm in [true, false] {
-                let reads = Cell::new(0u32);
-                let got = fast_truthy(v, || {
-                    reads.set(reads.get() + 1);
-                    arm
+fn the_isolate_copies_the_handler_side_of_the_bit_once() {
+    let words = |t: &[crate::interp::Handler; 256]| -> Vec<usize> {
+        t.iter().map(|h| *h as usize).collect()
+    };
+    let side = [
+        O::ToBooleanLogicalNot,
+        O::ToBoolean,
+        O::JumpIfToBooleanTrue,
+        O::JumpIfToBooleanFalse,
+        O::Wide,
+        O::ExtraWide,
+    ];
+    for &d in Dispatch::ALL {
+        for exec in presets() {
+            // `None`: the arm bits of a test runtime (arm S: the bit is on).
+            for on in [None, Some(true), Some(false)] {
+                let (cx, base) = on_big_stack(move || {
+                    to_bool_arm_override::ON.set(on);
+                    let iso = Isolate::new_with(config(d, false), exec).unwrap();
+                    to_bool_arm_override::ON.set(None);
+                    let f = crate::exec::feedback_mode(&iso.rt);
+                    (words(&iso.cx.table), words(d.table(f)))
                 });
-                assert_eq!(
-                    reads.get(),
-                    u32::from(row >= 6),
-                    "{name}: the seam reads, arm {arm}"
-                );
-                if !arm && row >= 6 {
-                    assert_eq!(got, None, "{name}: arm off gives the cold body");
+                let label = format!("{} {exec:?} override {on:?}", d.name());
+                for (op, (&c, &b)) in cx.iter().zip(&base).enumerate() {
+                    if on != Some(false) && side.iter().any(|&o| o as usize == op) {
+                        assert_ne!(c, b, "{label}: entry {op:#x}, the TO-BOOL side");
+                    } else {
+                        assert_eq!(c, b, "{label}: entry {op:#x}, the base table");
+                    }
                 }
             }
         }
-    });
+    }
 }

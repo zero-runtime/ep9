@@ -121,9 +121,9 @@ fn number(b: u64) -> Option<f64> {
     }
 }
 
-/// ToBoolean for the values that need no call. With `arm()`: also a cell that is always true.
+/// ToBoolean for the values that need no call. With `arm`: also a cell that is always true.
 #[inline(always)]
-pub(crate) fn fast_truthy(v: u64, arm: impl FnOnce() -> bool) -> Option<bool> {
+pub(crate) fn fast_truthy(v: u64, arm: bool) -> Option<bool> {
     // Bit `k` of FALSY is set when the immediate `k` is false, undefined or null. A bit test
     // instead of a `match`: LLVM makes no jump table, so the handler has no data in its code.
     const FALSY: u64 = (1 << FALSE) | (1 << UNDEFINED) | (1 << NULL);
@@ -1385,7 +1385,7 @@ op!(BitwiseNot(st, s: FSlot) {
     unary_cold(st, UnOp::BitNot)
 });
 op!(ToBooleanLogicalNot(st) {
-    match fast_truthy(st.acc, || to_bool_arm(st.rt())) {
+    match fast_truthy_base(st.acc) {
         Some(b) => {
             st.acc = boolean(!b);
             Flow::Next
@@ -1608,7 +1608,7 @@ op!(ToString(st) {
     if object::is_string(st.acc) { Flow::Next } else { Flow::Cold }
 } cold { unary_cold(st, UnOp::ToString) });
 op!(ToBoolean(st) {
-    match fast_truthy(st.acc, || to_bool_arm(st.rt())) {
+    match fast_truthy_base(st.acc) {
         Some(b) => {
             st.acc = boolean(b);
             Flow::Next
@@ -1801,14 +1801,14 @@ op!(Jump(st, target: Fwd) { Done::Jump(st.fwd(target)) });
 op!(JumpIfTrue(st, target: Fwd) { jump_if(st, st.acc == TRUE, target) });
 op!(JumpIfFalse(st, target: Fwd) { jump_if(st, st.acc == FALSE, target) });
 op!(JumpIfToBooleanTrue(st, target: Fwd) {
-    match fast_truthy(st.acc, || to_bool_arm(st.rt())) {
+    match fast_truthy_base(st.acc) {
         Some(true) => Flow::Jump(st.fwd(target)),
         Some(false) => Flow::Next,
         None => Flow::Cold,
     }
 } cold { jump_if(st, slow::to_boolean(st.acc), target) });
 op!(JumpIfToBooleanFalse(st, target: Fwd) {
-    match to_bool_seam_first(st) {
+    match fast_truthy_base(st.acc) {
         Some(false) => Flow::Jump(st.fwd(target)),
         Some(true) => Flow::Next,
         None => Flow::Cold,
@@ -3401,27 +3401,23 @@ mod star_dst_branch_form {
     }
 }
 
-// ---- TO-BOOL (M15-P1): the cell arm of `fast_truthy`, its seam and its counts ----------------
+// ---- TO-BOOL (M15-P1): the cell arm of `fast_truthy`, the 2 handler sides and the counts ----
 // At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan).
 
 /// The cell arm, the last test of `fast_truthy`: `Some(true)` for a cell whose kind is always
 /// true (a symbol, an object: `conv::cell_truth`). `None` (the cold body) for a string, a
-/// BigInt, a double and the hole, and for every value when `arm()` is false. The seam `arm`
-/// is the first test here: it runs only for a value that the tests above leave (an immediate
-/// and an int32 do not get here), and when it is false the value takes the cold body with no
-/// cell test, as before the arm. One byte load (the kind byte, which the cold body reads too),
-/// no call, no write.
+/// BigInt, a double and the hole, and for every value when `arm` is false. One byte load (the
+/// kind byte, which the cold body reads too), no call, no write. SET-15: `arm` is a constant
+/// in every handler (false in the base bodies, true in [`to_bool_side`]), so no handler tests
+/// the arm bit.
 #[inline(always)]
-fn cell_arm(v: u64, arm: impl FnOnce() -> bool) -> Option<bool> {
+fn cell_arm(v: u64, arm: bool) -> Option<bool> {
     use crate::conv::{CellTruth, cell_truth};
-    if !arm() {
-        return None;
-    }
-    // SAFETY: the block has no instructions. It keeps the seam branch above the cell test:
-    // both fail to the cold body, so without it LLVM may test the cell bits first.
-    unsafe { core::arch::asm!("", options(nomem, nostack, preserves_flags)) };
+    // Tests can turn the arm off on their thread (`to_bool_arm_override`).
+    #[cfg(test)]
+    let arm = arm && to_bool_arm_override::ON.get() != Some(false);
     // The cell test is explicit: `cell_kind` gives 0 for a non-cell and class 0 is `Always`.
-    if kinds::is_cell_bits(v) && cell_truth(kinds::cell_kind(v)) == CellTruth::Always {
+    if arm && kinds::is_cell_bits(v) && cell_truth(kinds::cell_kind(v)) == CellTruth::Always {
         #[cfg(test)]
         TO_BOOL_ARM_HITS.with(|n| n.set(n.get() + 1));
         to_bool_stats::arm();
@@ -3431,12 +3427,34 @@ fn cell_arm(v: u64, arm: impl FnOnce() -> bool) -> Option<bool> {
     }
 }
 
-/// The set seam of TO-BOOL (the `slack::ctor_fit` form of month 14): true = the cell arm is on.
-/// The SET-15 set branch: the TO_BOOL bit of the arm byte of `rt` (`ep9_platform::set_arm`),
-/// the first test of `cell_arm` (in `JumpIfToBooleanFalse`: the first test of the handler,
-/// [`to_bool_seam_first`]); the merge head deletes the seam. It reads no execution policy
-/// (rule 40, M-R9). Tests turn it off per thread with the test-only module
-/// `to_bool_arm_override`; the thread must be the one that runs the isolate.
+/// `fast_truthy` of the base (no cell arm): the fast body of the base handlers of the 4
+/// ToBoolean opcodes on the SET-15 set branch (arm 0 runs them), the text of the base function,
+/// so the base handlers keep the machine code of the base. The merge head deletes it (its
+/// handlers run `fast_truthy(v, true)`).
+#[inline(always)]
+fn fast_truthy_base(v: u64) -> Option<bool> {
+    // Bit `k` of FALSY is set when the immediate `k` is false, undefined or null. A bit test
+    // instead of a `match`: LLVM makes no jump table, so the handler has no data in its code.
+    const FALSY: u64 = (1 << FALSE) | (1 << UNDEFINED) | (1 << NULL);
+    const _: () = assert!(FALSE < 64 && UNDEFINED < 64 && NULL < 64);
+    if v == TRUE {
+        Some(true)
+    } else if v < 64 && (FALSY >> v) & 1 != 0 {
+        Some(false)
+    } else if is_i32(v) {
+        Some(i32_of(v) != 0)
+    } else {
+        None
+    }
+}
+
+/// The TO-BOOL bit of the SET-15 arm (the `slack::ctor_fit` form of month 14): true = the
+/// TO-BOOL handlers run (the cell arm on). The TO_BOOL bit of the arm byte of `rt`
+/// (`ep9_platform::set_arm`). Read once per isolate, at the copy of the dispatch table
+/// ([`cx_table`]), and per run in the match loop (`dsl::match_fast`, debug builds); no threaded
+/// handler reads it. It reads no execution policy (rule 40, M-R9). Tests set it per thread
+/// with the test-only module `to_bool_arm_override` (before the isolate is made: the table is
+/// copied then). The merge head deletes it.
 #[inline(always)]
 pub(crate) fn to_bool_arm(rt: &Runtime) -> bool {
     #[cfg(test)]
@@ -3446,30 +3464,297 @@ pub(crate) fn to_bool_arm(rt: &Runtime) -> bool {
     crate::set_arm_init::on(rt, ep9_platform::set_arm::TO_BOOL)
 }
 
-/// `fast_truthy` of `JumpIfToBooleanFalse` with the TO-BOOL seam as the first test (SET-15):
-/// off, `fast_truthy` with no cell arm, the instructions of the base handler; on, the arm.
-/// With the seam inside `cell_arm`, the arm moved the registers of this handler (x86-64: the
-/// pc add before the tests and a move at the cold exit), and arm 0 paid them. The empty `asm!`
-/// block gives the on path its own pc and next pc, and `cold_path` keeps the off path first,
-/// so the off path keeps the base registers. The merge head deletes this function.
-#[inline(always)]
-fn to_bool_seam_first(st: &mut St<'_>) -> Option<bool> {
-    if to_bool_arm(st.rt()) {
-        core::hint::cold_path();
-        // SAFETY: no instructions (the text is a comment); the 2 registers keep their values.
-        // The pointers are values here: the block reads and writes no memory.
-        #[allow(clippy::pointers_in_nomem_asm_block)]
-        unsafe {
-            core::arch::asm!(
-                "/* {0} {1} */",
-                inout(reg) st.pc,
-                inout(reg) st.next,
-                options(nomem, nostack, preserves_flags)
-            )
+/// The dispatch table of a new `Cx` (`Isolate::new_with`, once per isolate; SET-15 TO-BOOL):
+/// the table of the expansion `d` for the feedback mode of `rt` (`Dispatch::table`), with the
+/// 6 handlers of [`to_bool_side`] in place of the base ones when the TO-BOOL bit is on
+/// ([`to_bool_arm`]). So arm 0 runs the base handlers and arm S the handlers of the merge
+/// head, and no handler tests the bit (0 seam instructions per run). The match loop gets the
+/// sibling side (native code exits through its table; the loop picks per run). The merge head
+/// deletes this function (the copy is `Dispatch::table` again).
+pub(crate) fn cx_table(d: crate::Dispatch, rt: &Runtime) -> [crate::interp::Handler; 256] {
+    use crate::Dispatch;
+    use crate::exec::Feedback;
+    let f = crate::exec::feedback_mode(rt);
+    let mut t = *d.table(f);
+    if !to_bool_arm(rt) {
+        return t;
+    }
+    let ics = f == Feedback::ICS_ONLY;
+    let side: &[(u8, crate::interp::Handler)] = match d {
+        Dispatch::Match | Dispatch::Sibling if ics => &to_bool_side::sib_ics::ENTRIES,
+        Dispatch::Match | Dispatch::Sibling => &to_bool_side::sibling::ENTRIES,
+        #[cfg(feature = "become")]
+        Dispatch::Become if ics => &to_bool_side::tail_ics::ENTRIES,
+        #[cfg(feature = "become")]
+        Dispatch::Become => &to_bool_side::tail::ENTRIES,
+    };
+    for &(op, h) in side {
+        t[usize::from(op)] = h;
+    }
+    t
+}
+
+/// The TO-BOOL side of the SET-15 handlers: the bodies of the merge head (the cell arm on) of
+/// the 4 ToBoolean opcodes and of the 2 prefixes (`Wide`, `ExtraWide`: a prefixed jump runs the
+/// jump's fast body in them), one module per opcode as `op!` makes them, and per threaded
+/// expansion the handlers that run them (`dsl::to_bool_handlers`) with their table entries.
+/// The base bodies are the `op!` bodies above (the cell arm off). The `Wide` and `ExtraWide`
+/// bodies are copies of `scaled_fast`, `prefixed_fast`, `scaled_cold` and `tails::wide` that
+/// call the jumps of this module. The merge head deletes this module: these bodies are the
+/// `op!` bodies there.
+#[allow(non_snake_case)]
+pub(crate) mod to_bool_side {
+    use super::*;
+
+    pub(crate) mod ToBooleanLogicalNot {
+        use super::*;
+        #[inline(always)]
+        pub(crate) fn fast(st: &mut St<'_>) -> Flow {
+            match fast_truthy(st.acc, true) {
+                Some(b) => {
+                    st.acc = boolean(!b);
+                    Flow::Next
+                }
+                None => Flow::Cold,
+            }
+        }
+    }
+
+    pub(crate) mod ToBoolean {
+        use super::*;
+        #[inline(always)]
+        pub(crate) fn fast(st: &mut St<'_>) -> Flow {
+            match fast_truthy(st.acc, true) {
+                Some(b) => {
+                    st.acc = boolean(b);
+                    Flow::Next
+                }
+                None => Flow::Cold,
+            }
+        }
+    }
+
+    pub(crate) mod JumpIfToBooleanTrue {
+        use super::*;
+        #[inline(always)]
+        pub(crate) fn fast(st: &mut St<'_>, target: Fwd) -> Flow {
+            match fast_truthy(st.acc, true) {
+                Some(true) => Flow::Jump(st.fwd(target)),
+                Some(false) => Flow::Next,
+                None => Flow::Cold,
+            }
+        }
+    }
+
+    pub(crate) mod JumpIfToBooleanFalse {
+        use super::*;
+        #[inline(always)]
+        pub(crate) fn fast(st: &mut St<'_>, target: Fwd) -> Flow {
+            match fast_truthy(st.acc, true) {
+                Some(false) => Flow::Jump(st.fwd(target)),
+                Some(true) => Flow::Next,
+                None => Flow::Cold,
+            }
+        }
+    }
+
+    pub(crate) mod Wide {
+        use super::*;
+        #[inline(always)]
+        pub(crate) fn fast(st: &mut St<'_>) -> Flow {
+            scaled_fast_s::<S2>(st)
+        }
+        #[inline(always)]
+        pub(crate) fn cold(st: &mut St<'_>) -> Done {
+            scaled_cold_s::<S2>(st)
+        }
+    }
+
+    pub(crate) mod ExtraWide {
+        use super::*;
+        #[inline(always)]
+        pub(crate) fn fast(st: &mut St<'_>) -> Flow {
+            scaled_fast_s::<S4>(st)
+        }
+        #[inline(always)]
+        pub(crate) fn cold(st: &mut St<'_>) -> Done {
+            scaled_cold_s::<S4>(st)
+        }
+    }
+
+    /// `scaled_fast` (the `Wide` and `ExtraWide` fast body) with the jumps of this module.
+    #[inline(always)]
+    fn scaled_fast_s<S: dsl::Scale>(st: &mut St<'_>) -> Flow {
+        use ep9_bytecode::Opcode as O;
+        // SAFETY: verified code: a prefix is followed by an opcode byte and its operands at scale
+        // `S`.
+        let op = unsafe { *st.pc.add(1) };
+        if op == O::LdaSmi as u8 {
+            // SAFETY: as above, for LdaSmi's operand.
+            let (len, (value,)) = unsafe { dsl::decode!(S, st.pc; value: Imm) };
+            st.acc = int(value);
+            // SAFETY: `len` is the length of the prefixed instruction.
+            return Flow::Jump(unsafe { st.pc.add(len) });
+        }
+        if !(O::AddSmi as u8..=O::BitwiseAndSmi as u8).contains(&op) {
+            return prefixed_fast_s::<S, PREFIXED_FAST>(st, op);
+        }
+        let a = st.acc;
+        if !is_i32(a) {
+            return Flow::Cold;
+        }
+        // SAFETY: as above; AddSmi to BitwiseAndSmi all take (value: Imm, slot: Slot).
+        let (len, (b, _slot)) = unsafe { dsl::decode!(S, st.pc; value: Imm, _slot: Slot) };
+        let x = i32_of(a);
+        let r = match op {
+            o if o == O::AddSmi as u8 => x.checked_add(b),
+            o if o == O::SubSmi as u8 => x.checked_sub(b),
+            // As `int32_binop`: x >= 0 avoids -0 and overflow.
+            o if o == O::ModSmi as u8 => (x >= 0 && b != 0).then(|| x % b),
+            o if o == O::BitwiseOrSmi as u8 => Some(x | b),
+            o if o == O::BitwiseXorSmi as u8 => Some(x ^ b),
+            o if o == O::BitwiseAndSmi as u8 => Some(x & b),
+            _ => None,
         };
-        fast_truthy(st.acc, || true)
-    } else {
-        fast_truthy(st.acc, || false)
+        match r {
+            Some(r) => {
+                // Recorded here only on success: a cold exit runs the opcode's own fast body in
+                // `interp::scaled::step`, which records it (once per execution).
+                let bop = match op {
+                    o if o == O::AddSmi as u8 => BinOp::Add,
+                    o if o == O::SubSmi as u8 => BinOp::Sub,
+                    o if o == O::ModSmi as u8 => BinOp::Mod,
+                    o if o == O::BitwiseOrSmi as u8 => BinOp::BitOr,
+                    o if o == O::BitwiseXorSmi as u8 => BinOp::BitXor,
+                    _ => BinOp::BitAnd,
+                };
+                st.acc = int(r);
+                // These six operators never record an int32 pair (`profile::int32_pair_bits`).
+                debug_assert_eq!(profile::int32_pair_bits(bop, int(r)), 0);
+                // SAFETY: `len` is the length of the prefixed instruction.
+                Flow::Jump(unsafe { st.pc.add(len) })
+            }
+            None => Flow::Cold,
+        }
+    }
+
+    /// `prefixed_fast` with the jumps of this module.
+    #[inline(always)]
+    fn prefixed_fast_s<S: dsl::Scale, const RUN: bool>(st: &mut St<'_>, op: u8) -> Flow {
+        use ep9_bytecode::Opcode as O;
+        #[inline(always)]
+        fn flow(d: Done) -> Flow {
+            match d {
+                Done::Next => Flow::Next,
+                Done::Jump(t) => Flow::Jump(t),
+            }
+        }
+        if !(RUN && prefix_set(op)) {
+            return Flow::Cold;
+        }
+        if op == O::GetNamedProperty as u8 {
+            // SAFETY: verified code: GetNamedProperty's operands at scale `S` follow the opcode.
+            let (len, (object, name, s)) =
+                unsafe { dsl::decode!(S, st.pc; object: Reg, name: Const, s: Slot) };
+            // SAFETY: `len` is the length of the prefixed instruction.
+            st.next = unsafe { st.pc.add(len) };
+            return GetNamedProperty::fast(st, object, name, s);
+        }
+        if op == O::JumpLoop as u8 {
+            // SAFETY: as above, for JumpLoop's operands.
+            let (len, (target, depth, s)) =
+                unsafe { dsl::decode!(S, st.pc; target: JumpBack, depth: Imm, s: Slot) };
+            // SAFETY: as above.
+            st.next = unsafe { st.pc.add(len) };
+            return JumpLoop::fast(st, target, depth, s);
+        }
+        // SAFETY: as above; Jump to JumpIfJSReceiver all take (target: JumpFwd).
+        let (len, (t,)) = unsafe { dsl::decode!(S, st.pc; target: JumpFwd) };
+        // SAFETY: as above.
+        st.next = unsafe { st.pc.add(len) };
+        match op {
+            o if o == O::Jump as u8 => flow(Jump::fast(st, t)),
+            o if o == O::JumpIfTrue as u8 => flow(JumpIfTrue::fast(st, t)),
+            o if o == O::JumpIfFalse as u8 => flow(JumpIfFalse::fast(st, t)),
+            o if o == O::JumpIfToBooleanTrue as u8 => self::JumpIfToBooleanTrue::fast(st, t),
+            o if o == O::JumpIfToBooleanFalse as u8 => self::JumpIfToBooleanFalse::fast(st, t),
+            o if o == O::JumpIfNull as u8 => flow(JumpIfNull::fast(st, t)),
+            o if o == O::JumpIfNotNull as u8 => flow(JumpIfNotNull::fast(st, t)),
+            o if o == O::JumpIfUndefined as u8 => flow(JumpIfUndefined::fast(st, t)),
+            o if o == O::JumpIfNotUndefined as u8 => flow(JumpIfNotUndefined::fast(st, t)),
+            o if o == O::JumpIfUndefinedOrNull as u8 => flow(JumpIfUndefinedOrNull::fast(st, t)),
+            _ => flow(JumpIfJSReceiver::fast(st, t)),
+        }
+    }
+
+    /// `scaled_cold` (the `Wide` and `ExtraWide` cold body) with [`wide_s`].
+    #[inline(always)]
+    fn scaled_cold_s<S: dsl::Scale>(st: &mut St<'_>) -> Done {
+        // SAFETY: verified code: a prefix is followed by an opcode byte.
+        let op = unsafe { *st.pc.add(1) };
+        if prefix_runs_fast(op) {
+            st.scaled_cold::<S>()
+        } else if prefix_set(op) {
+            wide_s::<S>(st, op)
+        } else {
+            st.scaled::<S>()
+        }
+    }
+
+    /// `interp::tails::wide` (the x86-64 cold body of a prefixed jump or `GetNamedProperty`)
+    /// with [`prefixed_fast_s`].
+    #[cfg_attr(debug_assertions, inline(never))]
+    #[cfg_attr(not(debug_assertions), inline(always))]
+    fn wide_s<S: dsl::Scale>(st: &mut St<'_>, op: u8) -> Done {
+        #[cfg(test)]
+        crate::interp::tails::WIDE_RUNS.with(|n| n.set(n.get() + 1));
+        match prefixed_fast_s::<S, true>(st, op) {
+            Flow::Next => Done::Next,
+            Flow::Jump(t) => Done::Jump(t),
+            Flow::Cold => st.scaled_cold::<S>(),
+            // No opcode of the set gives a record flow (`prefix_set`); as `step`, if one did.
+            f => match dsl::settle(f, st, profile::records(st.cx)) {
+                Flow::Jump(t) => Done::Jump(t),
+                _ => Done::Next,
+            },
+        }
+    }
+
+    /// The handlers of the TO-BOOL side of the sibling expansion (`interp::sibling`).
+    pub(crate) mod sibling {
+        #[allow(unused_imports)]
+        use crate::interp::{Done, Flow, Handler, St};
+        crate::interp::dsl::to_bool_handlers!([return, "sib", full] crate::interp::sibling);
+    }
+
+    /// The handlers of the TO-BOOL side of `interp::sib_ics` (their `Wide` and `ExtraWide`
+    /// cold handlers tail-jump to those of [`sibling`], as the base ones do).
+    pub(crate) mod sib_ics {
+        #[allow(unused_imports)]
+        use crate::interp::{Done, Flow, Handler, St};
+        crate::interp::dsl::to_bool_handlers!(
+            [return, "ics", ics_only] crate::interp::sib_ics,
+            crate::interp::ops::to_bool_side::sibling
+        );
+    }
+
+    /// The handlers of the TO-BOOL side of `interp::tail` (nightly `become`).
+    #[cfg(feature = "become")]
+    pub(crate) mod tail {
+        #[allow(unused_imports)]
+        use crate::interp::{Done, Flow, Handler, St};
+        crate::interp::dsl::to_bool_handlers!([become, "become", full] crate::interp::tail);
+    }
+
+    /// The handlers of the TO-BOOL side of `interp::tail_ics` (nightly `become`).
+    #[cfg(feature = "become")]
+    pub(crate) mod tail_ics {
+        #[allow(unused_imports)]
+        use crate::interp::{Done, Flow, Handler, St};
+        crate::interp::dsl::to_bool_handlers!(
+            [become, "bics", ics_only] crate::interp::tail_ics,
+            crate::interp::ops::to_bool_side::tail
+        );
     }
 }
 
@@ -3478,7 +3763,9 @@ pub(crate) mod to_bool_arm_override {
     use core::cell::Cell;
 
     std::thread_local! {
-        /// Tests: `Some(on)` sets the answer of `super::to_bool_arm` on this thread.
+        /// Tests: `Some(on)` sets the answer of `super::to_bool_arm` on this thread (so the
+        /// table of an isolate made after it, and the match loop), and `Some(false)` also turns
+        /// the cell arm (`super::cell_arm`) off; `None`: the arm bit decides.
         pub(crate) static ON: Cell<Option<bool>> = const { Cell::new(None) };
     }
 }

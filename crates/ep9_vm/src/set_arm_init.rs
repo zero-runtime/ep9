@@ -6,8 +6,9 @@
 //!                    │                       sha_slot: the SHA-256 slot, SRC_HASH on only
 //!                    ── Heap::new
 //!                    ── Runtime::new ── Runtime::set = runtime_bits()               once per isolate
-//!  a seam (slack::ctor_fit, shape_cache::on, slow::call::char_code_arm_on,
-//!          ops::to_bool_arm) ── on(rt, its bit) = Runtime::set & the bit
+//!                    ── ops::cx_table ── the TO-BOOL handler side (ops::to_bool_arm)  once per isolate
+//!  a seam (slack::ctor_fit, shape_cache::on, slow::call::char_code_arm_on)
+//!          ── on(rt, its bit) = Runtime::set & the bit
 //! ```
 //!
 //! SRC-HASH (design 6.2; plan v20 4.2: the set switch sets the body slot in arm S): in an arm
@@ -205,6 +206,8 @@ mod tests {
                 let (out, arm, host, cell) = on_big_stack(move || {
                     let mut iso = isolate(config(d, false));
                     iso.rt.set_arm_for_test(bits);
+                    // The TO-BOOL side is in the table: pick it again for this arm.
+                    iso.cx.table = crate::interp::ops::cx_table(d, &iso.rt);
                     iso.register_host_function("cc", 1, crate::abi::strings::char_code_at);
                     take_output();
                     CHAR_CODE_ARM_HITS.with(|h| h.set(0));

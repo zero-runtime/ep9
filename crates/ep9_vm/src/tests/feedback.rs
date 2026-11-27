@@ -592,7 +592,10 @@ fn the_feedback_mode_is_written_once() {
         };
         let d = IsolateConfig::default().dispatch;
         assert_ne!(words(d.table(first)), words(d.table(second)));
-        assert_eq!(words(&iso.cx.table), words(d.table(first)));
+        assert_eq!(
+            words(&iso.cx.table),
+            words(&crate::interp::ops::cx_table(d, &iso.rt))
+        );
     }
 }
 

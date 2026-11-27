@@ -308,7 +308,7 @@ impl Isolate {
         crate::exec::install(&rt, exec);
         realm::init(&rt);
         let mut cx = Box::new(Cx {
-            table: *config.dispatch.table(crate::exec::feedback_mode(&rt)),
+            table: crate::interp::ops::cx_table(config.dispatch, &rt),
             rt: &*rt,
             stack_limit: rt.stack().end(),
             budget: BUDGET,
