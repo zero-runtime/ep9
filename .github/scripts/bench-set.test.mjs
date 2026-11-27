@@ -229,10 +229,10 @@ function runStep(t, name, env) {
   return { ...r, output: readFileSync(out, "utf8") };
 }
 
-test("ci.yml: bench_workloads is a dispatch input, in the concurrency group, and never in a run script", () => {
+test("ci.yml: bench_workloads is a dispatch input, in the concurrency group (with bench_set_arm), and never in a run script", () => {
   assert.match(CI, /\n {6}bench_workloads:\n {8}description: "[^"\n]+"\n {8}type: string\n/);
   const group = CI.split("\n").find((l) => l.startsWith("  group: ci-"));
-  assert.match(group, /format\('bench-\{0\}-\{1\}-\{2\}', inputs\.bench_base, inputs\.bench_head \|\| github\.sha, inputs\.bench_workloads\)/);
+  assert.match(group, /format\('bench-\{0\}-\{1\}-\{2\}-\{3\}', inputs\.bench_base, inputs\.bench_head \|\| github\.sha, inputs\.bench_workloads, inputs\.bench_set_arm\)/);
   // The input reaches the job through env only: no ${{ }} inside a run script of bench-set.
   for (const name of ["bench mode", "bench workloads", "count"]) assert.doesNotMatch(stepScript(name), /\$\{\{/, name);
   assert.match(CI, /\n {10}WORKLOADS: \$\{\{ inputs\.bench_workloads \}\}\n/);
