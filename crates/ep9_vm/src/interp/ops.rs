@@ -3414,8 +3414,14 @@ mod star_dst_branch_form {
 #[inline(always)]
 fn cell_arm(v: u64, arm: impl FnOnce() -> bool) -> Option<bool> {
     use crate::conv::{CellTruth, cell_truth};
+    if !arm() {
+        return None;
+    }
+    // SAFETY: the block has no instructions. It keeps the seam branch above the cell test:
+    // both fail to the cold body, so without it LLVM may test the cell bits first.
+    unsafe { core::arch::asm!("", options(nomem, nostack, preserves_flags)) };
     // The cell test is explicit: `cell_kind` gives 0 for a non-cell and class 0 is `Always`.
-    if arm() && kinds::is_cell_bits(v) && cell_truth(kinds::cell_kind(v)) == CellTruth::Always {
+    if kinds::is_cell_bits(v) && cell_truth(kinds::cell_kind(v)) == CellTruth::Always {
         #[cfg(test)]
         TO_BOOL_ARM_HITS.with(|n| n.set(n.get() + 1));
         to_bool_stats::arm();
