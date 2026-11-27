@@ -841,10 +841,10 @@ pub(crate) fn set_field_bits_in_family(
 
 /// The own property `key` of objects with `shape`: its descriptor index and details. Not a GC
 /// point. A dictionary shape has no descriptors (the object's PROPS table holds them). SET-15:
-/// the body is [`lookup_in`] (file end): the count test, then the SHAPE-CACHE seam; on, a call
-/// of the cache body out of line; off, the scan of the base, with its inlining, frame and
-/// registers (LLVM drops the unused runtime argument of the base form: `lookup_in` takes it
-/// last). The merge head deletes `lookup_in` and the seam: the count test, then the cache.
+/// the body is [`lookup_in`] (file end): the SHAPE-CACHE seam first; on, a call of the lookup
+/// of the merge head (`lookup_mh`, out of line); off, the base body (`lookup_base`), with its
+/// inlining, frame and registers (LLVM drops the unused runtime argument of the base form:
+/// `lookup_in` takes it last). The merge head deletes the seam: the count test, then the cache.
 #[inline(always)]
 pub(crate) fn lookup(rt: &Runtime, shape: u64, key: u64) -> Option<Found> {
     lookup_in(shape, key, rt)
@@ -2291,27 +2291,43 @@ pub(crate) fn install_keep(rt: &Runtime, o: u64, shape: u64) {
 // ---- SET-15 (M15-P1): the SHAPE-CACHE seam of `lookup` -------------------------------------
 // At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan).
 
-/// [`lookup`] (the arguments in the order of the base form). The count test and the probe of
-/// the base form first (base code: a count-0 shape gives `None` with no seam test, as in the
-/// base), then the SHAPE-CACHE seam (`shape_cache::on`). On: a call of the cache body out of
-/// line (`shape_cache::cached_on`, as at the `props.rs` sites). Off: the call of the scan of
-/// the base form. Always inlined: an out-of-line copy needs a saved register for its answer
-/// after the cache call (the base called [`lookup`] out of line at 2 of its 11 sites,
-/// `construct_ic::miss` and `set_named_miss`; there arm 0 now pays no call). Not a GC point.
+/// [`lookup`] (the arguments in the order of the base form): the SHAPE-CACHE seam
+/// (`shape_cache::on`) is test 0 (phase 2f). On: a call of [`lookup_mh`], the lookup of the
+/// merge head out of line (the merge head calls `lookup` out of line at each of its 12 sites).
+/// Off: [`lookup_base`], the base body, which LLVM inlines or calls as at the base (it called
+/// `lookup` out of line at 2 of its 11 sites, `construct_ic::miss` and `set_named_miss`). So
+/// each arm pays the bit test and one branch at a site. Always inlined. Not a GC point.
 #[inline(always)]
 fn lookup_in(shape: u64, key: u64, rt: &Runtime) -> Option<Found> {
+    if crate::shape_cache::on(rt) {
+        core::hint::cold_path();
+        return lookup_mh(rt, shape, key);
+    }
+    lookup_base(rt, shape, key)
+}
+
+/// [`lookup`] in arm 0: the body of the base form (the count test, the probe, the scan). Not a
+/// GC point.
+fn lookup_base(rt: &Runtime, shape: u64, key: u64) -> Option<Found> {
     debug_assert!(is_shape(shape));
     if count_of(cell(shape)) == 0 {
         return None;
     }
-    let how = classify(rt, key);
-    if crate::shape_cache::on(rt) {
-        core::hint::cold_path();
-        return crate::shape_cache::cached_on(rt, shape, key, how);
-    }
     #[cfg(any(test, debug_assertions, feature = "ic-stats"))]
     crate::shape_cache::stats::bump(crate::shape_cache::stats::OFF);
-    lookup_with(shape, key, how)
+    lookup_with(shape, key, classify(rt, key))
+}
+
+/// [`lookup`] in arm S: the body of the merge head (the count test, the probe, the shape
+/// lookup cache inline: `shape_cache::lookup_c`), out of line as the merge head has it. Not a
+/// GC point.
+#[inline(never)]
+fn lookup_mh(rt: &Runtime, shape: u64, key: u64) -> Option<Found> {
+    debug_assert!(is_shape(shape));
+    if count_of(cell(shape)) == 0 {
+        return None;
+    }
+    crate::shape_cache::lookup_c::<true>(rt, shape, key, classify(rt, key))
 }
 
 /// The descriptor scan of [`lookup_with`] with no counter, for the shadow test of the shape

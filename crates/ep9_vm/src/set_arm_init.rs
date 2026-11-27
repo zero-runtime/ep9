@@ -100,6 +100,60 @@ pub(crate) fn side(on: bool) {
     let _ = on;
 }
 
+// ---- SET-15 (M15-P1, phase 2f): the seam of a function with 2 copies ---------------------------
+
+/// The seam of a function with 2 copies (SET-15, the `props::own_define` form): the SHAPE-CACHE
+/// bit (`shape_cache::on`) is test 0, then each side calls its copy, `$f::<true>` (the
+/// merge-head body: the shape lookup cache inline) or `$f::<false>` (the base body). [`side`]
+/// keeps the 2 calls apart, so that each is a tail jump and each arm pays the same seam: the bit
+/// test, one branch and one jump, with no frame. An expression.
+macro_rules! seam {
+    ($rt:expr, $f:ident($($a:expr),* $(,)?)) => {
+        if crate::shape_cache::on($rt) {
+            crate::set_arm_init::side(true);
+            $f::<true>($($a),*)
+        } else {
+            crate::set_arm_init::side(false);
+            $f::<false>($($a),*)
+        }
+    };
+}
+pub(crate) use seam;
+
+/// A function with 2 copies (SET-15): `fn $name` is the [`seam`], out of line as its base form
+/// (the callers keep their call). Each side calls `copy::<C>`, which runs the body `$body::<C>`
+/// (it stays in place in its file; inlined in `copy`, its one caller), so a copy has the frame
+/// and the entry saves of its body and no seam. With `never`, the body is out of line already
+/// (`#[inline(never)]` in place) and the seam calls it.
+macro_rules! two_copies {
+    (
+        $(#[$m:meta])* $v:vis fn $name:ident($($a:ident: $t:ty),* $(,)?) -> $r:ty
+            = $body:ident($rt:expr)
+    ) => {
+        $(#[$m])*
+        #[inline(never)]
+        $v fn $name($($a: $t),*) -> $r {
+            /// One copy of the function, out of line.
+            #[inline(never)]
+            fn copy<const C: bool>($($a: $t),*) -> $r {
+                $body::<C>($($a),*)
+            }
+            crate::set_arm_init::seam!($rt, copy($($a),*))
+        }
+    };
+    (
+        $(#[$m:meta])* $v:vis fn $name:ident($($a:ident: $t:ty),* $(,)?) -> $r:ty
+            = never $body:ident($rt:expr)
+    ) => {
+        $(#[$m])*
+        #[inline(never)]
+        $v fn $name($($a: $t),*) -> $r {
+            crate::set_arm_init::seam!($rt, $body($($a),*))
+        }
+    };
+}
+pub(crate) use two_copies;
+
 #[cfg(test)]
 mod tests {
     use ep9_bytecode::VerifiedUnit;

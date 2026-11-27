@@ -1434,7 +1434,7 @@ pub(crate) fn is_array(cx: &mut Cx, v: u64) -> Res<bool> {
 /// after the trap ran (V8 throws in the trap step). A revoked proxy, an accessor, or a handler
 /// chain that reaches a routed kind (a proxy: its answer may run JS) reads as no trap, so
 /// the caller keeps its own text. GC point (the name's atom; the trap made it already).
-pub(crate) fn has_data_trap(rt: &Runtime, p: u64, name: &str) -> bool {
+fn has_data_trap_c<const C: bool>(rt: &Runtime, p: u64, name: &str) -> bool {
     let key = crate::atoms::intern_str(rt, name);
     let how = crate::key::probe(key);
     let mut h = handler(p);
@@ -1442,7 +1442,7 @@ pub(crate) fn has_data_trap(rt: &Runtime, p: u64, name: &str) -> bool {
         if crate::exotic::own_attrs(rt, h, key, how).is_some() {
             return false;
         }
-        if let Some((v, a)) = crate::props::own_get_with(rt, h, key, how) {
+        if let Some((v, a)) = crate::props::own_get_c::<C>(rt, h, key, how) {
             return a & attr::ACCESSOR == 0 && is_callable(v);
         }
         h = object::proto_of(h);
@@ -1481,4 +1481,16 @@ pub(crate) fn falsish(cx: &mut Cx, name: &str, key: u64) -> Throw {
             Text("'"),
         ],
     )
+}
+
+// ---- SET-15 (M15-P1, phase 2f): the seams of the functions with 2 copies --------------------
+// At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan). Each
+// function below is the seam of a body that stays in place as `<name>_c::<C>`
+// (`set_arm_init::two_copies`): copy true is the merge-head function (the shape lookup cache
+// inline), copy false the base function.
+
+crate::set_arm_init::two_copies! {
+    /// True if the handler chain of the proxy `p` has a data property `name` that is callable
+    /// ([`has_data_trap_c`]). GC point (the name's atom).
+    pub(crate) fn has_data_trap(rt: &Runtime, p: u64, name: &str) -> bool = has_data_trap_c(rt)
 }

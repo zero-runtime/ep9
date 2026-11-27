@@ -137,7 +137,7 @@ impl ShapeCache {
 
 /// The seam of the member (ALLOC-SET design 1.3): true if lookups go through the cache. The
 /// set branch: the SHAPE-CACHE bit of the arm byte of `rt` (arms P, S and A; tests: unless
-/// `without` runs). Read by [`lookup`] (test 0) and by `shape::lookup_in` (SET-15).
+/// `without` runs). Read by [`lookup`] (test 0), `shape::lookup_in` and the 2-copy seams.
 #[inline(always)]
 pub(crate) fn on(rt: &Runtime) -> bool {
     #[cfg(test)]
@@ -353,7 +353,7 @@ pub(crate) mod stats {
 
 // ---- SET-15 (M15-P1): the cache body of `lookup` out of line ---------------------------------
 
-/// [`lookup`] and `shape::lookup_in` with the SHAPE-CACHE seam on: the call of the cache body
+/// [`lookup`] with the SHAPE-CACHE seam on (the inline seam): the call of the cache body
 /// out of line ([`cached_out`]); its answer as an `Option` again (inlined in the caller). Not a
 /// GC point.
 #[inline(always)]
@@ -378,8 +378,8 @@ fn cached_out(rt: &Runtime, shape: u64, key: u64, how: Probe) -> Found {
     })
 }
 
-/// The lookup of a function with 2 copies (SET-15: `props::own_define`,
-/// `property::get_with_receiver`; the seam is the first test of the function, which then
+/// The lookup of a function with 2 copies (SET-15: `props::own_define`, `shape::lookup_mh`,
+/// the `set_arm_init::two_copies` functions; the seam is the first test of a function, then it
 /// jumps to one copy): copy `C` = true, the member body ([`cached`] inline, as at the role
 /// head); copy false, the scan of the base form. So the copy of arm 0 is the base function and
 /// the copy of arm S is the merge-head function. Not a GC point.

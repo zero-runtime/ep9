@@ -80,10 +80,10 @@ pub(crate) fn is_key(rt: &Runtime, key: u64, how: Probe, a: Atom) -> bool {
 /// True if `key` is `prototype` and `f` still has a lazy one, not in its storage (a constructor
 /// but `%Proxy%`, or a generator function: `generator::lazy_prototype_kind`). Not a GC point.
 #[inline]
-pub(crate) fn is_lazy_prototype(rt: &Runtime, f: u64, key: u64, how: Probe) -> bool {
+fn is_lazy_prototype_c<const C: bool>(rt: &Runtime, f: u64, key: u64, how: Probe) -> bool {
     generator::lazy_prototype_kind(object::function_info(f)).is_some()
         && is_key(rt, key, how, Atom::Prototype)
-        && props::own_get_with(rt, f, key, how).is_none()
+        && props::own_get_c::<C>(rt, f, key, how).is_none()
         && !is_proxy_constructor(rt, f)
 }
 
@@ -485,4 +485,17 @@ fn is_proxy_constructor(rt: &Runtime, f: u64) -> bool {
     let id = crate::builtins::IntrinsicId::Proxy;
     object::function_info(f).host.is_some()
         && crate::realm::intrinsic_in(rt, object::function_realm(f), id) == f
+}
+
+// ---- SET-15 (M15-P1, phase 2f): the seams of the functions with 2 copies --------------------
+// At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan). Each
+// function below is the seam of a body that stays in place as `<name>_c::<C>`
+// (`set_arm_init::two_copies`): copy true is the merge-head function (the shape lookup cache
+// inline), copy false the base function.
+
+crate::set_arm_init::two_copies! {
+    /// True if `key` is `prototype` and `f` still has a lazy one ([`is_lazy_prototype_c`]). Not
+    /// a GC point.
+    pub(crate) fn is_lazy_prototype(rt: &Runtime, f: u64, key: u64, how: Probe) -> bool
+        = is_lazy_prototype_c(rt)
 }

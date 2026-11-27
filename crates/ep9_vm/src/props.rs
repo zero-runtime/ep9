@@ -333,10 +333,10 @@ fn find_own_by(
 }
 
 /// An own property of `o` with a probe the caller classified: (value, attributes). Not a GC
-/// point.
-#[inline]
+/// point. SET-15: the seam at test 0, then a jump to its copy (`own_get_with_c`, file end).
+#[inline(never)]
 pub(crate) fn own_get_with(rt: &Runtime, o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
-    find_own(rt, o, key, how).map(|(_, v, a)| (v, a))
+    crate::set_arm_init::seam!(rt, own_get_with_c(rt, o, key, how))
 }
 
 /// One step of a `[[Get]]` walk: (value, attributes) of the own property `key` of `o`, or
@@ -661,4 +661,79 @@ fn own_define_c<const C: bool>(rt: &Runtime, o: u64, key: u64, v: u64, attrs: i3
         }
         None => own_add(rt, o, key, v, attrs),
     }
+}
+
+/// [`own_get_with`] in the copy `c` of a function with 2 copies where the base calls it out of
+/// line: `Some(C)` calls [`own_get_with_c`] (no seam: the base form takes no runtime, so the
+/// callers of copy false pass none), `None` the seam. Always inlined. Not a GC point.
+#[inline(always)]
+pub(crate) fn own_get_b(
+    c: Option<bool>,
+    rt: &Runtime,
+    o: u64,
+    key: u64,
+    how: Probe,
+) -> Option<(u64, i32)> {
+    match c {
+        Some(true) => own_get_with_c::<true>(rt, o, key, how),
+        Some(false) => own_get_with_c::<false>(rt, o, key, how),
+        None => own_get_with(rt, o, key, how),
+    }
+}
+
+/// [`own_get_with`], copy `C`, out of line (the seam jumps here). Not a GC point.
+#[inline(never)]
+fn own_get_with_c<const C: bool>(rt: &Runtime, o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
+    own_get_c::<C>(rt, o, key, how)
+}
+
+/// The body of [`own_get_with`] in copy `C` of a function with 2 copies (where the base inlines
+/// `own_get_with`). Not a GC point.
+#[inline]
+pub(crate) fn own_get_c<const C: bool>(
+    rt: &Runtime,
+    o: u64,
+    key: u64,
+    how: Probe,
+) -> Option<(u64, i32)> {
+    find_own_c::<C>(rt, o, key, how).map(|(_, v, a)| (v, a))
+}
+
+/// [`own_store_if_writable`] in the copy `c` of a function with 2 copies: `Some(C)` in copy `C`
+/// ([`own_store_c`]), `None` outside one (the inline seam of `shape_cache::lookup`). Always
+/// inlined: `c` is a constant at each call. Not a GC point.
+#[inline(always)]
+pub(crate) fn own_store_b(
+    c: Option<bool>,
+    rt: &Runtime,
+    o: u64,
+    key: u64,
+    how: Probe,
+    v: u64,
+) -> Option<bool> {
+    match c {
+        Some(true) => own_store_c::<true>(rt, o, key, how, v),
+        Some(false) => own_store_c::<false>(rt, o, key, how, v),
+        None => own_store_if_writable(rt, o, key, how, v),
+    }
+}
+
+/// [`own_store_if_writable`] in copy `C` of a function with 2 copies. Not a GC point.
+#[inline(always)]
+pub(crate) fn own_store_c<const C: bool>(
+    rt: &Runtime,
+    o: u64,
+    key: u64,
+    how: Probe,
+    v: u64,
+) -> Option<bool> {
+    let (hit, _, attrs) = find_own_c::<C>(rt, o, key, how)?;
+    if attrs & object::attr::WRITABLE == 0 {
+        return Some(false);
+    }
+    match hit {
+        Hit::Fast(s, f) => field_set(rt, o, s, f, v),
+        Hit::Dict(p, e) => wr(&rt.heap, p, e + 8, v),
+    }
+    Some(true)
 }
