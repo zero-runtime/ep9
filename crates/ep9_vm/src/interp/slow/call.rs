@@ -1664,9 +1664,9 @@ fn is_char_code_at(h: crate::host::HostFn) -> bool {
 /// The CHARCODE seam (design 5.2): true = the `charCodeAt` arm runs; false = every call takes
 /// the old body. The SET-15 set branch: the CHARCODE bit of the arm byte of `rt`
 /// (`ep9_platform::set_arm`), test 0 of `call_property::<1>`, so with the bit off a call reads
-/// this byte only and then runs the old body; the merge head deletes the seam and keeps the arm. It reads
-/// no execution policy (no preset, no feedback mode, no unit: rule 40, M-R9). Tests turn it off
-/// per thread with `call::CHAR_CODE_ARM_OFF`.
+/// this byte only and then runs the old body; the merge head deletes the seam and keeps the
+/// arm. It reads no execution policy (no preset, no feedback mode, no unit: rule 40, M-R9).
+/// Tests turn it off per thread with `call::CHAR_CODE_ARM_OFF`.
 #[inline(always)]
 pub(crate) fn char_code_arm_on(rt: &crate::runtime::Runtime) -> bool {
     #[cfg(test)]
@@ -1677,9 +1677,9 @@ pub(crate) fn char_code_arm_on(rt: &crate::runtime::Runtime) -> bool {
 }
 
 /// The `off=` and `poll=` counts of the `ic-stats` line (`abi::strings` `char_code_stats`) for
-/// a call that the seam (test 0 of `call_property::<1>`) sent to the old body: the column that tests 1-3 give, as when
-/// the seam was a part of test 3. Only the count build has this code: it reads the instruction
-/// and the callee register, and changes no state.
+/// a call that the seam (test 0 of `call_property::<1>`) sent to the old body: the column that
+/// tests 1-3 give, as when the seam was a part of test 3. Only the count build has this code:
+/// it reads the instruction and the callee register, and changes no state.
 ///
 /// # Safety
 /// As `call_property` with `N` = 1.
