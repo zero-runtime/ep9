@@ -1159,20 +1159,20 @@ fn ctor_fit_extra_counts_only_prototype_fields_no_level_stores() {
         ],
     );
     assert_eq!((c.names, c.chain, c.on), (8, 17, Some(17)));
-    // No leave of `this` (E): chain 8 + 1 (left) = 9. The old count is E's x, d0 + b0, left
+    // No leave of `this` (E): no chain walk (R-C1), so the old count: E's x, d0 + b0, left
     // = 4: b0 is no name of E itself, so the old rule counts it.
     let c = chain_case(
         FNS,
         "E",
         &[Fields("E", &["d0", "b0", "left"], &[]), Ctor("B")],
     );
-    assert_eq!((c.names, c.escaped, c.chain), (8, false, 9));
-    assert_eq!((c.on, c.off), (Some(9), Some(4)));
+    assert_eq!((c.names, c.escaped, c.levels, c.chain), (2, false, 0, 4));
+    assert_eq!((c.on, c.off), (Some(4), Some(4)));
 }
 
-/// K3 gap 3: a chain count of exactly 8 with no leave of `this` keeps the old count (the
-/// chain count is used only above GENEROUS); 9 uses it. With a leave, 7 + ESCAPE_SLACK = 8
-/// keeps the old count and 8 + 1 = 9 uses it.
+/// K3 gap 3: with no leave of `this` the chain is not walked (R-C1), so 3 own names and 5 or
+/// 6 up the chain keep the old count, 3. With a leave, 7 + ESCAPE_SLACK = 8 keeps the old
+/// count (the chain count is used only above GENEROUS) and 8 + 1 = 9 uses it.
 #[test]
 fn ctor_fit_uses_a_chain_count_only_above_8() {
     use Level::*;
@@ -1183,14 +1183,14 @@ fn ctor_fit_uses_a_chain_count_only_above_8() {
         ("B5", false, &["b0", "b1", "b2", "b3", "b4"]),
         ("B6", false, &["b0", "b1", "b2", "b3", "b4", "b5"]),
     ];
-    // No leave: 3 + 5 = exactly 8: the old count, 3.
+    // No leave, B5 up the chain (3 + 5 = 8 before R-C1): the old count, 3.
     let c = chain_case(FNS, "E", &[Ctor("E"), Ctor("B5")]);
-    assert_eq!((c.names, c.escaped, c.chain), (8, false, 8));
+    assert_eq!((c.names, c.escaped, c.levels, c.chain), (3, false, 0, 3));
     assert_eq!((c.on, c.off), (Some(3), Some(3)));
-    // No leave: 3 + 6 = 9: the chain count.
+    // No leave, B6 up the chain (3 + 6 = 9 before R-C1, the chain count): the old count, 3.
     let c = chain_case(FNS, "E", &[Ctor("E"), Ctor("B6")]);
-    assert_eq!((c.names, c.escaped, c.chain), (9, false, 9));
-    assert_eq!((c.on, c.off), (Some(9), Some(3)));
+    assert_eq!((c.names, c.escaped, c.levels, c.chain), (3, false, 0, 3));
+    assert_eq!((c.on, c.off), (Some(3), Some(3)));
     // A leave: 2 + 5 + 1 = 8: the old count (none: GENEROUS).
     let c = chain_case(FNS, "D2", &[Ctor("D2"), Ctor("B5")]);
     assert_eq!((c.names, c.escaped, c.chain), (7, true, 8));
@@ -1199,6 +1199,162 @@ fn ctor_fit_uses_a_chain_count_only_above_8() {
     let c = chain_case(FNS, "D3", &[Ctor("D3"), Ctor("B5")]);
     assert_eq!((c.names, c.escaped, c.chain), (8, true, 9));
     assert_eq!((c.on, c.off), (Some(9), None));
+}
+
+// ---- CTOR-FIT R-C1 (DL M6-ORCH-1755): the chain walk runs only when `this` leaves --------------
+
+/// R-C1: an ES5 subclass `L` of `B` (10 names) in the form `L.prototype =
+/// Object.create(B.prototype); L.prototype.constructor = L`. The VM tests have no built-ins,
+/// so the prototype is `new __()` with `__.prototype = B.prototype` and `this.constructor = L`
+/// in `__`. An `L` that does not call `B` (`this.l0 = a`) gets the old count with the CTOR_FIT
+/// bit on and off: 1 slot, no SLOTS cell (before R-C1, on: 1 + 10 = 11 slots). An `L` that
+/// calls it (`B.call(this, a); this.l0 = a`) gets the chain count with the bit on: l0, b0..b9
+/// = 11 + ESCAPE_SLACK = 12 slots, no SLOTS cell; with the bit off, GENEROUS and a SLOTS cell.
+/// The bit is the arm byte of the `Runtime` of each run (`set_arm_for_test`), not the test knob
+/// and not the process variable.
+#[test]
+fn ctor_fit_walks_the_chain_only_when_this_leaves() {
+    use ep9_platform::set_arm::{ARM_0, CTOR_FIT};
+    /// `B` (10 stores), `L` (`_super.call(this, a)` first if `call`; `_super = B`), `callB`
+    /// (`B.call`), `__`; `L.prototype = new __()`; then 10 times `o = new L(1, 2)` (`o0` = the
+    /// first), and `print(o.l0)`.
+    fn es5_sub(call: bool) -> VerifiedUnit {
+        let l = ctor("L", |a| {
+            if call {
+                super_call(a, 0);
+            }
+            stores(a, &["l0"]);
+        });
+        let base = ["b0", "b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8", "b9"];
+        let b = ctor("B", |a| stores(a, &base));
+        // `callB(t, a)`: B with receiver `t` and argument `a`.
+        let call_b = ctor("callB", |a| {
+            let bf = a.b.new_register();
+            a.lda_global("B");
+            a.b.star(bf);
+            a.b.call_property1(bf, a.b.parameter(0), a.b.parameter(1), a.call);
+        });
+        // `function __() { this.constructor = L; }`.
+        let ext = ctor("__", |a| {
+            let this = a.b.receiver();
+            a.lda_global("L");
+            a.set_named(this, "constructor");
+        });
+        let mut s = Asm::script(0);
+        for (i, g) in [(1, "L"), (2, "B"), (3, "callB"), (4, "__")] {
+            let c = s.b.function_constant(FunctionId(i));
+            s.b.create_closure(c, s.closure, 0);
+            s.sta_global(g);
+        }
+        let (rl, rb, rx, rp, none) = (
+            s.b.new_register(),
+            s.b.new_register(),
+            s.b.new_register(),
+            s.b.new_register(),
+            s.b.new_register_list(0),
+        );
+        // `_super = B; B.call = callB`.
+        s.lda_global("B");
+        s.sta_global("_super");
+        s.b.star(rb);
+        s.lda_global("callB");
+        s.set_named(rb, "call");
+        // `__.prototype = B.prototype; L.prototype = new __()`.
+        s.lda_global("__");
+        s.b.star(rx);
+        s.get_named(rb, "prototype");
+        s.set_named(rx, "prototype");
+        s.b.construct(rx, none, 0, s.call).star(rp);
+        s.lda_global("L");
+        s.b.star(rl);
+        s.b.ldar(rp);
+        s.set_named(rl, "prototype");
+        let site = s.b.feedback_slot(FeedbackSlotKind::Call);
+        let args = s.b.new_register_list(2);
+        let (i, o) = (s.b.new_register(), s.b.new_register());
+        s.b.lda_zero().star(i);
+        let head = s.b.bound_label();
+        let exit = s.b.new_label();
+        s.b.lda_smi(10).test_less_than(i, s.cmp).jump_if_false(exit);
+        s.b.lda_smi(1)
+            .star(args.get(0))
+            .lda_smi(2)
+            .star(args.get(1));
+        s.lda_global("L");
+        s.b.star(rl);
+        s.b.construct(rl, args, 2, site).star(o);
+        s.sta_global("o");
+        let skip = s.b.new_label();
+        s.b.lda_zero()
+            .test_equal_strict(i, s.cmp)
+            .jump_if_false(skip);
+        s.b.ldar(o);
+        s.sta_global("o0");
+        s.b.bind(skip);
+        s.b.ldar(i).inc(s.bin).star(i).jump_loop(head, 0, s.loop_);
+        s.b.bind(exit);
+        s.get_named(o, "l0");
+        s.print_acc();
+        s.b.lda_undefined().return_();
+        unit("", vec![s.finish(), l, b, call_b, ext])
+    }
+    fn no_call() -> VerifiedUnit {
+        es5_sub(false)
+    }
+    fn calls() -> VerifiedUnit {
+        es5_sub(true)
+    }
+    // A row: its name, the unit, the arm bits, (capacity, property count) of `o0` and of
+    // `o`, and their SLOTS cells.
+    type Row = (&'static str, fn() -> VerifiedUnit, u8, (usize, usize), bool);
+    let rows: [Row; 4] = [
+        ("no call, on", no_call, CTOR_FIT, (1, 1), false),
+        ("no call, off", no_call, ARM_0, (1, 1), false),
+        ("calls, on", calls, CTOR_FIT, (12, 11), false),
+        (
+            "calls, off",
+            calls,
+            ARM_0,
+            (usize::from(GENEROUS), 11),
+            true,
+        ),
+    ];
+    for (name, make, bits, want, slots) in rows {
+        for &d in Dispatch::ALL {
+            for stress in [false, true] {
+                for threshold in [0, u32::MAX] {
+                    let c = IsolateConfig {
+                        feedback_threshold: threshold,
+                        ..config(d, stress)
+                    };
+                    let label =
+                        format!("{name}: {} stress={stress} threshold={threshold}", d.name());
+                    let l = label.clone();
+                    let s = on_big_stack(move || {
+                        slack::ctor_fit_override::ON.set(None);
+                        let mut iso = isolate(c);
+                        iso.rt.set_arm_for_test(bits);
+                        assert_eq!(slack::ctor_fit(&iso.rt), bits & CTOR_FIT != 0, "{l}");
+                        take_output();
+                        let r = iso
+                            .with_cx_checkpoint(|cx| cx.run_script(make(), "slack.js").map(|_| ()));
+                        let out = take_output();
+                        if let Err(e) = r {
+                            panic!("{l}: uncaught {e}");
+                        }
+                        assert_eq!(out, ["1"], "{l}");
+                        let s = observe(&iso);
+                        iso.collect_garbage();
+                        iso.verify_heap().unwrap();
+                        s
+                    });
+                    assert_eq!((s.first, s.last), (want, want), "{label}");
+                    assert_eq!(s.slots, (slots, slots), "{label}");
+                    assert!(s.same_shape, "{label}");
+                }
+            }
+        }
+    }
 }
 
 // ---- CTOR-FIT and M-R9: full and ics_only, with and without a loaded unit -------------------
