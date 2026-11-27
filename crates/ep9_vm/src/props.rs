@@ -333,10 +333,10 @@ fn find_own_by(
 }
 
 /// An own property of `o` with a probe the caller classified: (value, attributes). Not a GC
-/// point. SET-15: the seam at test 0, then a jump to its copy (`own_get_with_c`, file end).
+/// point. SET-15: the seam at test 0, then a jump to its copy (`own_get_with_s`, file end).
 #[inline(never)]
 pub(crate) fn own_get_with(rt: &Runtime, o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
-    crate::set_arm_init::seam!(rt, own_get_with_c(rt, o, key, how))
+    crate::set_arm_init::seam!(rt, own_get_with_s(rt, o, key, how))
 }
 
 /// One step of a `[[Get]]` walk: (value, attributes) of the own property `key` of `o`, or
@@ -681,7 +681,25 @@ pub(crate) fn own_get_b(
     }
 }
 
-/// [`own_get_with`], copy `C`, out of line (the seam jumps here). Not a GC point.
+/// [`own_get_with`], copy `C`, out of line: the seam jumps here. Its address is taken
+/// ([`OWN_GET_WITH_SIDES`]), so it keeps the runtime argument that copy false does not read,
+/// and the seam passes the arguments as they come. Not a GC point.
+#[inline(never)]
+fn own_get_with_s<const C: bool>(rt: &Runtime, o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
+    own_get_c::<C>(rt, o, key, how)
+}
+
+/// The copies of [`own_get_with`] that its seam jumps to, address taken: their signatures stay
+/// whole.
+#[used]
+static OWN_GET_WITH_SIDES: [OwnGetWith; 2] = [own_get_with_s::<false>, own_get_with_s::<true>];
+
+/// The type of [`own_get_with`].
+type OwnGetWith = fn(&Runtime, u64, u64, Probe) -> Option<(u64, i32)>;
+
+/// [`own_get_with`], copy `C`, out of line, for a copy of a function with 2 copies that calls it
+/// where the base calls `own_get_with` (no seam; copy false takes no runtime, as the base form).
+/// Not a GC point.
 #[inline(never)]
 fn own_get_with_c<const C: bool>(rt: &Runtime, o: u64, key: u64, how: Probe) -> Option<(u64, i32)> {
     own_get_c::<C>(rt, o, key, how)

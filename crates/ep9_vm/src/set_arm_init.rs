@@ -124,7 +124,10 @@ pub(crate) use seam;
 /// (the callers keep their call). Each side calls `copy::<C>`, which runs the body `$body::<C>`
 /// (it stays in place in its file; inlined in `copy`, its one caller), so a copy has the frame
 /// and the entry saves of its body and no seam. With `never`, the body is out of line already
-/// (`#[inline(never)]` in place) and the seam calls it.
+/// (`#[inline(never)]` in place) and the seam calls it. The copies are in a `#[used]` static
+/// (`SIDES`): LLVM keeps the signature of a function whose address is taken, so it drops no
+/// argument that one copy does not read (the runtime of a base form), and each side of the seam
+/// passes the arguments in the registers they come in (the same seam instructions per run).
 macro_rules! two_copies {
     (
         $(#[$m:meta])* $v:vis fn $name:ident($($a:ident: $t:ty),* $(,)?) -> $r:ty
@@ -138,6 +141,9 @@ macro_rules! two_copies {
             fn copy<const C: bool>($($a: $t),*) -> $r {
                 $body::<C>($($a),*)
             }
+            /// The copies, address taken: their signatures stay whole.
+            #[used]
+            static SIDES: [fn($($t),*) -> $r; 2] = [copy::<false>, copy::<true>];
             crate::set_arm_init::seam!($rt, copy($($a),*))
         }
     };
@@ -148,6 +154,9 @@ macro_rules! two_copies {
         $(#[$m])*
         #[inline(never)]
         $v fn $name($($a: $t),*) -> $r {
+            /// The copies, address taken: their signatures stay whole.
+            #[used]
+            static SIDES: [fn($($t),*) -> $r; 2] = [$body::<false>, $body::<true>];
             crate::set_arm_init::seam!($rt, $body($($a),*))
         }
     };
