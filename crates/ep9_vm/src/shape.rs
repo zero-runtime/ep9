@@ -840,14 +840,14 @@ pub(crate) fn set_field_bits_in_family(
 // ---- lookup ---------------------------------------------------------------------------------
 
 /// The own property `key` of objects with `shape`: its descriptor index and details. Not a GC
-/// point. A dictionary shape has no descriptors (the object's PROPS table holds them). Goes
-/// through the isolate's shape lookup cache (`shape_cache.rs`, M14-P1 SHAPE-CACHE).
+/// point. A dictionary shape has no descriptors (the object's PROPS table holds them). SET-15:
+/// the body is [`lookup_in`] (file end): test 0 the SHAPE-CACHE seam; on, a tail jump to the
+/// cache body [`lookup_on`]; off, the scan of the base, with its inlining, frame and registers
+/// (LLVM drops the unused runtime argument of the base form: `lookup_in` takes it last). The
+/// merge head deletes `lookup_in` and the seam: this body is the cache body again.
+#[inline(always)]
 pub(crate) fn lookup(rt: &Runtime, shape: u64, key: u64) -> Option<Found> {
-    debug_assert!(is_shape(shape));
-    if count_of(cell(shape)) == 0 {
-        return None;
-    }
-    crate::shape_cache::lookup(rt, shape, key, classify(rt, key))
+    lookup_in(shape, key, rt)
 }
 
 /// The answer of a shape lookup cache hit (`shape_cache.rs`): descriptor `i` of the fast shape
@@ -2286,4 +2286,36 @@ pub(crate) fn install_keep(rt: &Runtime, o: u64, shape: u64) {
     let id = rt.heap.shape_id_of(cell(shape));
     // SAFETY: `o` is live (crate invariant).
     crate::interp::keepcall::set_shape(unsafe { cell(o).header() }, id, rt.heap.barrier());
+}
+
+// ---- SET-15 (M15-P1): the SHAPE-CACHE seam of `lookup` -------------------------------------
+// At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan).
+
+/// [`lookup`] (the arguments in the order of the base form). Test 0: the SHAPE-CACHE seam
+/// (`shape_cache::on`). On: a tail jump to [`lookup_on`]. Off: the body of the base form of
+/// [`lookup`], so it has no frame and the same callers inline it. Not a GC point.
+fn lookup_in(shape: u64, key: u64, rt: &Runtime) -> Option<Found> {
+    if crate::shape_cache::on(rt) {
+        return lookup_on(shape, key, rt);
+    }
+    debug_assert!(is_shape(shape));
+    if count_of(cell(shape)) == 0 {
+        return None;
+    }
+    #[cfg(any(test, debug_assertions, feature = "ic-stats"))]
+    crate::shape_cache::stats::bump(crate::shape_cache::stats::OFF);
+    lookup_with(shape, key, classify(rt, key))
+}
+
+/// [`lookup`] with the SHAPE-CACHE seam on: the cache body (`shape_cache::cached`), out of
+/// line, so that the seam adds no frame and no inlined cache code to the callers of
+/// [`lookup_in`]. The same arguments as [`lookup_in`], so its call here is a tail jump with no
+/// register move. Not a GC point.
+#[inline(never)]
+fn lookup_on(shape: u64, key: u64, rt: &Runtime) -> Option<Found> {
+    debug_assert!(is_shape(shape));
+    if count_of(cell(shape)) == 0 {
+        return None;
+    }
+    crate::shape_cache::cached(rt, shape, key, classify(rt, key))
 }

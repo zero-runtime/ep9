@@ -137,7 +137,7 @@ impl ShapeCache {
 
 /// The seam of the member (ALLOC-SET design 1.3): true if lookups go through the cache. The
 /// set branch: the SHAPE-CACHE bit of the arm byte of `rt` (arms P, S and A; tests: unless
-/// `without` runs); the set integrator changed only this body.
+/// `without` runs). Read by [`lookup`] and by test 0 of `shape::lookup_in` (SET-15).
 #[inline(always)]
 pub(crate) fn on(rt: &Runtime) -> bool {
     #[cfg(test)]
@@ -198,9 +198,21 @@ fn index(id: u32, key: u64) -> usize {
 /// objects with the fast shape `shape`. Not a GC point.
 #[inline(always)]
 pub(crate) fn lookup(rt: &Runtime, shape: u64, key: u64, how: Probe) -> Option<Found> {
-    if !on(rt) || matches!(how, Probe::Content) {
+    if !on(rt) {
         #[cfg(any(test, debug_assertions, feature = "ic-stats"))]
-        stats::bump(if on(rt) { stats::CONTENT } else { stats::OFF });
+        stats::bump(stats::OFF);
+        return shape::lookup_with(shape, key, how);
+    }
+    cached(rt, shape, key, how)
+}
+
+/// [`lookup`] with the seam on (and `shape::lookup_on`, the out-of-line cache body of
+/// `shape::lookup`; SET-15): a `Content` probe takes the scan; else the hit or the miss.
+#[inline(always)]
+pub(crate) fn cached(rt: &Runtime, shape: u64, key: u64, how: Probe) -> Option<Found> {
+    if matches!(how, Probe::Content) {
+        #[cfg(any(test, debug_assertions, feature = "ic-stats"))]
+        stats::bump(stats::CONTENT);
         return shape::lookup_with(shape, key, how);
     }
     let id = shape as u32;

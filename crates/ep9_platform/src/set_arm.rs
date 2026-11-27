@@ -13,7 +13,7 @@
 //!                      runner tells the 2 runs apart by its own arm label (a0 / a0p), never
 //!                      by this value, so the environment is the same in both
 //!
-//!  bits()  ── one OnceLock: the only environment read of the name in the workspace
+//!  bits()  ── one OnceLock: the one engine read of the name (the test charcode_arm.rs too)
 //!    ├─ ep9_vm::set_arm_init (Isolate::new_with, before Heap::new) ── init(first): first(bits)
 //!    │    once; first sets the SHA-256 body slot of ep9_bytecode when SRC_HASH is on
 //!    └─ Runtime::new copies the byte into Runtime::set; a seam tests one bit of it

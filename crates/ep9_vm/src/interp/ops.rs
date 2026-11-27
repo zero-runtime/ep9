@@ -1808,7 +1808,7 @@ op!(JumpIfToBooleanTrue(st, target: Fwd) {
     }
 } cold { jump_if(st, slow::to_boolean(st.acc), target) });
 op!(JumpIfToBooleanFalse(st, target: Fwd) {
-    match fast_truthy(st.acc, || to_bool_arm(st.rt())) {
+    match to_bool_seam_first(st) {
         Some(false) => Flow::Jump(st.fwd(target)),
         Some(true) => Flow::Next,
         None => Flow::Cold,
@@ -3433,9 +3433,10 @@ fn cell_arm(v: u64, arm: impl FnOnce() -> bool) -> Option<bool> {
 
 /// The set seam of TO-BOOL (the `slack::ctor_fit` form of month 14): true = the cell arm is on.
 /// The SET-15 set branch: the TO_BOOL bit of the arm byte of `rt` (`ep9_platform::set_arm`),
-/// the first test of `cell_arm`; the merge head deletes the seam. It
-/// reads no execution policy (rule 40, M-R9). Tests turn it off per thread with the test-only
-/// module `to_bool_arm_override`; the thread must be the one that runs the isolate.
+/// the first test of `cell_arm` (in `JumpIfToBooleanFalse`: the first test of the handler,
+/// [`to_bool_seam_first`]); the merge head deletes the seam. It reads no execution policy
+/// (rule 40, M-R9). Tests turn it off per thread with the test-only module
+/// `to_bool_arm_override`; the thread must be the one that runs the isolate.
 #[inline(always)]
 pub(crate) fn to_bool_arm(rt: &Runtime) -> bool {
     #[cfg(test)]
@@ -3443,6 +3444,33 @@ pub(crate) fn to_bool_arm(rt: &Runtime) -> bool {
         return on;
     }
     crate::set_arm_init::on(rt, ep9_platform::set_arm::TO_BOOL)
+}
+
+/// `fast_truthy` of `JumpIfToBooleanFalse` with the TO-BOOL seam as the first test (SET-15):
+/// off, `fast_truthy` with no cell arm, the instructions of the base handler; on, the arm.
+/// With the seam inside `cell_arm`, the arm moved the registers of this handler (x86-64: the
+/// pc add before the tests and a move at the cold exit), and arm 0 paid them. The empty `asm!`
+/// block gives the on path its own pc and next pc, and `cold_path` keeps the off path first,
+/// so the off path keeps the base registers. The merge head deletes this function.
+#[inline(always)]
+fn to_bool_seam_first(st: &mut St<'_>) -> Option<bool> {
+    if to_bool_arm(st.rt()) {
+        core::hint::cold_path();
+        // SAFETY: no instructions (the text is a comment); the 2 registers keep their values.
+        // The pointers are values here: the block reads and writes no memory.
+        #[allow(clippy::pointers_in_nomem_asm_block)]
+        unsafe {
+            core::arch::asm!(
+                "/* {0} {1} */",
+                inout(reg) st.pc,
+                inout(reg) st.next,
+                options(nomem, nostack, preserves_flags)
+            )
+        };
+        fast_truthy(st.acc, || true)
+    } else {
+        fast_truthy(st.acc, || false)
+    }
 }
 
 #[cfg(test)]
