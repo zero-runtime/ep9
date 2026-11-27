@@ -84,11 +84,11 @@ pub(crate) fn get_from(cx: &mut Cx, o: u64, key: u64) -> Res<u64> {
     get_with_receiver(cx, o, key, o)
 }
 
-/// `o.[[Get]](key, receiver)` (§10.1.8.1 OrdinaryGet) up the prototype chain from the
-/// object `o`. The probe is classified once. An accessor found on the chain calls its getter
-/// with `receiver` as `this` (any value: a primitive base passes itself). GC point (a lazy
-/// `prototype`, a getter).
-pub(crate) fn get_with_receiver(cx: &mut Cx, mut o: u64, key: u64, receiver: u64) -> Res<u64> {
+/// [`get_with_receiver`] (file end: the SET-15 seam), copy `C`. Copy false is the base body (the
+/// scan), copy true the merge-head body (the cache inline, `props::own_value_or_proto_c`). GC
+/// point (a lazy `prototype`, a getter).
+#[inline(never)]
+fn get_receiver_c<const C: bool>(cx: &mut Cx, mut o: u64, key: u64, receiver: u64) -> Res<u64> {
     debug_assert!(is_object(o) && is_property_key(key));
     let how = key::probe(key);
     loop {
@@ -106,7 +106,7 @@ pub(crate) fn get_with_receiver(cx: &mut Cx, mut o: u64, key: u64, receiver: u64
                 return accessor::call_getter(cx, v, receiver);
             }
         }
-        match props::own_value_or_proto(cx.rt(), o, key, how) {
+        match props::own_value_or_proto_c::<C>(cx.rt(), o, key, how) {
             // HOLE: a lazy namespace key not installed yet (INTL-I1-D8) swaps on this read.
             Ok((v, a)) if a & attr::ACCESSOR == 0 => {
                 if v == HOLE {
@@ -2471,4 +2471,26 @@ pub(crate) fn for_in_seen(atoms: &[u64], other: &[u64], k: u64, atom: bool) -> b
         ..ForInSeen::default()
     };
     seen.has_string(k, atom)
+}
+
+// ---- SET-15 (M15-P1): the SHAPE-CACHE seam of `get_with_receiver` ----------------------------
+// At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan).
+
+/// `o.[[Get]](key, receiver)` (§10.1.8.1 OrdinaryGet) up the prototype chain from the
+/// object `o`. The probe is classified once. An accessor found on the chain calls its getter
+/// with `receiver` as `this` (any value: a primitive base passes itself). GC point (a lazy
+/// `prototype`, a getter). SET-15: the SHAPE-CACHE seam is test 0, and each side jumps to a
+/// copy of the body ([`get_receiver_c`]): copy false, the base function (the scan, with
+/// its inlining, frame and registers), in arm 0; copy true, the merge-head function, in arms P
+/// and S. Both sides are a jump (`set_arm_init::side`), so the 2 arms pay the same seam (x86-64:
+/// the runtime load, the bit test, a branch and a jump; no frame). The merge head deletes this
+/// seam and copy false: copy true is this function again.
+#[inline(never)]
+pub(crate) fn get_with_receiver(cx: &mut Cx, o: u64, key: u64, receiver: u64) -> Res<u64> {
+    if crate::shape_cache::on(cx.rt()) {
+        crate::set_arm_init::side(true);
+        return get_receiver_c::<true>(cx, o, key, receiver);
+    }
+    crate::set_arm_init::side(false);
+    get_receiver_c::<false>(cx, o, key, receiver)
 }

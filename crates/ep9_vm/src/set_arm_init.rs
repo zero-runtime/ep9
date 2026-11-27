@@ -56,11 +56,47 @@ pub(crate) fn runtime_bits() -> u8 {
     }
 }
 
-/// A seam's test: true if `bit` (a member of `ep9_platform::set_arm`) is on in the arm byte of
-/// `rt` (`Runtime::set`). One byte load from the runtime; no static, no lock.
+/// A seam's test: true if `bit` (a member of `ep9_platform::set_arm`) is on in the arm word of
+/// `rt` (`Runtime::set`). One load from the runtime; no static, no lock. On aarch64 a full
+/// 32-bit read (volatile: LLVM does not narrow it to a byte), so one `ldr` with an immediate
+/// offset reaches it: a byte load this far into the Runtime needs an offset register, which
+/// LLVM keeps in a saved register of a loop (a spill in arm 0). Other targets: a plain read.
 #[inline(always)]
 pub(crate) fn on(rt: &crate::runtime::Runtime, bit: u8) -> bool {
-    rt.set.get() & bit != 0
+    #[cfg(target_arch = "aarch64")]
+    let w = {
+        // SAFETY: the pointer of a `Cell<u32>` of a live `Runtime`: valid and aligned, and no
+        // other thread writes it (a Runtime is one thread's).
+        unsafe { core::ptr::read_volatile(rt.set.as_ptr()) }
+    };
+    #[cfg(not(target_arch = "aarch64"))]
+    let w = rt.set.get();
+    w & u32::from(bit) != 0
+}
+
+/// The first statement of each side of a seam that ends in 2 tail calls (`if on { side(true);
+/// f_on(..) } else { side(false); f_off(..) }`): an empty `asm!` block, with a text of its own
+/// per side (2 equal blocks would move above the branch), so LLVM cannot fold a side into a
+/// conditional tail jump (x86-64 `jne f_on`). Then each arm pays the same seam: the bit test,
+/// one branch and one jump (x86-64 and aarch64), with no frame. No instructions, no memory, no
+/// flags.
+#[inline(always)]
+pub(crate) fn side(on: bool) {
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    // SAFETY: the blocks have no instructions (the texts are comments); they read and write
+    // nothing.
+    unsafe {
+        if on {
+            core::arch::asm!("/* set arm on */", options(nomem, nostack, preserves_flags))
+        } else {
+            core::arch::asm!(
+                "/* set arm off */",
+                options(nomem, nostack, preserves_flags)
+            )
+        }
+    };
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let _ = on;
 }
 
 #[cfg(test)]
@@ -105,7 +141,7 @@ mod tests {
     fn a_test_runtime_starts_in_arm_s() {
         on_big_stack(|| {
             let iso = isolate(config(Dispatch::DEFAULT, false));
-            assert_eq!(iso.rt.set.get(), ARM_S);
+            assert_eq!(iso.rt.set.get(), u32::from(ARM_S));
             assert_eq!(ARM_S, MEMBERS & !SWEEP_LEAN);
             assert!(slack::ctor_fit(&iso.rt));
             assert!(shape_cache::on(&iso.rt));

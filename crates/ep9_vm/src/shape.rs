@@ -841,10 +841,10 @@ pub(crate) fn set_field_bits_in_family(
 
 /// The own property `key` of objects with `shape`: its descriptor index and details. Not a GC
 /// point. A dictionary shape has no descriptors (the object's PROPS table holds them). SET-15:
-/// the body is [`lookup_in`] (file end): test 0 the SHAPE-CACHE seam; on, a tail jump to the
-/// cache body [`lookup_on`]; off, the scan of the base, with its inlining, frame and registers
-/// (LLVM drops the unused runtime argument of the base form: `lookup_in` takes it last). The
-/// merge head deletes `lookup_in` and the seam: this body is the cache body again.
+/// the body is [`lookup_in`] (file end): the count test, then the SHAPE-CACHE seam; on, a call
+/// of the cache body out of line; off, the scan of the base, with its inlining, frame and
+/// registers (LLVM drops the unused runtime argument of the base form: `lookup_in` takes it
+/// last). The merge head deletes `lookup_in` and the seam: the count test, then the cache.
 #[inline(always)]
 pub(crate) fn lookup(rt: &Runtime, shape: u64, key: u64) -> Option<Found> {
     lookup_in(shape, key, rt)
@@ -883,13 +883,6 @@ pub(crate) fn lookup_with(shape: u64, key: u64, how: Probe) -> Option<Found> {
     });
     #[cfg(any(test, debug_assertions, feature = "ic-stats"))]
     crate::shape_cache::stats::bump(crate::shape_cache::stats::SCAN);
-    scan(shape, key, how)
-}
-
-/// The descriptor scan of [`lookup_with`] with no counter: the shadow test of the shape lookup
-/// cache (`shape_cache.rs`, debug builds) compares each hit with it. Not a GC point.
-#[inline(always)]
-pub(crate) fn scan(shape: u64, key: u64, how: Probe) -> Option<Found> {
     let s = cell(shape);
     let n = count_of(s);
     if n == 0 {
@@ -931,6 +924,13 @@ pub(crate) fn scan(shape: u64, key: u64, how: Probe) -> Option<Found> {
         b = (b + 1) & mask;
     }
 }
+
+// SET-15 (M15-P1): the scan text is the body of `lookup_with` again, as in the base form: at the
+// role head it was a call of an inlined `scan`, and LLVM gave that form other registers (x86-64:
+// 2 more moves at each `string::hash` call), which arm 0 paid on every scan. The shadow test of
+// the shape lookup cache (debug builds) reads the copy `scan` at the file end (SET-15 part): it
+// compares each cache hit with it. No line below moves: the `path:line` cites of docs/adr and
+// docs/plan.
 
 // ---- add and remove -------------------------------------------------------------------------
 
@@ -2291,31 +2291,73 @@ pub(crate) fn install_keep(rt: &Runtime, o: u64, shape: u64) {
 // ---- SET-15 (M15-P1): the SHAPE-CACHE seam of `lookup` -------------------------------------
 // At the file end: no line above moves (the `path:line` cites of docs/adr and docs/plan).
 
-/// [`lookup`] (the arguments in the order of the base form). Test 0: the SHAPE-CACHE seam
-/// (`shape_cache::on`). On: a tail jump to [`lookup_on`]. Off: the body of the base form of
-/// [`lookup`], so it has no frame and the same callers inline it. Not a GC point.
+/// [`lookup`] (the arguments in the order of the base form). The count test and the probe of
+/// the base form first (base code: a count-0 shape gives `None` with no seam test, as in the
+/// base), then the SHAPE-CACHE seam (`shape_cache::on`). On: a call of the cache body out of
+/// line (`shape_cache::cached_on`, as at the `props.rs` sites). Off: the call of the scan of
+/// the base form. Always inlined: an out-of-line copy needs a saved register for its answer
+/// after the cache call (the base called [`lookup`] out of line at 2 of its 11 sites,
+/// `construct_ic::miss` and `set_named_miss`; there arm 0 now pays no call). Not a GC point.
+#[inline(always)]
 fn lookup_in(shape: u64, key: u64, rt: &Runtime) -> Option<Found> {
-    if crate::shape_cache::on(rt) {
-        return lookup_on(shape, key, rt);
-    }
     debug_assert!(is_shape(shape));
     if count_of(cell(shape)) == 0 {
         return None;
+    }
+    let how = classify(rt, key);
+    if crate::shape_cache::on(rt) {
+        core::hint::cold_path();
+        return crate::shape_cache::cached_on(rt, shape, key, how);
     }
     #[cfg(any(test, debug_assertions, feature = "ic-stats"))]
     crate::shape_cache::stats::bump(crate::shape_cache::stats::OFF);
-    lookup_with(shape, key, classify(rt, key))
+    lookup_with(shape, key, how)
 }
 
-/// [`lookup`] with the SHAPE-CACHE seam on: the cache body (`shape_cache::cached`), out of
-/// line, so that the seam adds no frame and no inlined cache code to the callers of
-/// [`lookup_in`]. The same arguments as [`lookup_in`], so its call here is a tail jump with no
-/// register move. Not a GC point.
-#[inline(never)]
-fn lookup_on(shape: u64, key: u64, rt: &Runtime) -> Option<Found> {
-    debug_assert!(is_shape(shape));
-    if count_of(cell(shape)) == 0 {
+/// The descriptor scan of [`lookup_with`] with no counter, for the shadow test of the shape
+/// lookup cache (`shape_cache.rs`, debug builds), which compares each hit with it: a copy of
+/// the scan text of `lookup_with` (SET-15: that text is in its body again, the base form). Not
+/// a GC point.
+#[cfg(debug_assertions)]
+pub(crate) fn scan(shape: u64, key: u64, how: Probe) -> Option<Found> {
+    let s = cell(shape);
+    let n = count_of(s);
+    if n == 0 {
         return None;
     }
-    crate::shape_cache::cached(rt, shape, key, classify(rt, key))
+    let d = cell(rd(s, shf::DESCRIPTORS));
+    // The index exists only past LINEAR_MAX keys, so short shapes do not load it.
+    let ix = if n <= LINEAR_MAX {
+        UNDEFINED
+    } else {
+        rd(d, dsc::INDEX)
+    };
+    if ix == UNDEFINED {
+        debug_assert!(n <= LINEAR_MAX, "{n} descriptors and no index");
+        return (0..n)
+            .find(|&i| same_key(d_key(d, i), key, how))
+            .map(|i| Found {
+                index: i,
+                details: d_details(d, i),
+            });
+    }
+    let ix = cell(ix);
+    let mask = rd_i32(ix, dix::BUCKETS) as usize - 1;
+    let mut b = hash_of(key) as usize & mask;
+    loop {
+        let e = rd(ix, dix::DATA + 8 * b);
+        if e == UNDEFINED {
+            return None;
+        }
+        // An entry past this shape's count belongs to a longer shape (the prefix rule): it is
+        // not a key of `shape`, so the probe goes on. Keys are distinct in one array.
+        let i = int32_of(e) as usize;
+        if i < n && same_key(d_key(d, i), key, how) {
+            return Some(Found {
+                index: i,
+                details: d_details(d, i),
+            });
+        }
+        b = (b + 1) & mask;
+    }
 }

@@ -333,9 +333,9 @@ fn first_capacity(
     // SAFETY: a bytecode FunctionInfo's code is its unit function's bytecode, which the unit
     // keeps at this address while the info lives (`FunctionInfo::bytecode`).
     let code = unsafe { core::slice::from_raw_parts(fi.code, fi.code_len as usize) };
+    // SET-15: the chain path is out of line ([`chain_fit`], file end), with its name table.
     if ctor_fit(rt)
-        && let Some(n) = chain_capacity(rt, fi, code, proto, ESCAPE_SLACK)
-        && n > usize::from(GENEROUS)
+        && let Some(n) = chain_fit(rt, fi, code, proto)
     {
         return Some(n);
     }
@@ -551,6 +551,24 @@ pub(crate) fn chain_capacity(
     }
     let slack = if ch.escaped { slack } else { 0 };
     Some((ch.keys().len() + extra.min(usize::from(GENEROUS)) + slack).min(CHAIN_CAP_MAX))
+}
+
+// ---- SET-15 (M15-P1): the CTOR-FIT chain path out of line ----------------------------------
+
+/// [`first_capacity`] with CTOR-FIT on: the chain count of [`chain_capacity`] at
+/// [`ESCAPE_SLACK`] when it is above [`GENEROUS`], else [`None`] (then the old count). Out of
+/// line, so that its name table ([`ChainNames`], about 2 KiB) and its registers are not in the
+/// frame of `call::ordinary_create_from_constructor`, which inlines [`first_capacity`]: in arm 0
+/// that frame and its entry saves are the base ones. It runs at a first construct only. Not a
+/// GC point.
+#[inline(never)]
+fn chain_fit(
+    rt: &Runtime,
+    fi: &crate::function_info::FunctionInfo,
+    code: &[u8],
+    proto: u64,
+) -> Option<usize> {
+    chain_capacity(rt, fi, code, proto, ESCAPE_SLACK).filter(|&n| n > usize::from(GENEROUS))
 }
 
 /// Tests only: the value of the seam [`ctor_fit`] on this thread (`None`: the role-head value,

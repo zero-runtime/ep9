@@ -1301,7 +1301,10 @@ pub(crate) unsafe fn call_property<const N: u32>(
         // the callee, its FunctionInfo or the receiver and no register save before it (a call
         // pays the seam test and a tail jump). On: the arm, out of line (also a tail jump), so
         // this function saves no register on either path.
+        // Both sides are a jump (`set_arm_init::side`): arm 0 and arm S pay the same seam
+        // (x86-64: the runtime load, the bit test, a branch and a jump).
         if !char_code_arm_on(cx.rt()) {
+            crate::set_arm_init::side(false);
             #[cfg(feature = "ic-stats")]
             // SAFETY: caller contract.
             unsafe {
@@ -1310,6 +1313,7 @@ pub(crate) unsafe fn call_property<const N: u32>(
             // SAFETY: caller contract, with `N` = 1.
             return unsafe { call_property_host1(cx, fp, pc, this, acc) };
         }
+        crate::set_arm_init::side(true);
         // SAFETY: caller contract, with `N` = 1.
         return unsafe { char_code_arm_out(cx, fp, pc, this, acc) };
     }
